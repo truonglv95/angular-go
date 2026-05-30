@@ -1,0 +1,741 @@
+[
+  {
+    "ts_file": "compiler_facade_interface_spec.ts",
+    "ts_cases": 0,
+    "go_files": [
+      "N/A"
+    ],
+    "go_cases": 0,
+    "status": "N/A (empty spec)",
+    "missing_cases": []
+  },
+  {
+    "ts_file": "expression_parser/ast_spec.ts",
+    "ts_cases": 1,
+    "go_files": [
+      "expression_parser/ast_test.go"
+    ],
+    "go_cases": 1,
+    "status": "Fully Ported (1:1)",
+    "missing_cases": []
+  },
+  {
+    "ts_file": "expression_parser/lexer_spec.ts",
+    "ts_cases": 93,
+    "go_files": [
+      "expression_parser/lexer_test.go"
+    ],
+    "go_cases": 91,
+    "status": "Partially Ported (91/93)",
+    "missing_cases": [
+      "should tokenize \"this\"",
+      "should throw an invalid character error when a hash character is discovered but "
+    ]
+  },
+  {
+    "ts_file": "expression_parser/parser_spec.ts",
+    "ts_cases": 217,
+    "go_files": [
+      "expression_parser/parser_test.go"
+    ],
+    "go_cases": 178,
+    "status": "Partially Ported (178/217)",
+    "missing_cases": [
+      "should record property read span",
+      "should record accessed property read span",
+      "should record safe property read span",
+      "should record call span",
+      "should record call argument span",
+      "should record accessed call span",
+      "should record property write span",
+      "should record accessed property write span",
+      "should record spans for untagged template literals with no interpolations",
+      "should record spans for untagged template literals with interpolations"
+    ]
+  },
+  {
+    "ts_file": "expression_parser/serializer_spec.ts",
+    "ts_cases": 25,
+    "go_files": [
+      "expression_parser/serializer_test.go"
+    ],
+    "go_cases": 25,
+    "status": "Fully Ported (1:1)",
+    "missing_cases": []
+  },
+  {
+    "ts_file": "i18n/digest_spec.ts",
+    "ts_cases": 8,
+    "go_files": [
+      "i18n/digest_test.go"
+    ],
+    "go_cases": 7,
+    "status": "Partially Ported (7/8)",
+    "missing_cases": [
+      "should returns the sha1 of \"hello world\""
+    ]
+  },
+  {
+    "ts_file": "i18n/extractor_merger_spec.ts",
+    "ts_cases": 59,
+    "go_files": [
+      "i18n/extractor_merger_test.go"
+    ],
+    "go_cases": 58,
+    "status": "Partially Ported (58/59)",
+    "missing_cases": [
+      "should console.warn if we use i18n comments"
+    ]
+  },
+  {
+    "ts_file": "i18n/i18n_ast_spec.ts",
+    "ts_cases": 7,
+    "go_files": [
+      "i18n/i18n_ast_test.go"
+    ],
+    "go_cases": 7,
+    "status": "Fully Ported (1:1)",
+    "missing_cases": []
+  },
+  {
+    "ts_file": "i18n/i18n_html_parser_spec.ts",
+    "ts_cases": 1,
+    "go_files": [
+      "i18n/i18n_html_parser_test.go"
+    ],
+    "go_cases": 1,
+    "status": "Fully Ported (1:1)",
+    "missing_cases": []
+  },
+  {
+    "ts_file": "i18n/i18n_parser_spec.ts",
+    "ts_cases": 31,
+    "go_files": [
+      "i18n/extractor_merger_test.go",
+      "i18n/i18n_parser_test.go"
+    ],
+    "go_cases": 31,
+    "status": "Fully Ported (1:1)",
+    "missing_cases": []
+  },
+  {
+    "ts_file": "i18n/integration_xliff2_spec.ts",
+    "ts_cases": 4,
+    "go_files": [
+      "N/A"
+    ],
+    "go_cases": 0,
+    "status": "Missing",
+    "missing_cases": [
+      "should extract from templates",
+      "should translate templates",
+      "should extract from templates (with CRLF line endings)",
+      "should translate templates (with CRLF line endings)"
+    ]
+  },
+  {
+    "ts_file": "i18n/integration_xliff_spec.ts",
+    "ts_cases": 4,
+    "go_files": [
+      "N/A"
+    ],
+    "go_cases": 0,
+    "status": "Missing",
+    "missing_cases": [
+      "should extract from templates",
+      "should translate templates",
+      "should extract from templates (with CRLF line endings)",
+      "should translate templates (with CRLF line endings)"
+    ]
+  },
+  {
+    "ts_file": "i18n/integration_xmb_xtb_spec.ts",
+    "ts_cases": 4,
+    "go_files": [
+      "N/A"
+    ],
+    "go_cases": 0,
+    "status": "Missing",
+    "missing_cases": [
+      "should extract from templates",
+      "should translate templates",
+      "should extract from templates (with CRLF line endings)",
+      "should translate templates (with CRLF line endings)"
+    ]
+  },
+  {
+    "ts_file": "i18n/message_bundle_spec.ts",
+    "ts_cases": 2,
+    "go_files": [
+      "i18n/message_bundle_test.go"
+    ],
+    "go_cases": 2,
+    "status": "Fully Ported (1:1)",
+    "missing_cases": []
+  },
+  {
+    "ts_file": "i18n/serializers/i18n_ast_spec.ts",
+    "ts_cases": 2,
+    "go_files": [
+      "i18n/i18n_ast_clone_recurse_test.go"
+    ],
+    "go_cases": 2,
+    "status": "Fully Ported (1:1)",
+    "missing_cases": []
+  },
+  {
+    "ts_file": "i18n/serializers/placeholder_spec.ts",
+    "ts_cases": 13,
+    "go_files": [
+      "i18n/placeholder_registry_test.go"
+    ],
+    "go_cases": 13,
+    "status": "Fully Ported (1:1)",
+    "missing_cases": []
+  },
+  {
+    "ts_file": "i18n/serializers/xliff2_spec.ts",
+    "ts_cases": 10,
+    "go_files": [
+      "i18n/xtb_test.go",
+      "i18n/xliff2_test.go"
+    ],
+    "go_cases": 10,
+    "status": "Fully Ported (1:1)",
+    "missing_cases": []
+  },
+  {
+    "ts_file": "i18n/serializers/xliff_spec.ts",
+    "ts_cases": 10,
+    "go_files": [
+      "i18n/xtb_test.go",
+      "i18n/xliff2_test.go",
+      "i18n/xliff_test.go"
+    ],
+    "go_cases": 10,
+    "status": "Fully Ported (1:1)",
+    "missing_cases": []
+  },
+  {
+    "ts_file": "i18n/serializers/xmb_spec.ts",
+    "ts_cases": 2,
+    "go_files": [
+      "i18n/xmb_test.go"
+    ],
+    "go_cases": 2,
+    "status": "Fully Ported (1:1)",
+    "missing_cases": []
+  },
+  {
+    "ts_file": "i18n/serializers/xml_helper_spec.ts",
+    "ts_cases": 7,
+    "go_files": [
+      "i18n/serializers/xml_helper_test.go"
+    ],
+    "go_cases": 7,
+    "status": "Fully Ported (1:1)",
+    "missing_cases": []
+  },
+  {
+    "ts_file": "i18n/serializers/xtb_spec.ts",
+    "ts_cases": 14,
+    "go_files": [
+      "i18n/xtb_test.go"
+    ],
+    "go_cases": 13,
+    "status": "Partially Ported (13/14)",
+    "missing_cases": [
+      "should be able to parse non-angular xtb files without error"
+    ]
+  },
+  {
+    "ts_file": "i18n/translation_bundle_spec.ts",
+    "ts_cases": 11,
+    "go_files": [
+      "N/A"
+    ],
+    "go_cases": 0,
+    "status": "Missing",
+    "missing_cases": [
+      "should translate a plain text",
+      "should translate html-like plain text",
+      "should translate a message with placeholder",
+      "should translate a message with placeholder referencing messages",
+      "should use the original message or throw when a translation is not found",
+      "should report unknown placeholders",
+      "should report missing translation",
+      "should report missing translation with MissingTranslationStrategy.Warning",
+      "should not report missing translation with MissingTranslationStrategy.Ignore",
+      "should report missing referenced message"
+    ]
+  },
+  {
+    "ts_file": "i18n/whitespace_sensitivity_spec.ts",
+    "ts_cases": 4,
+    "go_files": [
+      "i18n/whitespace_sensitivity_test.go"
+    ],
+    "go_cases": 4,
+    "status": "Fully Ported (1:1)",
+    "missing_cases": []
+  },
+  {
+    "ts_file": "integration_spec.ts",
+    "ts_cases": 2,
+    "go_files": [
+      "N/A"
+    ],
+    "go_cases": 0,
+    "status": "Missing",
+    "missing_cases": [
+      "should support dotted selectors",
+      "should work regardless the namespace"
+    ]
+  },
+  {
+    "ts_file": "ml_parser/ast_serializer_spec.ts",
+    "ts_cases": 6,
+    "go_files": [
+      "ml_parser/ast_serializer_test.go"
+    ],
+    "go_cases": 6,
+    "status": "Fully Ported (1:1)",
+    "missing_cases": []
+  },
+  {
+    "ts_file": "ml_parser/html_parser_spec.ts",
+    "ts_cases": 145,
+    "go_files": [
+      "i18n/i18n_ast_clone_recurse_test.go",
+      "render3/r3_template_transform_test.go",
+      "i18n/i18n_parser_test.go",
+      "ml_parser/lexer_test.go",
+      "ml_parser/html_parser_test.go"
+    ],
+    "go_cases": 40,
+    "status": "Partially Ported (40/145)",
+    "missing_cases": [
+      "should parse attributes without values",
+      "should parse attributes on svg elements case sensitive",
+      "should parse attributes on <ng-template> elements",
+      "should support namespace",
+      "should support a prematurely terminated interpolation in attribute",
+      "should parse animate.enter as a static attribute",
+      "should parse animate.leave as a static attribute",
+      "should not parse any other animate prefix binding as animate.leave",
+      "should parse both animate.enter and animate.leave as static attributes",
+      "should parse animate.enter as a property binding"
+    ]
+  },
+  {
+    "ts_file": "ml_parser/html_whitespaces_spec.ts",
+    "ts_cases": 16,
+    "go_files": [
+      "ml_parser/html_whitespaces_test.go"
+    ],
+    "go_cases": 15,
+    "status": "Partially Ported (15/16)",
+    "missing_cases": [
+      "should preserve whitespaces inside elements annotated with ${PRESERVE_WS_ATTR_NAME}"
+    ]
+  },
+  {
+    "ts_file": "ml_parser/inline_comment_spec.ts",
+    "ts_cases": 9,
+    "go_files": [
+      "ml_parser/inline_comment_test.go"
+    ],
+    "go_cases": 9,
+    "status": "Fully Ported (1:1)",
+    "missing_cases": []
+  },
+  {
+    "ts_file": "ml_parser/lexer_spec.ts",
+    "ts_cases": 252,
+    "go_files": [
+      "ml_parser/lexer_test.go",
+      "render3/r3_template_transform_test.go",
+      "ml_parser/html_parser_test.go"
+    ],
+    "go_cases": 243,
+    "status": "Partially Ported (243/252)",
+    "missing_cases": [
+      "should report unescaped \"{\" on error",
+      "should report unescaped \"{\" as an error, even after a prematurely terminated interpolation",
+      "should remove backslash from \"non-escape\" sequences",
+      "should end interpolation on an unescaped matching quote",
+      "should parse attributes with \"&\" in values",
+      "should allow \"<\" in text nodes",
+      "should report unescaped \"{\" on error",
+      "should report unescaped \"{\" as an error, even after a prematurely terminated interpolation",
+      "should remove backslash from \"non-escape\" sequences"
+    ]
+  },
+  {
+    "ts_file": "output/abstract_emitter_node_only_spec.ts",
+    "ts_cases": 8,
+    "go_files": [
+      "output/emitter_visitor_context_test.go"
+    ],
+    "go_cases": 7,
+    "status": "Partially Ported (7/8)",
+    "missing_cases": [
+      "should generate a valid mapping"
+    ]
+  },
+  {
+    "ts_file": "output/abstract_emitter_spec.ts",
+    "ts_cases": 6,
+    "go_files": [
+      "output/abstract_emitter_test.go"
+    ],
+    "go_cases": 6,
+    "status": "Fully Ported (1:1)",
+    "missing_cases": []
+  },
+  {
+    "ts_file": "output/output_jit_spec.ts",
+    "ts_cases": 3,
+    "go_files": [
+      "N/A"
+    ],
+    "go_cases": 0,
+    "status": "Missing",
+    "missing_cases": [
+      "should generate unique argument names",
+      "should use strict mode",
+      "should not add more than one strict mode statement if there is already one present"
+    ]
+  },
+  {
+    "ts_file": "output/source_map_spec.ts",
+    "ts_cases": 9,
+    "go_files": [
+      "output/source_map_test.go"
+    ],
+    "go_cases": 7,
+    "status": "Partially Ported (7/9)",
+    "missing_cases": [
+      "should throw when adding segments without column",
+      "should throw when adding segments with a source url but no position"
+    ]
+  },
+  {
+    "ts_file": "render3/r3_ast_absolute_span_spec.ts",
+    "ts_cases": 56,
+    "go_files": [
+      "render3/r3_ast_spans_test.go",
+      "render3/r3_ast_absolute_span_test.go"
+    ],
+    "go_cases": 12,
+    "status": "Partially Ported (12/56)",
+    "missing_cases": [
+      "should provide absolute offsets of a binary expression",
+      "should provide absolute offsets of expressions in a binary expression",
+      "should provide absolute offsets of a conditional",
+      "should provide absolute offsets of expressions in a conditional",
+      "should provide absolute offsets of a chain",
+      "should provide absolute offsets of expressions in a chain",
+      "should provide absolute offsets of a function call",
+      "should provide absolute offsets of expressions in a function call",
+      "should provide absolute offsets of an interpolation",
+      "should provide absolute offsets of expressions in an interpolation"
+    ]
+  },
+  {
+    "ts_file": "render3/r3_ast_spans_spec.ts",
+    "ts_cases": 55,
+    "go_files": [
+      "render3/r3_ast_spans_test.go"
+    ],
+    "go_cases": 55,
+    "status": "Fully Ported (1:1)",
+    "missing_cases": []
+  },
+  {
+    "ts_file": "render3/r3_ast_visitor_spec.ts",
+    "ts_cases": 1,
+    "go_files": [
+      "render3/r3_ast_visitor_test.go"
+    ],
+    "go_cases": 1,
+    "status": "Fully Ported (1:1)",
+    "missing_cases": []
+  },
+  {
+    "ts_file": "render3/r3_template_transform_spec.ts",
+    "ts_cases": 256,
+    "go_files": [
+      "ml_parser/lexer_test.go",
+      "render3/r3_template_transform_test.go"
+    ],
+    "go_cases": 80,
+    "status": "Partially Ported (80/256)",
+    "missing_cases": [
+      "should create valid text span on Element with adjacent start and end tags",
+      "should parse bound text nodes",
+      "should report an error for assignments into non-null asserted expressions",
+      "should report parsing errors on the specific interpolated expressions",
+      "should keep <link rel=\"stylesheet\"> elements if they have an absolute url",
+      "should keep <link rel=\"stylesheet\"> elements if they have no uri",
+      "should ignore <link rel=\"stylesheet\"> elements if they have a relative uri",
+      "should parse a deferred block with a `when` trigger",
+      "should parse a deferred block with a single `on` trigger",
+      "should parse a deferred block with multiple `on` triggers"
+    ]
+  },
+  {
+    "ts_file": "render3/style_parser_spec.ts",
+    "ts_cases": 13,
+    "go_files": [
+      "template/pipeline/phases/parse_extracted_styles_test.go"
+    ],
+    "go_cases": 11,
+    "status": "Partially Ported (11/13)",
+    "missing_cases": [
+      "from string data types",
+      "that changes the value context from invalid to valid"
+    ]
+  },
+  {
+    "ts_file": "render3/view/binding_spec.ts",
+    "ts_cases": 70,
+    "go_files": [
+      "render3/t2_binder_test.go"
+    ],
+    "go_cases": 16,
+    "status": "Partially Ported (16/70)",
+    "missing_cases": [
+      "should work for bound attributes",
+      "should work for text attributes on elements",
+      "should work for text attributes on templates",
+      "should not match directives on attribute bindings with the same name as an input",
+      "should bind to the encompassing node when no directive input is matched",
+      "should work for bound events",
+      "should bind to the encompassing node when no directive output is matched",
+      "should extract top-level defer blocks",
+      "should extract nested defer blocks and associated pipes",
+      "should identify pipes used after a nested defer block as being lazy"
+    ]
+  },
+  {
+    "ts_file": "render3/view/i18n_spec.ts",
+    "ts_cases": 36,
+    "go_files": [
+      "render3/i18n/i18n_test.go"
+    ],
+    "go_cases": 32,
+    "status": "Partially Ported (32/36)",
+    "missing_cases": [
+      "formatI18nPlaceholderName",
+      "parseI18nMeta()",
+      "serializeI18nHead()",
+      "serializeI18nPlaceholderBlock()"
+    ]
+  },
+  {
+    "ts_file": "render3/view/parse_template_options_spec.ts",
+    "ts_cases": 1,
+    "go_files": [
+      "render3/parse_template_options_test.go"
+    ],
+    "go_cases": 1,
+    "status": "Fully Ported (1:1)",
+    "missing_cases": []
+  },
+  {
+    "ts_file": "schema/dom_element_schema_registry_spec.ts",
+    "ts_cases": 30,
+    "go_files": [
+      "schema/dom_element_schema_registry_test.go"
+    ],
+    "go_cases": 16,
+    "status": "Partially Ported (16/30)",
+    "missing_cases": [
+      "should return true for custom-like elements if the CUSTOM_ELEMENTS_SCHEMA was used",
+      "should return true for all elements if the NO_ERRORS_SCHEMA was used",
+      "should support <ng-container>",
+      "should support <ng-content>",
+      "should support elements with custom namespaces",
+      "should support properties on custom namespaced elements",
+      "should return correct security contexts for custom namespaced elements",
+      "generate a new schema",
+      "should normalize the given CSS property to camelCase",
+      "should normalize the given dimensional CSS style value to contain a PX value when numeric"
+    ]
+  },
+  {
+    "ts_file": "schema/trusted_types_sinks_spec.ts",
+    "ts_cases": 3,
+    "go_files": [
+      "schema/trusted_types_sinks_test.go"
+    ],
+    "go_cases": 3,
+    "status": "Fully Ported (1:1)",
+    "missing_cases": []
+  },
+  {
+    "ts_file": "selector/selector_spec.ts",
+    "ts_cases": 34,
+    "go_files": [
+      "selector_test.go"
+    ],
+    "go_cases": 26,
+    "status": "Partially Ported (26/34)",
+    "missing_cases": [
+      "should support \".\" in attribute names",
+      "should support \"$\" in attribute names",
+      "should match * with :not selector",
+      "should detect attr names with escaped $",
+      "should error on attr names with unescaped $",
+      "should detect attr values with double quotes",
+      "should detect #some-value syntax and treat as attribute",
+      "should detect attr values with single quotes"
+    ]
+  },
+  {
+    "ts_file": "shadow_css/at_rules_spec.ts",
+    "ts_cases": 19,
+    "go_files": [
+      "N/A"
+    ],
+    "go_cases": 0,
+    "status": "Missing",
+    "missing_cases": [
+      "should handle media rules with simple rules",
+      "should handle media rules with both width and height",
+      "should preserve @page rules",
+      "should strip ::ng-deep and :host from within @page rules",
+      "should handle support rules",
+      "should strip ::ng-deep and :host from within @supports",
+      "should strip ::ng-deep and :host from within @font-face",
+      "should pass through @import directives",
+      "should shim rules after @import",
+      "should shim rules with quoted content after @import"
+    ]
+  },
+  {
+    "ts_file": "shadow_css/host_and_host_context_spec.ts",
+    "ts_cases": 24,
+    "go_files": [
+      "shadow_css_test.go"
+    ],
+    "go_cases": 23,
+    "status": "Partially Ported (23/24)",
+    "missing_cases": [
+      "should handle host with escaped class selector"
+    ]
+  },
+  {
+    "ts_file": "shadow_css/keyframes_spec.ts",
+    "ts_cases": 25,
+    "go_files": [
+      "shadow_css_test.go"
+    ],
+    "go_cases": 10,
+    "status": "Partially Ported (10/25)",
+    "missing_cases": [
+      "should handle (scope or not) multiple animation-names",
+      "should handle (scope or not) multiple animation-names defined over multiple lines",
+      "should handle (scope or not) animation definition containing some names which do not have a preceding space",
+      "should handle (scope or not) multiple animation definitions in a single declaration",
+      "should not modify css variables ending with 'animation' even if they reference a local keyframes identifier",
+      "should not modify css variables ending with 'animation-name' even if they reference a local keyframes identifier",
+      "should maintain the spacing when handling (scoping or not) keyframes and animations",
+      "should ignore keywords values when scoping local animations",
+      "should handle the usage of quotes",
+      "should handle the usage of quotes containing escaped quotes"
+    ]
+  },
+  {
+    "ts_file": "shadow_css/ng_deep_spec.ts",
+    "ts_cases": 3,
+    "go_files": [
+      "shadow_css_test.go"
+    ],
+    "go_cases": 3,
+    "status": "Fully Ported (1:1)",
+    "missing_cases": []
+  },
+  {
+    "ts_file": "shadow_css/process_rules_spec.ts",
+    "ts_cases": 7,
+    "go_files": [
+      "N/A"
+    ],
+    "go_cases": 0,
+    "status": "Missing",
+    "missing_cases": [
+      "should work with empty css",
+      "should capture a rule without body",
+      "should capture css rules with body",
+      "should capture css rules with nested rules",
+      "should capture multiple rules where some have no body",
+      "should allow to change the selector while preserving whitespaces",
+      "should allow to change the content"
+    ]
+  },
+  {
+    "ts_file": "shadow_css/repeat_groups_spec.ts",
+    "ts_cases": 3,
+    "go_files": [
+      "shadow_css_test.go"
+    ],
+    "go_cases": 3,
+    "status": "Fully Ported (1:1)",
+    "missing_cases": []
+  },
+  {
+    "ts_file": "shadow_css/shadow_css_spec.ts",
+    "ts_cases": 23,
+    "go_files": [
+      "shadow_css_test.go"
+    ],
+    "go_cases": 15,
+    "status": "Partially Ported (15/23)",
+    "missing_cases": [
+      "should handle :host inclusions inside pseudo-selectors selectors",
+      "should handle escaped selector with space (if followed by a hex char)",
+      "should keep retain multiline selectors",
+      "should remove inline comments without adding extra lines",
+      "should preserve internal newlines from multiline comments",
+      "should remove multiple inline comments without adding extra lines",
+      "should keep sourceMappingURL comments",
+      "should handle adjacent comments"
+    ]
+  },
+  {
+    "ts_file": "style_url_resolver_spec.ts",
+    "ts_cases": 5,
+    "go_files": [
+      "N/A"
+    ],
+    "go_cases": 0,
+    "status": "Missing",
+    "missing_cases": [
+      "should resolve relative urls",
+      "should resolve package: urls",
+      "should not resolve empty urls",
+      "should not resolve urls with other schema",
+      "should not resolve urls with absolute paths"
+    ]
+  },
+  {
+    "ts_file": "util_spec.ts",
+    "ts_cases": 7,
+    "go_files": [
+      "N/A"
+    ],
+    "go_cases": 0,
+    "status": "Missing",
+    "missing_cases": [
+      "should split when a single \":\" is present",
+      "should trim parts",
+      "should support multiple \":\"",
+      "should use the default value when no \":\" is present",
+      "should escape regexp",
+      "should encode to utf8",
+      "should handle objects with no prototype."
+    ]
+  }
+]

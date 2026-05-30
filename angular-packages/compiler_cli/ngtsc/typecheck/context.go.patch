@@ -1,0 +1,54 @@
+--- context.go
++++ context.go
+@@ -501,8 +501,48 @@
+ }
+ 
+ func (c *TypeCheckContextImpl) executeOperations(targetSf *ast.SourceFile, opsSourceSf *ast.SourceFile) string {
+-	// Simplified execution
+-	return ""
++	// Use a printer to generate source code. (Assume Printer exists)
++	// printer := ast.CreatePrinter(ast.PrinterOptions{OmitTrailingSemicolon: true})
++
++	// Imports may need to be added to the file to support type-checking of directives
++	importManager := NewImportManager(true, func() bool { return true })
++
++	type Update struct {
++		Pos       int
++		DeletePos *int
++		Text      string
++	}
++	var updates []Update
++
++	for _, op := range c.opMap[opsSourceSf] {
++		updates = append(updates, Update{
++			Pos:  op.GetSplitPoint(),
++			Text: op.Execute(importManager, targetSf, c.refEmitter),
++		})
++	}
++
++	newImports, updatedImports := importManager.Finalize()
++
++	if imports, ok := newImports[targetSf.FileName]; ok {
++		for _, newImport := range imports {
++			// updates = append(updates, Update{Pos: 0, Text: printer.PrintNode(newImport, targetSf)})
++			_ = newImport
++		}
++	}
++
++	for oldBindings, newBindings := range updatedImports {
++		_ = oldBindings
++		_ = newBindings
++		// updates = append(updates, Update{Pos: oldBindings.GetStart(), DeletePos: oldBindings.GetEnd(), Text: printer.PrintNode(newBindings, targetSf)})
++	}
++
++	result := NewMagicString(targetSf.Text)
++	for _, update := range updates {
++		if update.DeletePos != nil {
++			result.Remove(update.Pos, *update.DeletePos)
++		}
++		result.AppendLeft(update.Pos, update.Text)
++	}
++	return result.ToString()
+ }
+ 
+ func (c *TypeCheckContextImpl) generateTransformedOriginalFile(sf *ast.SourceFile) *string {

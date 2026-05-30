@@ -1,0 +1,3 @@
+package incremental
+
+var NOOP_INCREMENTAL_BUILD IncrementalBuild

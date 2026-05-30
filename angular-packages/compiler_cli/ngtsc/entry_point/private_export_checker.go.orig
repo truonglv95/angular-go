@@ -1,0 +1,137 @@
+package entry_point
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/diagnostics"
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/reflection"
+	"github.com/microsoft/typescript-go/internal/ast"
+)
+
+func CheckForPrivateExports(entryPoint ast.SourceFile, checker any, refGraph *ReferenceGraph) []ast.Diagnostic {
+	var results []ast.Diagnostic
+
+	topLevelExports := make(map[reflection.DeclarationNode]bool)
+
+	moduleSymbol := checker.GetSymbolAtLocation(entryPoint)
+	if moduleSymbol == nil {
+		panic("Internal error: failed to get symbol for entrypoint")
+	}
+
+	exportedSymbols := checker.GetExportsOfModule(moduleSymbol)
+	for _, symbol := range exportedSymbols {
+		if (symbol.GetFlags() & 1) != 0 {
+			symbol = checker.GetAliasedSymbol(symbol)
+		}
+		decl := symbol.GetValueDeclaration()
+		if decl != nil {
+			topLevelExports[decl] = true
+		}
+	}
+
+	checkedSet := make(map[reflection.DeclarationNode]bool)
+
+	for mainExport := range topLevelExports {
+		for _, transitiveReference := range refGraph.TransitiveReferencesOf(mainExport) {
+			if checkedSet[transitiveReference] {
+				continue
+			}
+			checkedSet[transitiveReference] = true
+
+			if !topLevelExports[transitiveReference] {
+				descriptor := getDescriptorOfDeclaration(transitiveReference)
+				name := getNameOfDeclaration(transitiveReference)
+
+				visibleVia := "NgModule exports"
+				transitivePath := refGraph.PathFrom(mainExport, transitiveReference)
+				if transitivePath != nil {
+					var parts []string
+					for _, seg := range transitivePath {
+						parts = append(parts, getNameOfDeclaration(seg))
+					}
+					visibleVia = strings.Join(parts, " -> ")
+				}
+
+				pos := getPosOfDeclaration(transitiveReference)
+
+				diagnostic := ast.Diagnostic{
+					category:    ast.Diagnosticcategory_Error,
+					code:        diagnostics.NgErrorcode(diagnostics.Errorcode_SYMBOL_NOT_EXPORTED),
+					File:        nil,
+					Start:       pos.Start,
+					Length:      pos.Length,
+					MessageText: fmt.Sprintf("Unsupported private %s %s. This %s is visible to consumers via %s, but is not exported from the top-level library entrypoint.", descriptor, name, descriptor, visibleVia),
+				}
+
+				results = append(results, diagnostic)
+			}
+		}
+	}
+
+	return results
+}
+
+type posInfo struct {
+	Start  int
+	Length int
+}
+
+func getPosOfDeclaration(decl reflection.DeclarationNode) posInfo {
+	node := ast.Node(decl)
+	if id := getIdentifierOfDeclaration(decl); id != nil {
+		node = id
+	}
+	start := node.GetStart(nil, false)
+	return posInfo{
+		Start:  start,
+		Length: node.GetEnd() + 1 - start,
+	}
+}
+
+func getIdentifierOfDeclaration(decl reflection.DeclarationNode) ast.Identifier {
+	switch d := decl.(type) {
+	case ast.ClassDeclaration:
+		if d.GetName() != nil {
+			if id, ok := d.GetName().(ast.Identifier); ok {
+				return id
+			}
+		}
+	case ast.VariableDeclaration:
+		if d.GetName() != nil {
+			if id, ok := d.GetName().(ast.Identifier); ok {
+				return id
+			}
+		}
+	case ast.FunctionDeclaration:
+		if d.GetName() != nil {
+			if id, ok := d.GetName().(ast.Identifier); ok {
+				return id
+			}
+		}
+	}
+	return nil
+}
+
+func getNameOfDeclaration(decl reflection.DeclarationNode) string {
+	id := getIdentifierOfDeclaration(decl)
+	if id != nil {
+		return id.GetText()
+	}
+	return "(unnamed)"
+}
+
+func getDescriptorOfDeclaration(decl reflection.DeclarationNode) string {
+	switch decl.Kind() {
+	case ast.SyntaxKind_ClassDeclaration:
+		return "class"
+	case ast.SyntaxKind_FunctionDeclaration:
+		return "function"
+	case ast.SyntaxKind_VariableDeclaration:
+		return "variable"
+	case ast.SyntaxKind_EnumDeclaration:
+		return "enum"
+	default:
+		return "declaration"
+	}
+}
