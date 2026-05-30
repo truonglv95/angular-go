@@ -2,3 +2,6 @@
 	path = _submodules/TypeScript
 	url = https://github.com/microsoft/TypeScript.git
 	branch = tsgo-port
+[submodule "angular-packages/angular-src"]
+	path = angular-packages/angular-src
+	url = git@github.com:angular/angular.git

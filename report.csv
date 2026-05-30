@@ -1,0 +1,20 @@
+Directory, TS Files, TS Lines, Go Files, Go Lines, Status
+compiler/expression_parser, 4, 3903, 4, 3104, Partial Port
+compiler/ml_parser, 11, 6317, 3, 248, Shallow/Stubbed
+compiler/template_parser, 2, 1024, 2, 1065, Deep Port
+compiler/render3/view, 13, 4929, 3, 296, Shallow/Stubbed
+compiler/render3 (core), 39, 12843, 5, 1690, Shallow/Stubbed
+compiler/output, 7, 3535, 3, 1222, Partial Port
+compiler/i18n, 15, 4124, 0, 0, Not Ported
+compiler/schema, 4, 829, 0, 0, Not Ported
+compiler/template/pipeline, 90, 18757, 0, 0, Not Ported
+compiler/typecheck, 32, 6362, 1, 638, Shallow/Stubbed
+ngtsc/annotations, 50, 15773, 6, 1372, Shallow/Stubbed
+ngtsc/partial_evaluator, 11, 2988, 4, 269, Shallow/Stubbed
+ngtsc/typecheck, 87, 27560, 0, 0, Not Ported
+ngtsc/sourcemap, 0, 0, 0, 0, Not Ported
+ngtsc/reflection, 6, 2691, 3, 305, Shallow/Stubbed
+ngtsc/file_system, 20, 2171, 3, 387, Shallow/Stubbed
+ngtsc/imports, 15, 2648, 0, 0, Not Ported
+ngtsc/translator, 17, 5325, 0, 0, Not Ported
+ngtsc/transform, 21, 6432, 0, 0, Not Ported
