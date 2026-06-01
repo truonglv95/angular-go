@@ -15,6 +15,12 @@ func NewOpListId() int {
 //
 // This is the Go port of the TypeScript OpList<OpT> class in operations.ts.
 // We dropped the linked list implementation for performance via slices.
+//
+// Go-specific Contract:
+// - Operations are strictly ordered by their index in the slice.
+// - Inserting, prepending, or removing operations will re-allocate or shift the underlying slice.
+// - References to indexes (or iterators in TS) should NOT be held across mutations, as they will be invalidated.
+// - Linked-list assumptions like op.next or op.prev do not exist and are not supported.
 type OpList struct {
 	// DebugListId is the unique debug identifier for this list.
 	DebugListId int
