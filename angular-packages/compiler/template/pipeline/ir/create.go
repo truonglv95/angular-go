@@ -769,8 +769,9 @@ func CreateExtractedAttributeOp(
 
 type DeferOp struct {
 	OpBase
-	ConsumesSlotOpTrait
 	Xref                   XrefId
+	SlotHandle             *SlotHandle
+	NumSlotsUsed           int
 	MainView               XrefId
 	MainSlot               any
 	LoadingView            XrefId
@@ -794,6 +795,23 @@ func (o *DeferOp) Kind() OpKind {
 	return OpKindDefer
 }
 
+
+
+func (o *DeferOp) Handle() *SlotHandle {
+	if o.SlotHandle == nil {
+		o.SlotHandle = NewSlotHandle()
+	}
+	return o.SlotHandle
+}
+
+func (o *DeferOp) AddNumSlotsUsed(n int) {
+	o.NumSlotsUsed += n
+}
+
+func (o *DeferOp) GetNumSlotsUsed() int {
+	return o.NumSlotsUsed
+}
+
 func CreateDeferOp(
 	xref XrefId,
 	mainView XrefId,
@@ -804,6 +822,8 @@ func CreateDeferOp(
 ) *DeferOp {
 	return &DeferOp{
 		Xref:          xref,
+		SlotHandle:    NewSlotHandle(),
+		NumSlotsUsed:  2,
 		MainView:      mainView,
 		MainSlot:      mainSlot,
 		OwnResolverFn: ownResolverFn,
@@ -960,7 +980,6 @@ type I18nMessageOp struct {
 func (o *I18nMessageOp) Kind() OpKind {
 	return OpKindI18nMessage
 }
-
 
 type I18nOpBase struct {
 	OpBase

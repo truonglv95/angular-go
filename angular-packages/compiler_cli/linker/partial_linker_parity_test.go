@@ -53,10 +53,44 @@ Dir.ɵdir = i0.ɵɵngDeclareDirective({
 	assertContains(t, text, "ɵɵdefineDirective")
 	assertNotContains(t, text, "ɵɵngDeclareDirective")
 	assertContains(t, text, `selectors: [["", "dir", ""]]`)
-	assertContains(t, text, `"value": "value"`)
-	assertContains(t, text, `"flag": "flag"`)
-	assertContains(t, text, `"signalValue": [1, "signalValue", "signalValue"]`)
+	assertContains(t, text, `value: "value"`)
+	assertContains(t, text, `flag: "flag"`)
+	assertContains(t, text, `signalValue: [1, "signalValue", "signalValue"]`)
 	assertContains(t, text, "hostBindings")
+}
+
+func TestPartialLinkerHostListenersPassDollarEvent(t *testing.T) {
+	source := `
+import * as i0 from "@angular/core";
+
+class Dir {
+  update(value) {}
+  blur() {}
+}
+
+Dir.ɵdir = i0.ɵɵngDeclareDirective({
+  minVersion: "17.1.0",
+  version: "20.3.15",
+  type: Dir,
+  isStandalone: true,
+  selector: "[dir]",
+  host: {
+    listeners: {
+      "input": "update($any($event.target).value)",
+      "blur": "blur()"
+    }
+  },
+  ngImport: i0
+});
+`
+
+	text := linkPartialSource(t, "host-listener-event.mjs", source)
+
+	assertContains(t, text, `("input", function Dir_input_HostBindingHandler($event)`)
+	assertContains(t, text, `ctx.update($event.target.value)`)
+	assertContains(t, text, `("blur", function Dir_blur_HostBindingHandler()`)
+	assertNotContains(t, text, `ctx.$event`)
+	assertNotContains(t, text, `ctx.$any`)
 }
 
 func TestPartialLinkerEmitsContentAndViewQueries(t *testing.T) {
@@ -297,6 +331,191 @@ InvalidDepsService.ɵfac = i0.ɵɵngDeclareFactory({
 	assertContains(t, text, "ɵɵinvalidFactory()")
 	assertNotContains(t, text, "new (__ngFactoryType__ || InvalidDepsService)()")
 	assertNotContains(t, text, "ɵɵgetInheritedFactory(InvalidDepsService)")
+}
+
+func TestPartialLinkerLocalRefsUseReferenceValueSlots(t *testing.T) {
+	source := `
+import * as i0 from "@angular/core";
+import { NgTemplateOutlet } from "@angular/common";
+
+class Cmp {}
+
+Cmp.ɵcmp = i0.ɵɵngDeclareComponent({
+  minVersion: "17.1.0",
+  version: "20.3.15",
+  type: Cmp,
+  isStandalone: true,
+  selector: "x-cmp",
+  ngImport: i0,
+  template: ` + "`" + `
+    <ng-container *ngTemplateOutlet="primary"></ng-container>
+    <ng-container *ngTemplateOutlet="secondary"></ng-container>
+    <ng-template #primary #secondary>Projected</ng-template>
+  ` + "`" + `,
+  isInline: true,
+  dependencies: [
+    { kind: "directive", type: NgTemplateOutlet, selector: "[ngTemplateOutlet]", inputs: ["ngTemplateOutletContext", "ngTemplateOutlet", "ngTemplateOutletInjector"] }
+  ]
+});
+`
+
+	text := linkPartialSource(t, "local-ref-slots.mjs", source)
+
+	assertContains(t, text, `ɵɵtemplateRefExtractor`)
+	assertContains(t, text, `ɵɵreference(3)`)
+	assertContains(t, text, `ɵɵreference(4)`)
+	assertNotContains(t, text, `ɵɵreference(2)`)
+}
+
+func TestPartialLinkerResolvesForwardRefTemplateDependencies(t *testing.T) {
+	source := `
+import * as i0 from "@angular/core";
+import { NgIf } from "@angular/common";
+
+class Cmp {}
+
+Cmp.ɵcmp = i0.ɵɵngDeclareComponent({
+  minVersion: "17.1.0",
+  version: "20.3.15",
+  type: Cmp,
+  isStandalone: false,
+  selector: "x-cmp",
+  ngImport: i0,
+  template: ` + "`" + `<div *ngIf="visible"></div>` + "`" + `,
+  isInline: true,
+  dependencies: [
+    { kind: "directive", type: i0.forwardRef(() => NgIf), selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }
+  ]
+});
+`
+
+	text := linkPartialSource(t, "forward-ref-deps.mjs", source)
+
+	assertContains(t, text, `dependencies: () => [i0.forwardRef(() => NgIf)].map(i0.resolveForwardRef)`)
+	assertNotContains(t, text, `dependencies: [i0.forwardRef(() => NgIf)]`)
+}
+
+func TestPartialLinkerResolvesConstArrayTemplateDependencies(t *testing.T) {
+	source := `
+import * as i0 from "@angular/core";
+import { NgIf } from "@angular/common";
+
+const CMP_DEPS = [
+  { kind: "directive", type: NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }
+];
+
+class Cmp {
+  visible = true;
+}
+
+Cmp.ɵcmp = i0.ɵɵngDeclareComponent({
+  minVersion: "17.1.0",
+  version: "20.3.15",
+  type: Cmp,
+  isStandalone: true,
+  selector: "x-cmp",
+  ngImport: i0,
+  template: ` + "`" + `<div *ngIf="visible"></div>` + "`" + `,
+  isInline: true,
+  dependencies: CMP_DEPS
+});
+`
+
+	text := linkPartialSource(t, "const-array-deps.mjs", source)
+
+	assertContains(t, text, `dependencies: () => [NgIf].map(i0.resolveForwardRef)`)
+	assertContains(t, text, `ɵɵtemplate`)
+	assertNotContains(t, text, `ɵɵngDeclareComponent`)
+}
+
+func TestPartialLinkerKeepsProjectedTemplateLocalRefsBeforeAttrs(t *testing.T) {
+	source := `
+import * as i0 from "@angular/core";
+
+class OverlayLike {}
+OverlayLike.ɵcmp = i0.ɵɵngDeclareComponent({
+  minVersion: "17.1.0",
+  version: "20.3.15",
+  type: OverlayLike,
+  isStandalone: true,
+  selector: "x-overlay",
+  ngImport: i0,
+  template: ` + "`" + `<ng-content></ng-content>` + "`" + `,
+  isInline: true
+});
+
+class SelectLike {
+  visible = false;
+}
+
+SelectLike.ɵcmp = i0.ɵɵngDeclareComponent({
+  minVersion: "17.1.0",
+  version: "20.3.15",
+  type: SelectLike,
+  isStandalone: true,
+  selector: "x-select",
+  ngImport: i0,
+  template: ` + "`" + `
+    <x-overlay #overlay [visible]="visible">
+      <ng-template #content>Content</ng-template>
+    </x-overlay>
+  ` + "`" + `,
+  isInline: true,
+  dependencies: [
+    { kind: "component", type: OverlayLike, selector: "x-overlay", inputs: ["visible"] }
+  ]
+});
+`
+
+	text := linkPartialSource(t, "projected-template-local-refs.mjs", source)
+
+	assertContains(t, text, `consts: [["overlay", ""], ["content", ""], [3, "visible"]]`)
+	assertContains(t, text, `ɵɵelementStart(0, "x-overlay", 2, 0)`)
+	assertContains(t, text, `ɵɵtemplate(2, SelectLike_ng_template_2_Template, 1, 0, "ng-template", null, 1, i0.ɵɵtemplateRefExtractor)`)
+}
+
+func TestPartialLinkerUsesAncestorContextDepthForNestedTemplates(t *testing.T) {
+	source := `
+import * as i0 from "@angular/core";
+import { NgForOf, NgIf } from "@angular/common";
+
+class MenuLike {
+  visible = true;
+  model = [];
+  id = 'menu';
+  menuitemId(item, id, index) { return id + '_' + index; }
+}
+
+MenuLike.ɵcmp = i0.ɵɵngDeclareComponent({
+  minVersion: "17.1.0",
+  version: "20.3.15",
+  type: MenuLike,
+  isStandalone: true,
+  selector: "x-menu-like",
+  ngImport: i0,
+  template: ` + "`" + `
+    @if (visible) {
+      <ul>
+        <ng-template ngFor let-item let-i="index" [ngForOf]="model" *ngIf="visible">
+          <li *ngIf="item.visible !== false">{{ menuitemId(item, id, i) }}</li>
+        </ng-template>
+      </ul>
+    }
+  ` + "`" + `,
+  isInline: true,
+  dependencies: [
+    { kind: "directive", type: NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] },
+    { kind: "directive", type: NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }
+  ]
+});
+`
+
+	text := linkPartialSource(t, "nested-template-context-depth.mjs", source)
+
+	assertContains(t, text, `ɵɵnextContext`)
+	assertContains(t, text, `ngForOf`)
+	assertContains(t, text, `.model`)
+	assertContains(t, text, `.menuitemId`)
 }
 
 func TestPartialLinkerParityHarnessPanelLikeKnownGaps(t *testing.T) {

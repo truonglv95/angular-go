@@ -14,7 +14,7 @@ import (
 type TraitCompiler struct {
 	handlers []DecoratorHandler
 	host     reflection.ReflectionHost
-	
+
 	// classes lưu trữ danh sách các Traits cho mỗi class declaration.
 	classes map[*ast.ClassDeclaration][]*Trait
 }
@@ -32,7 +32,7 @@ func (tc *TraitCompiler) AnalyzeSync(sf *ast.SourceFile) {
 	if sf == nil || sf.Statements == nil {
 		return
 	}
-	
+
 	sf.AsNode().ForEachChild(func(node *ast.Node) bool {
 		if node.Kind == ast.KindClassDeclaration {
 			classDecl := node.AsClassDeclaration()
@@ -47,9 +47,9 @@ func (tc *TraitCompiler) analyzeClass(classDecl *ast.ClassDeclaration) {
 	if len(decorators) == 0 {
 		return
 	}
-	
+
 	var traits []*Trait
-	
+
 	// 1. Detect
 	for _, handler := range tc.handlers {
 		dec := handler.Detect(classDecl, decorators)
@@ -61,13 +61,13 @@ func (tc *TraitCompiler) analyzeClass(classDecl *ast.ClassDeclaration) {
 			})
 		}
 	}
-	
+
 	if len(traits) == 0 {
 		return
 	}
-	
+
 	tc.classes[classDecl] = traits
-	
+
 	// 2. Analyze
 	for _, trait := range traits {
 		analysis, _ := trait.Handler.Analyze(classDecl, trait.Decorator)
@@ -94,18 +94,18 @@ func (tc *TraitCompiler) UpdateSourceFile(sf *ast.SourceFile, factory *ast.NodeF
 	if sf == nil || sf.Statements == nil {
 		return
 	}
-	
+
 	pool := compiler.NewConstantPool(false)
 	config := imports.PresetImportManagerForceNamespaceImports
 	importMgr := imports.NewImportManager(&config, factory)
 	var hasTransformedClass bool
 	var newStatements []*ast.Node
-	
+
 	for _, node := range sf.Statements.Nodes {
 		if node.Kind == ast.KindClassDeclaration {
 			classDecl := node.AsClassDeclaration()
 			traits := tc.classes[classDecl]
-			
+
 			var additionalMembers []*ast.Node
 			var postStatements []*ast.Node
 			for _, trait := range traits {
@@ -116,7 +116,7 @@ func (tc *TraitCompiler) UpdateSourceFile(sf *ast.SourceFile, factory *ast.NodeF
 							// Create static property (e.g. ɵcmp, ɵfac)
 							modifiers := factory.NewModifierList([]*ast.Node{factory.NewModifier(ast.KindStaticKeyword)})
 							name := factory.NewIdentifier(result.PropertyName)
-							
+
 							prop := factory.NewPropertyDeclaration(modifiers, (*ast.PropertyName)(name), nil, nil, (*ast.Expression)(result.Initializer))
 							additionalMembers = append(additionalMembers, prop.AsNode())
 						}
@@ -131,14 +131,14 @@ func (tc *TraitCompiler) UpdateSourceFile(sf *ast.SourceFile, factory *ast.NodeF
 					}
 				}
 			}
-			
+
 			if len(additionalMembers) > 0 {
 				hasTransformedClass = true
 				var members []*ast.Node
 				members = append(members, classDecl.Members.Nodes...)
 				members = append(members, additionalMembers...)
 				classDecl.Members.Nodes = members
-				
+
 				// Strip decorators (like @Component) from class modifiers so they are not emitted
 				if classDecl.Modifiers() != nil {
 					var newMods []*ast.Node
@@ -149,11 +149,11 @@ func (tc *TraitCompiler) UpdateSourceFile(sf *ast.SourceFile, factory *ast.NodeF
 					}
 					classDecl.Modifiers().Nodes = newMods
 				}
-				
+
 				// Fix missing parent pointers in the newly generated AST nodes
 				ast.SetParentInChildren(classDecl.AsNode())
 			}
-			
+
 			newStatements = append(newStatements, node)
 			if len(postStatements) > 0 {
 				newStatements = append(newStatements, postStatements...)
@@ -162,8 +162,52 @@ func (tc *TraitCompiler) UpdateSourceFile(sf *ast.SourceFile, factory *ast.NodeF
 			newStatements = append(newStatements, node)
 		}
 	}
-	
+
 	if hasTransformedClass {
+		// Filter removed imports
+		var filteredStatements []*ast.Node
+		for _, stmt := range newStatements {
+			keepStmt := true
+			if stmt.Kind == ast.KindImportDeclaration {
+				importDecl := stmt.AsImportDeclaration()
+				if importDecl.ImportClause != nil && importDecl.ImportClause.AsImportClause().NamedBindings != nil {
+					namedBindings := importDecl.ImportClause.AsImportClause().NamedBindings
+					if namedBindings.Kind == ast.KindNamedImports {
+						namedImports := namedBindings.AsNamedImports()
+						var keepElements []*ast.Node
+						var moduleSpecifier string
+						if importDecl.ModuleSpecifier != nil && importDecl.ModuleSpecifier.Kind == ast.KindStringLiteral {
+							moduleSpecifier = importDecl.ModuleSpecifier.AsStringLiteral().Text
+							if len(moduleSpecifier) >= 2 && (moduleSpecifier[0] == '"' || moduleSpecifier[0] == '\'') {
+								moduleSpecifier = moduleSpecifier[1 : len(moduleSpecifier)-1]
+							}
+						}
+
+						for _, el := range namedImports.Elements.Nodes {
+							if el.Kind == ast.KindImportSpecifier {
+								importSpecifier := el.AsImportSpecifier()
+								name := importSpecifier.Name().AsIdentifier().Text
+								if !importMgr.IsRemoved(sf.AsNode(), name, moduleSpecifier) {
+									keepElements = append(keepElements, el)
+								}
+							} else {
+								keepElements = append(keepElements, el)
+							}
+						}
+						if len(keepElements) == 0 {
+							keepStmt = false
+						} else if len(keepElements) != len(namedImports.Elements.Nodes) {
+							namedImports.Elements.Nodes = keepElements
+						}
+					}
+				}
+			}
+			if keepStmt {
+				filteredStatements = append(filteredStatements, stmt)
+			}
+		}
+		newStatements = filteredStatements
+
 		// Translate constant pool statements
 		var poolStatements []*ast.Node
 		var generatedImports []*ast.Node
@@ -172,8 +216,7 @@ func (tc *TraitCompiler) UpdateSourceFile(sf *ast.SourceFile, factory *ast.NodeF
 			// Actually, if we translate statements that use ExternalExpr("@angular/core", "ɵɵdefineComponent"),
 			// the ImportManager will automatically generate `import * as i0 from "@angular/core"`!
 			// So we do not need to manually generate i0!
-			
-			fmt.Printf("Visitor sf.AsNode()=%p\n", sf.AsNode())
+
 			visitor := translator.NewExpressionTranslatorVisitor(factory, importMgr, sf.AsNode(), translator.TranslatorOptions{})
 			for _, stmt := range pool.Statements {
 				astStmt := stmt.VisitStatement(visitor, translator.Context{IsStatementMode: true})
@@ -183,11 +226,10 @@ func (tc *TraitCompiler) UpdateSourceFile(sf *ast.SourceFile, factory *ast.NodeF
 					}
 				}
 			}
-			
-			
+
 		}
 		generatedImports = importMgr.GetAllImports(sf.AsNode())
-		
+
 		// Ensure import is at the top
 		var finalStatements []*ast.Node
 		var bodyStatements []*ast.Node
@@ -198,7 +240,7 @@ func (tc *TraitCompiler) UpdateSourceFile(sf *ast.SourceFile, factory *ast.NodeF
 				bodyStatements = append(bodyStatements, stmt)
 			}
 		}
-		
+
 		finalStatements = append(finalStatements, generatedImports...)
 		for _, n := range poolStatements {
 			if n != nil {

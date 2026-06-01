@@ -83,6 +83,7 @@ var chainCompatibility = map[string]string{
 	"styleProp":                "styleProp",
 	"syntheticHostListener":    "syntheticHostListener",
 	"syntheticHostProperty":    "syntheticHostProperty",
+	"template":                 "template",
 	"templateCreate":           "templateCreate",
 	"twoWayProperty":           "twoWayProperty",
 	"twoWayListener":           "twoWayListener",

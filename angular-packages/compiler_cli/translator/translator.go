@@ -172,7 +172,7 @@ func (v *ExpressionTranslatorVisitor) VisitInvokeFunctionExpr(astNode *output.In
 	if astNode.IsOptional {
 		qDot = v.factory.NewToken(ast.KindQuestionDotToken)
 	}
-	return v.factory.NewCallExpression((*ast.Expression)(fn), (*ast.QuestionDotToken)(qDot), nil, v.factory.NewNodeList(args), 0)
+	return v.factory.NewCallExpression((*ast.Expression)(fn), (*ast.QuestionDotToken)(qDot), nil, v.factory.NewNodeList(args), 0).AsNode()
 }
 
 func (v *ExpressionTranslatorVisitor) VisitTaggedTemplateLiteralExpr(astNode *output.TaggedTemplateLiteralExpr, context any) any {
@@ -268,7 +268,18 @@ func (v *ExpressionTranslatorVisitor) VisitConditionalExpr(astNode *output.Condi
 }
 
 func (v *ExpressionTranslatorVisitor) VisitDynamicImportExpr(astNode *output.DynamicImportExpr, context any) any {
-	return v.factory.NewCallExpression(v.factory.NewIdentifier("import"), nil, nil, nil, 0)
+	ctx := context.(Context)
+	var urlArg *ast.Node
+	if urlStr, ok := astNode.Url.(string); ok {
+		urlArg = v.factory.NewStringLiteral(urlStr, 0)
+	} else if urlExpr, ok := astNode.Url.(output.Expression); ok {
+		urlArg = urlExpr.VisitExpression(v, ctx).(*ast.Node)
+	}
+	var args []*ast.Node
+	if urlArg != nil {
+		args = append(args, urlArg)
+	}
+	return v.factory.NewCallExpression((*ast.Expression)(v.factory.NewIdentifier("import")), nil, nil, v.factory.NewNodeList(args), 0).AsNode()
 }
 
 func (v *ExpressionTranslatorVisitor) VisitNotExpr(astNode *output.NotExpr, context any) any {
@@ -400,7 +411,8 @@ func (v *ExpressionTranslatorVisitor) VisitArrowFunctionExpr(astNode *output.Arr
 		body = v.factory.NewBlock(v.factory.NewNodeList(statements), false).AsNode()
 	}
 	equalsGreaterThanToken := v.factory.NewToken(ast.KindEqualsGreaterThanToken)
-	return v.factory.NewArrowFunction(nil, nil, (*ast.ParameterList)(v.factory.NewNodeList(params)), nil, nil, (*ast.EqualsGreaterThanToken)(equalsGreaterThanToken), (*ast.ConciseBody)(body))
+	arrowFn := v.factory.NewArrowFunction(nil, nil, (*ast.ParameterList)(v.factory.NewNodeList(params)), nil, nil, (*ast.EqualsGreaterThanToken)(equalsGreaterThanToken), (*ast.ConciseBody)(body))
+	return arrowFn.AsNode()
 }
 
 func (v *ExpressionTranslatorVisitor) VisitCommaExpr(astNode *output.CommaExpr, context any) any {

@@ -7,6 +7,7 @@ import (
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli"
 	"github.com/microsoft/typescript-go/internal/diagnosticwriter"
 	"github.com/microsoft/typescript-go/internal/execute/tsc"
+	"github.com/microsoft/typescript-go/internal/tspath"
 )
 
 func main() {
@@ -24,18 +25,23 @@ func main() {
 	}
 
 	config := compiler_cli.ReadConfiguration(*projectFlag)
+	formatOpts := &diagnosticwriter.FormattingOptions{
+		NewLine: "\n",
+		Locale:  config.Locale,
+		ComparePathsOptions: tspath.ComparePathsOptions{
+			CurrentDirectory:          ".",
+			UseCaseSensitiveFileNames: true,
+		},
+	}
+
 	if len(config.Errors) > 0 {
-		for _, err := range config.Errors {
-			diagnosticwriter.WriteFlattenedASTDiagnosticMessage(os.Stderr, err, "\n", config.Locale)
-		}
+		diagnosticwriter.FormatDiagnosticsWithColorAndContext(os.Stderr, diagnosticwriter.FromASTDiagnostics(config.Errors), formatOpts)
 		os.Exit(int(tsc.ExitStatusInvalidProject_OutputsSkipped))
 	}
 
 	result := compiler_cli.PerformCompilation(config)
 	if len(result.Diagnostics) > 0 {
-		for _, diag := range result.Diagnostics {
-			diagnosticwriter.WriteFlattenedASTDiagnosticMessage(os.Stderr, diag, "\n", config.Locale)
-		}
+		diagnosticwriter.FormatDiagnosticsWithColorAndContext(os.Stderr, diagnosticwriter.FromASTDiagnostics(result.Diagnostics), formatOpts)
 	}
 
 	os.Exit(int(result.Status))

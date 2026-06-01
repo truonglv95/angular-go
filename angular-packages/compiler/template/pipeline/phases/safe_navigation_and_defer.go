@@ -49,19 +49,23 @@ func ResolveDeferDepsFns(job *compilation.ComponentCompilationJob) {
 				continue
 			}
 			if deferOp.ResolverFn != nil {
-				continue
+				// Handle typed nil
+				if rve, ok := deferOp.ResolverFn.(*output.ReadVarExpr); !ok || rve != nil {
+					continue
+				}
 			}
 			if deferOp.OwnResolverFn == nil {
 				continue
 			}
-			slot, ok2 := deferOp.MainSlot.(int)
-			if !ok2 {
-				// MainSlot is a SlotHandle pointer
-				if sh, ok3 := deferOp.MainSlot.(*ir.SlotHandle); ok3 && sh.Slot != nil {
-					slot = *sh.Slot
-				} else {
-					panic("AssertionError: slot must be assigned before extracting defer deps functions")
-				}
+			if rve, ok := deferOp.OwnResolverFn.(*output.ReadVarExpr); ok && rve == nil {
+				continue
+			}
+			var slot int
+			sh := deferOp.Handle()
+			if sh != nil && sh.Slot != nil {
+				slot = *sh.Slot
+			} else {
+				panic("AssertionError: slot must be assigned before extracting defer deps functions")
 			}
 			fnName := ""
 			if unit.GetFnName() != nil {
@@ -77,7 +81,25 @@ func ResolveDeferDepsFns(job *compilation.ComponentCompilationJob) {
 				GetSharedFunctionReference(fn output.Expression, name string, unique bool) output.Expression
 			}); ok2 {
 				depsFnName := fmt.Sprintf("%s_Defer_%d_DepsFn", fullPathName, slot)
-				deferOp.ResolverFn = pool.GetSharedFunctionReference(deferOp.OwnResolverFn, depsFnName, false)
+
+				var reify func(expr output.Expression) output.Expression
+				reify = func(expr output.Expression) output.Expression {
+					return ir.TransformExpressionsInExpression(expr, func(e output.Expression, flags ir.VisitorContextFlag) output.Expression {
+						if irArrow, ok := e.(*ir.ArrowFunctionExpr); ok {
+							var params []*output.FnParam
+							for i := range irArrow.Parameters {
+								params = append(params, &irArrow.Parameters[i])
+							}
+							body := reify(irArrow.Body)
+							return output.NewArrowFunctionExpr(params, body, nil, nil, nil)
+						}
+						return e
+					}, ir.VisitorContextFlagNone)
+				}
+
+				resolvedFn := reify(deferOp.OwnResolverFn)
+
+				deferOp.ResolverFn = pool.GetSharedFunctionReference(resolvedFn, depsFnName, false)
 			}
 		}
 	}

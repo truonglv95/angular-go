@@ -15,26 +15,33 @@ func ConvertI18nText(job compilation.CompilationJob) {
 		textNodeIcus := map[ir.XrefId]*ir.IcuStartOp{}
 		icuPlaceholderByText := map[ir.XrefId]*ir.IcuPlaceholderOp{}
 
+		var newCreateOps []ir.Op
 		for _, op := range unit.GetCreate().Elements() {
 			switch op.Kind() {
 			case ir.OpKindI18nStart:
 				if i18nOp, ok := op.(*ir.I18nStartOp); ok {
 					currentI18n = i18nOp
 				}
+				newCreateOps = append(newCreateOps, op)
 			case ir.OpKindI18nEnd:
 				currentI18n = nil
+				newCreateOps = append(newCreateOps, op)
 			case ir.OpKindIcuStart:
 				if icuOp, ok := op.(*ir.IcuStartOp); ok {
 					currentIcu = icuOp
 				}
+				newCreateOps = append(newCreateOps, op)
 			case ir.OpKindIcuEnd:
 				currentIcu = nil
+				newCreateOps = append(newCreateOps, op)
 			case ir.OpKindText:
 				if currentI18n == nil {
+					newCreateOps = append(newCreateOps, op)
 					continue
 				}
 				textOp, ok := op.(*ir.TextOp)
 				if !ok {
+					newCreateOps = append(newCreateOps, op)
 					continue
 				}
 				textNodeI18nBlocks[textOp.Xref] = currentI18n
@@ -46,24 +53,30 @@ func ConvertI18nText(job compilation.CompilationJob) {
 						Strings: textOp.InitialValue, // string type
 					}
 					// Replace the text op with the icu placeholder op.
-					ir.InsertBefore(icuPhOp, op)
-					unit.GetCreate().Remove(op)
+					newCreateOps = append(newCreateOps, icuPhOp)
 					icuPlaceholderByText[textOp.Xref] = icuPhOp
 				} else {
-					unit.GetCreate().Remove(op)
+					// Remove textOp
 				}
+			default:
+				newCreateOps = append(newCreateOps, op)
 			}
 		}
+		unit.GetCreate().Ops = newCreateOps
 
+		var newUpdateOps []ir.Op
 		for _, op := range unit.GetUpdate().Elements() {
 			if op.Kind() != ir.OpKindInterpolateText {
+				newUpdateOps = append(newUpdateOps, op)
 				continue
 			}
 			itOp, ok := op.(*ir.InterpolateTextOp)
 			if !ok {
+				newUpdateOps = append(newUpdateOps, op)
 				continue
 			}
 			if _, inI18n := textNodeI18nBlocks[itOp.Target]; !inI18n {
+				newUpdateOps = append(newUpdateOps, op)
 				continue
 			}
 			i18nOp := textNodeI18nBlocks[itOp.Target]
@@ -84,10 +97,10 @@ func ConvertI18nText(job compilation.CompilationJob) {
 			// Interpolation is `any` — type-assert to *ir.Interpolation.
 			interp, _ := itOp.Interpolation.(*ir.Interpolation)
 			if interp == nil {
+				newUpdateOps = append(newUpdateOps, op)
 				continue
 			}
 
-			var newOps []ir.Op
 			for i, expr := range interp.Expressions {
 				var ph *string
 				if i < len(interp.I18nPlaceholders) {
@@ -109,13 +122,11 @@ func ConvertI18nText(job compilation.CompilationJob) {
 					Usage:           ir.I18nExpressionForI18nText,
 					Name:            "",
 				}
-				newOps = append(newOps, exprOp)
+				newUpdateOps = append(newUpdateOps, exprOp)
 			}
-			for _, newOp := range newOps {
-				ir.InsertBefore(newOp, op)
-			}
-			unit.GetUpdate().Remove(op)
+			// op is removed (replaced by exprOps)
 		}
+		unit.GetUpdate().Ops = newUpdateOps
 	}
 }
 

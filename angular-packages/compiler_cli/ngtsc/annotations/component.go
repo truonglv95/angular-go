@@ -4,47 +4,183 @@ import (
 	"fmt"
 	"io/ioutil"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/microsoft/typescript-go/angular-packages/compiler"
-	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/metadata"
-	ngdiagnostics "github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/diagnostics"
-	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/scope"
+	"github.com/microsoft/typescript-go/angular-packages/compiler/expression_parser"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/output"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/render3"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/render3/partial"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/imports"
-	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/reflection"
+	ngdiagnostics "github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/diagnostics"
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/metadata"
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/scope"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/transform"
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/reflection"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/translator"
 	"github.com/microsoft/typescript-go/internal/ast"
 	tsdiagnostics "github.com/microsoft/typescript-go/internal/diagnostics"
 )
 
 type ComponentImport struct {
-	Name string
-	Decl reflection.Declaration
+	Name       string
+	ImportName string
+	ImportPath string
+	Decl       reflection.Declaration
 }
 
 type ComponentAnalysis struct {
-	Selector string
-	Template string
-	TemplateUrl string
-	Styles []string
-	StyleUrls []string
-	IsStandalone bool
-	Imports []ComponentImport
-	Inputs map[string]render3.R3InputMetadata
-	Outputs map[string]string
-	Queries []render3.R3QueryMetadata
-	ViewQueries []render3.R3QueryMetadata
-	Host render3.R3HostMetadata
-	DecoratorNode *ast.Node
+	Selector       string
+	Template       string
+	TemplateUrl    string
+	Styles         []string
+	StyleUrls      []string
+	IsStandalone   bool
+	Imports        []ComponentImport
+	Inputs         map[string]render3.R3InputMetadata
+	Outputs        map[string]string
+	Queries        []render3.R3QueryMetadata
+	ViewQueries    []render3.R3QueryMetadata
+	Host           render3.R3HostMetadata
+	Animations     output.Expression
+	DecoratorNode  *ast.Node
 	PropDecorators map[string][]*ast.Node
 }
 
 type ComponentResolution struct {
 	Dependencies []render3.R3TemplateDependency
+}
+
+type directiveMetaAdapter struct {
+	meta *metadata.DirectiveMeta
+}
+
+func (d directiveMetaAdapter) GetName() string { return d.meta.Name }
+func (d directiveMetaAdapter) GetRefKey() string {
+	if d.meta.Ref.OwningModule != "" {
+		return d.meta.Ref.OwningModule + "#" + d.meta.Ref.Name
+	}
+	return d.meta.Ref.Name
+}
+func (d directiveMetaAdapter) GetSelector() *string {
+	if d.meta.Selector == "" {
+		return nil
+	}
+	return &d.meta.Selector
+}
+func (d directiveMetaAdapter) IsComponent() bool { return d.meta.IsComponent }
+func (d directiveMetaAdapter) GetInputs() any {
+	obj := make(map[string]interface{}, len(d.meta.Inputs))
+	for className, bindingName := range d.meta.Inputs {
+		obj[className] = bindingName
+	}
+	return render3.ClassPropertyMappingFromMappedObject(obj)
+}
+func (d directiveMetaAdapter) GetOutputs() any {
+	obj := make(map[string]interface{}, len(d.meta.Outputs))
+	for className, bindingName := range d.meta.Outputs {
+		obj[className] = bindingName
+	}
+	return render3.ClassPropertyMappingFromMappedObject(obj)
+}
+func (d directiveMetaAdapter) GetExportAs() []string { return d.meta.ExportAs }
+func (d directiveMetaAdapter) IsStructural() bool    { return strings.HasPrefix(d.meta.Selector, "[") }
+func (d directiveMetaAdapter) GetNgContentSelectors() []string {
+	return nil
+}
+func (d directiveMetaAdapter) GetPreserveWhitespaces() bool { return false }
+func (d directiveMetaAdapter) GetAnimationTriggerNames() *render3.LegacyAnimationTriggerNames {
+	return nil
+}
+func (d directiveMetaAdapter) GetMatchSource() render3.MatchSource {
+	return render3.MatchSourceSelector
+}
+
+type pipeUsageCollector struct {
+	expression_parser.RecursiveAstVisitor
+	used map[string]bool
+}
+
+func newPipeUsageCollector() *pipeUsageCollector {
+	collector := &pipeUsageCollector{used: make(map[string]bool)}
+	collector.RecursiveAstVisitor.Impl = collector
+	return collector
+}
+
+func (c *pipeUsageCollector) VisitPipe(ast *expression_parser.BindingPipe, context any) any {
+	c.used[ast.Name] = true
+	return c.RecursiveAstVisitor.VisitPipe(ast, context)
+}
+
+func collectUsedPipes(nodes []render3.Node) map[string]bool {
+	collector := newPipeUsageCollector()
+	var walk func([]render3.Node)
+	visitAttr := func(attr *render3.BoundAttribute) {
+		if attr != nil {
+			collector.Visit(attr.Value, nil)
+		}
+	}
+	walk = func(nodes []render3.Node) {
+		for _, node := range nodes {
+			switch n := node.(type) {
+			case *render3.BoundText:
+				collector.Visit(n.Value, nil)
+			case *render3.Element:
+				for _, input := range n.Inputs {
+					visitAttr(input)
+				}
+				walk(n.Children)
+			case *render3.Template:
+				for _, attr := range n.TemplateAttrs {
+					if bound, ok := attr.(*render3.BoundAttribute); ok {
+						visitAttr(bound)
+					}
+				}
+				for _, input := range n.Inputs {
+					visitAttr(input)
+				}
+				walk(n.Children)
+			case *render3.IfBlock:
+				for _, branch := range n.Branches {
+					collector.Visit(branch.Expression, nil)
+					walk(branch.Children)
+				}
+			case *render3.ForLoopBlock:
+				collector.Visit(n.Expression.Ast, nil)
+				if n.TrackBy != nil {
+					collector.Visit(n.TrackBy.Ast, nil)
+				}
+				walk(n.Children)
+				if n.Empty != nil {
+					walk(n.Empty.Children)
+				}
+			case *render3.DeferredBlock:
+				walk(n.Children)
+				if n.Placeholder != nil {
+					walk(n.Placeholder.Children)
+				}
+				if n.Loading != nil {
+					walk(n.Loading.Children)
+				}
+				if n.Error != nil {
+					walk(n.Error.Children)
+				}
+			}
+		}
+	}
+	walk(nodes)
+	return collector.used
+}
+
+func directImportMatchesDirective(imp ComponentImport, dir *metadata.DirectiveMeta) bool {
+	if dir == nil {
+		return false
+	}
+	if imp.Decl.ViaModule != "" && dir.Ref.OwningModule != "" && imp.Decl.ViaModule != dir.Ref.OwningModule {
+		return false
+	}
+	return imp.Name == dir.Ref.Name || imp.Name+"Of" == dir.Ref.Name
 }
 
 func (a *ComponentAnalysis) ResourceDependencies(sourceFile *ast.SourceFile) []string {
@@ -99,14 +235,14 @@ func (h *ComponentDecoratorHandler) Detect(node *ast.ClassDeclaration, decorator
 
 func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorator *reflection.Decorator) (any, []ast.Diagnostic) {
 	analysis := &ComponentAnalysis{
-		IsStandalone: true,
-		Inputs: make(map[string]render3.R3InputMetadata),
-		Outputs: make(map[string]string),
-		Host: render3.R3HostMetadata{},
-		DecoratorNode: decorator.Node,
+		IsStandalone:   true,
+		Inputs:         make(map[string]render3.R3InputMetadata),
+		Outputs:        make(map[string]string),
+		Host:           render3.R3HostMetadata{},
+		DecoratorNode:  decorator.Node,
 		PropDecorators: make(map[string][]*ast.Node),
 	}
-	
+
 	if node.Members != nil {
 		for _, member := range node.Members.Nodes {
 			if member.Kind == ast.KindPropertyDeclaration || member.Kind == ast.KindMethodDeclaration {
@@ -184,14 +320,14 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 										} else if id.Text == "ViewChild" || id.Text == "ViewChildren" || id.Text == "ContentChild" || id.Text == "ContentChildren" {
 											isView := id.Text == "ViewChild" || id.Text == "ViewChildren"
 											isFirst := id.Text == "ViewChild" || id.Text == "ContentChild"
-											
+
 											predicate := ""
 											if callExpr.Arguments != nil && len(callExpr.Arguments.Nodes) > 0 {
 												if callExpr.Arguments.Nodes[0].Kind == ast.KindStringLiteral {
 													predicate = callExpr.Arguments.Nodes[0].AsStringLiteral().Text
 												}
 											}
-											
+
 											isStatic := false
 											if callExpr.Arguments != nil && len(callExpr.Arguments.Nodes) > 1 {
 												if callExpr.Arguments.Nodes[1].Kind == ast.KindObjectLiteralExpression {
@@ -208,15 +344,16 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 													}
 												}
 											}
-											
+
 											meta := render3.R3QueryMetadata{
-												PropertyName: propName,
-												First: isFirst,
-												Predicate: []string{predicate},
-												Descendants: !isView,
-												Static: isStatic,
+												PropertyName:            propName,
+												First:                   isFirst,
+												Predicate:               []string{predicate},
+												Descendants:             isView || id.Text == "ContentChildren", // ViewChild/Children and ContentChildren are descendants: true by default
+												Static:                  isStatic,
+												EmitDistinctChangesOnly: true,
 											}
-											
+
 											if isView {
 												analysis.ViewQueries = append(analysis.ViewQueries, meta)
 											} else {
@@ -235,32 +372,32 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 			}
 		}
 	}
-	
+
 	if len(decorator.Args) == 0 {
 		return analysis, nil
 	}
-	
+
 	arg := decorator.Args[0]
 	if arg.Kind != ast.KindObjectLiteralExpression {
 		return analysis, nil
 	}
-	
+
 	obj := arg.AsObjectLiteralExpression()
 	if obj.Properties == nil {
 		return analysis, nil
 	}
-	
+
 	for _, prop := range obj.Properties.Nodes {
 		if prop.Kind != ast.KindPropertyAssignment {
 			continue
 		}
-		
+
 		assign := prop.AsPropertyAssignment()
 		name := ""
 		if assign.Name().Kind == ast.KindIdentifier {
 			name = assign.Name().AsIdentifier().Text
 		}
-		
+
 		switch name {
 		case "selector":
 			if assign.Initializer.Kind == ast.KindStringLiteral {
@@ -312,6 +449,8 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 			if assign.Initializer.Kind == ast.KindStringLiteral {
 				analysis.StyleUrls = append(analysis.StyleUrls, assign.Initializer.AsStringLiteral().Text)
 			}
+		case "animations":
+			analysis.Animations = output.NewWrappedNodeExpr(assign.Initializer, nil, nil, nil)
 		case "imports":
 			if assign.Initializer.Kind == ast.KindArrayLiteralExpression {
 				arr := assign.Initializer.AsArrayLiteralExpression()
@@ -319,12 +458,19 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 					for _, elem := range arr.Elements.Nodes {
 						if elem.Kind == ast.KindIdentifier {
 							decl := h.host.GetDeclarationOfIdentifier(elem)
-							fmt.Printf("ComponentDecoratorHandler.Analyze -> checking import %s, decl=%v\n", elem.AsIdentifier().Text, decl)
 							if decl != nil && decl.Node != nil {
-								fmt.Printf("decl.Node.Kind = %d\n", decl.Node.Kind)
+								importInfo := h.host.GetImportOfIdentifier(elem)
+								importName := ""
+								importPath := ""
+								if importInfo != nil {
+									importName = importInfo.Name
+									importPath = importInfo.From
+								}
 								analysis.Imports = append(analysis.Imports, ComponentImport{
-									Name: elem.AsIdentifier().Text,
-									Decl: *decl,
+									Name:       elem.AsIdentifier().Text,
+									ImportName: importName,
+									ImportPath: importPath,
+									Decl:       *decl,
 								})
 							}
 						}
@@ -339,7 +485,7 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 					for _, hostProp := range hostObj.Properties.Nodes {
 						if hostProp.Kind == ast.KindPropertyAssignment {
 							pa := hostProp.AsPropertyAssignment()
-							
+
 							keyName := ""
 							if pa.Name().Kind == ast.KindIdentifier {
 								keyName = pa.Name().AsIdentifier().Text
@@ -348,14 +494,14 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 							} else if pa.Name().Kind == ast.KindNoSubstitutionTemplateLiteral {
 								keyName = pa.Name().AsNoSubstitutionTemplateLiteral().Text
 							}
-							
+
 							valStr := ""
 							if pa.Initializer.Kind == ast.KindStringLiteral {
 								valStr = pa.Initializer.AsStringLiteral().Text
 							} else if pa.Initializer.Kind == ast.KindNoSubstitutionTemplateLiteral {
 								valStr = pa.Initializer.AsNoSubstitutionTemplateLiteral().Text
 							}
-							
+
 							if keyName != "" && valStr != "" {
 								hostMap[keyName] = valStr
 							}
@@ -390,18 +536,22 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 			}
 		}
 	}
-	
+
 	if h.metaRegistry != nil {
 		var metaImports []metadata.Reference
 		for _, imp := range analysis.Imports {
 			metaImports = append(metaImports, metadata.Reference{Name: imp.Name, Node: imp.Decl.Node, OwningModule: imp.Decl.ViaModule})
 		}
 		h.metaRegistry.RegisterDirective(node.AsNode(), &metadata.DirectiveMeta{
-			Name:       node.Name().AsIdentifier().Text,
-			Selector:   analysis.Selector,
-			Standalone: analysis.IsStandalone,
-			Imports:    metaImports,
+			Name:        node.Name().AsIdentifier().Text,
+			Selector:    analysis.Selector,
+			Standalone:  analysis.IsStandalone,
+			Imports:     metaImports,
 			IsComponent: true,
+			Ref: metadata.Reference{
+				Name: node.Name().AsIdentifier().Text,
+				Node: node.AsNode(),
+			},
 		})
 	}
 	return analysis, nil
@@ -410,7 +560,7 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysisData any) (any, []ast.Diagnostic) {
 	analysis := analysisData.(*ComponentAnalysis)
 	resolution := &ComponentResolution{}
-	
+
 	if h.scopeRegistry != nil {
 		scope := h.scopeRegistry.GetCompilationScope(node.AsNode())
 		if scope != nil {
@@ -420,7 +570,7 @@ func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysis
 			if sourceFile != nil {
 				baseDir = filepath.Dir(sourceFile.FileName())
 			}
-			
+
 			templateStr := analysis.Template
 			if analysis.TemplateUrl != "" {
 				templatePath := filepath.Join(baseDir, analysis.TemplateUrl)
@@ -428,9 +578,9 @@ func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysis
 					templateStr = string(content)
 				}
 			}
-			_ = render3.ParseTemplate(templateStr, "", nil)
+			parsedTemplate := render3.ParseTemplate(templateStr, "", nil)
 
-// Deduplicate dependencies
+			// Deduplicate dependencies
 			seenDeps := make(map[string]bool)
 			addDep := func(dep render3.R3TemplateDependency) {
 				key := ""
@@ -445,27 +595,108 @@ func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysis
 				}
 			}
 
-			// Add original imports verbatim
+			// Add imported NgModules verbatim. Standalone directives and pipes are added only
+			// when the template binder proves that the template actually consumes them.
 			for _, imp := range analysis.Imports {
+				if h.metaRegistry != nil {
+					if h.metaRegistry.GetDirectiveMetadata(imp.Decl.Node) != nil || h.metaRegistry.GetPipeMetadata(imp.Decl.Node) != nil {
+						continue
+					}
+				}
+				if !strings.HasSuffix(imp.Name, "Module") {
+					continue
+				}
 				dep := render3.R3TemplateDependency{
 					Kind: render3.R3TemplateDependencyKind_NgModule,
 				}
-				if imp.Decl.ViaModule != "" {
-					moduleName := imp.Decl.ViaModule
-					name := imp.Name
-					dep.Type = output.NewExternalExpr(output.ExternalReference{
-						ModuleName: &moduleName,
-						Name:       &name,
-					}, nil, nil, nil, nil)
-				} else {
-					dep.Type = output.NewReadVarExpr(imp.Name, nil, nil, nil)
-				}
+				dep.Type = output.NewReadVarExpr(imp.Name, nil, nil, nil)
 				addDep(dep)
 			}
 
-			// Add all directives in scope
+			matcher := render3.NewSelectorMatcher[[]directiveMetaAdapter]()
 			for i := range scope.Directives {
 				dir := &scope.Directives[i]
+				if dir.Selector == "" {
+					continue
+				}
+				matcher.AddSelectables(render3.CssSelectorParse(dir.Selector), []directiveMetaAdapter{{meta: dir}})
+			}
+			binder := render3.NewR3TargetBinder[directiveMetaAdapter](matcher, nil)
+			bound := binder.Bind(render3.Target[directiveMetaAdapter]{Template: parsedTemplate.Nodes})
+			usedPipes := collectUsedPipes(parsedTemplate.Nodes)
+
+			importedDirectiveNodes := make(map[*ast.Node]bool)
+			importedPipeNodes := make(map[*ast.Node]bool)
+			matchedDirectives := bound.GetEagerlyUsedDirectives()
+
+			// Sort matchedDirectives by their index in scope.Directives to match ngc order
+			sort.SliceStable(matchedDirectives, func(i, j int) bool {
+				idxI, idxJ := -1, -1
+				for k := range scope.Directives {
+					if scope.Directives[k].Ref.Node == matchedDirectives[i].meta.Ref.Node {
+						idxI = k
+					}
+					if scope.Directives[k].Ref.Node == matchedDirectives[j].meta.Ref.Node {
+						idxJ = k
+					}
+				}
+				return idxI < idxJ
+			})
+
+			for _, imp := range analysis.Imports {
+				if h.metaRegistry == nil || imp.Decl.Node == nil {
+					for _, matchedDir := range matchedDirectives {
+						if directImportMatchesDirective(imp, matchedDir.meta) {
+							importedDirectiveNodes[matchedDir.meta.Ref.Node] = true
+							addDep(render3.R3TemplateDependency{
+								Kind: render3.R3TemplateDependencyKind_Directive,
+								Type: output.NewReadVarExpr(imp.Name, nil, nil, nil),
+							})
+							break
+						}
+					}
+					continue
+				}
+				if dirMeta := h.metaRegistry.GetDirectiveMetadata(imp.Decl.Node); dirMeta != nil {
+					for _, matchedDir := range matchedDirectives {
+						if matchedDir.meta == dirMeta || (matchedDir.meta.Selector != "" && matchedDir.meta.Selector == dirMeta.Selector) || directImportMatchesDirective(imp, matchedDir.meta) {
+							importedDirectiveNodes[imp.Decl.Node] = true
+							importedDirectiveNodes[matchedDir.meta.Ref.Node] = true
+							addDep(render3.R3TemplateDependency{
+								Kind: render3.R3TemplateDependencyKind_Directive,
+								Type: output.NewReadVarExpr(imp.Name, nil, nil, nil),
+							})
+							break
+						}
+					}
+				} else {
+					for _, matchedDir := range matchedDirectives {
+						if directImportMatchesDirective(imp, matchedDir.meta) {
+							importedDirectiveNodes[matchedDir.meta.Ref.Node] = true
+							addDep(render3.R3TemplateDependency{
+								Kind: render3.R3TemplateDependencyKind_Directive,
+								Type: output.NewReadVarExpr(imp.Name, nil, nil, nil),
+							})
+							break
+						}
+					}
+				}
+				if pipeMeta := h.metaRegistry.GetPipeMetadata(imp.Decl.Node); pipeMeta != nil && usedPipes[pipeMeta.Name] {
+					importedPipeNodes[imp.Decl.Node] = true
+					addDep(render3.R3TemplateDependency{
+						Kind: render3.R3TemplateDependencyKind_Pipe,
+						Type: output.NewReadVarExpr(imp.Name, nil, nil, nil),
+					})
+				}
+			}
+
+			// Add directives matched by the template and not already represented by a
+			// directly imported standalone symbol.
+			for _, matchedDir := range matchedDirectives {
+				dir := matchedDir.meta
+				if importedDirectiveNodes[dir.Ref.Node] {
+					continue
+				}
 				dep := render3.R3TemplateDependency{
 					Kind: render3.R3TemplateDependencyKind_Directive,
 				}
@@ -482,8 +713,17 @@ func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysis
 				addDep(dep)
 			}
 
-			// Add all pipes in scope
+			// Add pipes used by the template.
 			for _, pipe := range scope.Pipes {
+				if !usedPipes[pipe.Name] {
+					continue
+				}
+				if importedPipeNodes[pipe.Ref.Node] {
+					continue
+				}
+				if pipe.Ref.Name == "" {
+					continue
+				}
 				dep := render3.R3TemplateDependency{
 					Kind: render3.R3TemplateDependencyKind_Pipe,
 				}
@@ -495,15 +735,14 @@ func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysis
 						Name:       &name,
 					}, nil, nil, nil, nil)
 				} else {
-					dep.Type = output.NewReadVarExpr(pipe.Name, nil, nil, nil)
+					dep.Type = output.NewReadVarExpr(pipe.Ref.Name, nil, nil, nil)
 				}
 				addDep(dep)
 			}
 
-
 		}
 	}
-	
+
 	return resolution, nil
 }
 
@@ -511,14 +750,14 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 	analysis := analysisData.(*ComponentAnalysis)
 	resolution := resolutionData.(*ComponentResolution)
 	var diagnostics []ast.Diagnostic
-	
+
 	// RESOURCE LOADER: Resolve template and styles from disk
 	sourceFile := ast.GetSourceFileOfNode(node.AsNode())
 	baseDir := ""
 	if sourceFile != nil {
 		baseDir = filepath.Dir(sourceFile.FileName())
 	}
-	
+
 	if analysis.TemplateUrl != "" {
 		templatePath := filepath.Join(baseDir, analysis.TemplateUrl)
 		if content, err := ioutil.ReadFile(templatePath); err == nil {
@@ -533,7 +772,7 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 			))
 		}
 	}
-		
+
 	for _, styleUrl := range analysis.StyleUrls {
 		stylePath := filepath.Join(baseDir, styleUrl)
 		if content, err := ioutil.ReadFile(stylePath); err == nil {
@@ -560,6 +799,82 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 		analysis.Styles = append(analysis.Styles, parsedTemplate.Styles...)
 	}
 
+	compScope := h.scopeRegistry.GetCompilationScope(node.AsNode())
+	deferBlocks, deferComponentDeps := extractDeferBlocks(parsedTemplate.Nodes, compScope, node.AsNode(), analysis.Imports)
+	if importMgr != nil {
+		sourceFile := ast.GetSourceFileOfNode(node.AsNode())
+		if sourceFile != nil {
+			for _, deferDep := range deferComponentDeps {
+				removeName := deferDep.LocalName
+				if removeName == "" {
+					removeName = deferDep.SymbolName
+				}
+				if removeName != "" && deferDep.ImportPath != "" {
+					importMgr.RemoveImport(sourceFile.AsNode(), removeName, deferDep.ImportPath)
+				}
+			}
+		}
+	}
+
+	var eagerDeps []render3.R3TemplateDependency
+	for _, dep := range resolution.Dependencies {
+		isDeferred := false
+		var depName string
+		if ext, ok := dep.Type.(*output.ExternalExpr); ok {
+			depName = *ext.Value.Name
+		} else if read, ok := dep.Type.(*output.ReadVarExpr); ok {
+			depName = read.Name
+		}
+
+		for _, deferDep := range deferComponentDeps {
+			localName := deferDep.LocalName
+			if localName == "" {
+				localName = deferDep.SymbolName
+			}
+			if deferDep.SymbolName == depName || localName == depName {
+				isDeferred = true
+				break
+			}
+		}
+
+		if !isDeferred {
+			eagerDeps = append(eagerDeps, dep)
+		} else {
+			if depName != "" {
+				// We need to find the module specifier for this dependency
+				// In this compiler, we just assume the dependency is in the deferComponentDeps
+				// and we use its ImportPath.
+				var importPath string
+				for _, deferDep := range deferComponentDeps {
+					localName := deferDep.LocalName
+					if localName == "" {
+						localName = deferDep.SymbolName
+					}
+					if (deferDep.SymbolName == depName || localName == depName) && deferDep.ImportPath != "" {
+						importPath = deferDep.ImportPath
+						break
+					}
+				}
+				if importPath != "" && importMgr != nil {
+					sourceFile := ast.GetSourceFileOfNode(node.AsNode())
+					if sourceFile != nil {
+						importMgr.RemoveImport(sourceFile.AsNode(), depName, importPath)
+					}
+				}
+			}
+		}
+	}
+
+	hasDirectiveDeps := len(deferComponentDeps) > 0
+	if !hasDirectiveDeps {
+		for _, dep := range resolution.Dependencies {
+			if dep.Kind == render3.R3TemplateDependencyKind_Directive {
+				hasDirectiveDeps = true
+				break
+			}
+		}
+	}
+
 	meta := render3.R3ComponentMetadata[render3.R3TemplateDependency]{
 		R3DirectiveMetadata: render3.R3DirectiveMetadata{
 			Name: className,
@@ -577,37 +892,42 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 		Template: render3.Template{
 			Children: parsedTemplate.Nodes,
 		},
-		Declarations: resolution.Dependencies,
-		Styles:       analysis.Styles,
-		HasDirectiveDependencies: len(resolution.Dependencies) > 0,
+		Declarations:             eagerDeps,
+		Styles:                   analysis.Styles,
+		Animations:               analysis.Animations,
+		HasDirectiveDependencies: hasDirectiveDeps,
+		Defer: render3.R3ComponentDeferMetadata{
+			Mode:   render3.DeferBlockDepsEmitMode_PerBlock,
+			Blocks: deferBlocks,
+		},
 	}
-		var compiled render3.R3CompiledExpression
-		if h.isPartial {
-			// Convert Dependencies to R3TemplateDependencyMetadata
-			var metaDeps []render3.R3TemplateDependencyMetadata
-			for _, dep := range resolution.Dependencies {
-				metaDeps = append(metaDeps, render3.R3DirectiveDependencyMetadata{
-					Selector: "unknown",
-					R3TemplateDependency: dep,
-					IsComponent: false,
-				})
-			}
-			metaPartial := render3.R3ComponentMetadata[render3.R3TemplateDependencyMetadata]{
-				R3DirectiveMetadata: meta.R3DirectiveMetadata,
-				Template: meta.Template,
-				Declarations: metaDeps,
-				Styles: meta.Styles,
-			}
-			compiled = partial.CompileDeclareComponentFromMetadata(metaPartial, parsedTemplate, partial.DeclareComponentTemplateInfo{
-				Content: analysis.Template,
-				IsInline: analysis.TemplateUrl == "",
+	var compiled render3.R3CompiledExpression
+	if h.isPartial {
+		// Convert Dependencies to R3TemplateDependencyMetadata
+		var metaDeps []render3.R3TemplateDependencyMetadata
+		for _, dep := range resolution.Dependencies {
+			metaDeps = append(metaDeps, render3.R3DirectiveDependencyMetadata{
+				Selector:             "unknown",
+				R3TemplateDependency: dep,
+				IsComponent:          false,
 			})
-		} else {
-			compiled = render3.CompileComponentFromMetadata(meta, pool, nil)
 		}
+		metaPartial := render3.R3ComponentMetadata[render3.R3TemplateDependencyMetadata]{
+			R3DirectiveMetadata: meta.R3DirectiveMetadata,
+			Template:            meta.Template,
+			Declarations:        metaDeps,
+			Styles:              meta.Styles,
+		}
+		compiled = partial.CompileDeclareComponentFromMetadata(metaPartial, parsedTemplate, partial.DeclareComponentTemplateInfo{
+			Content:  analysis.Template,
+			IsInline: analysis.TemplateUrl == "",
+		})
+	} else {
+		compiled = render3.CompileComponentFromMetadata(meta, pool, nil)
+	}
 
-		visitor := translator.NewExpressionTranslatorVisitor(factory, importMgr, ast.GetSourceFileOfNode(node.AsNode()).AsNode(), translator.TranslatorOptions{})
-	
+	visitor := translator.NewExpressionTranslatorVisitor(factory, importMgr, ast.GetSourceFileOfNode(node.AsNode()).AsNode(), translator.TranslatorOptions{})
+
 	var initializerNode *ast.Node
 	if compiled.Expression != nil {
 		initializerNode = compiled.Expression.VisitExpression(visitor, translator.Context{IsStatementMode: false}).(*ast.Node)
@@ -624,7 +944,7 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 		Deps:   factoryDeps,
 	}
 	facExpr := render3.CompileFactoryFunction(facMeta)
-	
+
 	var facInitializerNode *ast.Node
 	if facExpr.Expression != nil {
 		facInitializerNode = facExpr.Expression.VisitExpression(visitor, translator.Context{IsStatementMode: false}).(*ast.Node)
@@ -639,7 +959,7 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 			decArgs = append(decArgs, output.NewWrappedNodeExpr(callExpr.Arguments.Nodes[0], nil, nil, nil))
 		}
 	}
-	
+
 	decMapEntries := []output.LiteralMapEntry{
 		output.NewLiteralMapPropertyAssignment("type", output.NewReadVarExpr("Component", nil, nil, nil), false),
 	}
@@ -679,14 +999,14 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 		propDecExpr = output.NewLiteralMapExpr(propDecorators, nil, nil, nil)
 	}
 
-	classMetaExpr := render3.CompileClassMetadata(render3.R3ClassMetadata{
+	classMetaExpr := render3.CompileComponentClassMetadata(render3.R3ClassMetadata{
 		Type: output.NewReadVarExpr(className, nil, nil, nil),
 		Decorators: output.NewLiteralArrayExpr([]output.Expression{
 			output.NewLiteralMapExpr(decMapEntries, nil, nil, nil),
 		}, nil, nil, nil),
 		PropDecorators: propDecExpr,
-	})
-	
+	}, deferComponentDeps)
+
 	if classMetaExpr != nil {
 		stmt := classMetaExpr.ToStmt(nil)
 		astStmt := stmt.VisitStatement(visitor, translator.Context{IsStatementMode: true})
@@ -699,14 +1019,14 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 
 	// Class Debug Info
 	var classDebugInfoNode *ast.Node
-	
+
 	// get file path and line number
 	filePath := ""
 	lineNum := 0
 	if node.AsNode().Parent != nil && node.AsNode().Parent.Kind == ast.KindSourceFile {
 		sf := node.AsNode().Parent.AsSourceFile()
 		rawPath := sf.FileName()
-		
+
 		// Attempt to make path relative
 		if rel, err := filepath.Rel(".", rawPath); err == nil && !strings.HasPrefix(rel, "..") {
 			filePath = rel
@@ -718,7 +1038,7 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 				filePath = rawPath
 			}
 		}
-		
+
 		// Compute line number (0-based internally, we output what ngc does)
 		// Usually ngc outputs the line where the class is declared, wait. If we just count \n up to node.Pos()
 		var targetPos int
@@ -730,18 +1050,18 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 		if targetPos > 0 {
 			text := sf.Text()
 			if targetPos <= len(text) {
-				lineNum = strings.Count(text[:targetPos], "\n")
+				lineNum = strings.Count(text[:targetPos], "\n") + 1
 			}
 		}
 	}
-	
+
 	classDebugExpr := render3.CompileClassDebugInfo(render3.R3ClassDebugInfo{
-		Type: output.NewReadVarExpr(className, nil, nil, nil),
-		ClassName: output.NewLiteralExpr(className, nil, nil, nil),
-		FilePath: output.NewLiteralExpr(filePath, nil, nil, nil),
+		Type:       output.NewReadVarExpr(className, nil, nil, nil),
+		ClassName:  output.NewLiteralExpr(className, nil, nil, nil),
+		FilePath:   output.NewLiteralExpr(filePath, nil, nil, nil),
 		LineNumber: output.NewLiteralExpr(lineNum, nil, nil, nil),
 	})
-	
+
 	if classDebugExpr != nil {
 		stmt := classDebugExpr.ToStmt(nil)
 		astStmt := stmt.VisitStatement(visitor, translator.Context{IsStatementMode: true})
@@ -755,44 +1075,44 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 	// Strip Input and Output decorators from class members to avoid TS compiler panic
 	if node.Members != nil {
 		for _, member := range node.Members.Nodes {
-				if member.Kind == ast.KindPropertyDeclaration || member.Kind == ast.KindMethodDeclaration {
-					var modifiers *ast.ModifierList
-					if member.Kind == ast.KindPropertyDeclaration {
-						modifiers = member.AsPropertyDeclaration().Modifiers()
-					} else {
-						modifiers = member.AsMethodDeclaration().Modifiers()
-					}
-					if modifiers != nil {
-						var cleanMods []*ast.Node
-						for _, mod := range modifiers.Nodes {
-							keep := true
-							if mod.Kind == ast.KindDecorator {
-								decExpr := mod.AsDecorator().Expression
-								if decExpr.Kind == ast.KindCallExpression {
-									callExpr := decExpr.AsCallExpression()
-									if callExpr.Expression.Kind == ast.KindIdentifier {
-										id := callExpr.Expression.AsIdentifier()
-										if id.Text == "Input" || id.Text == "Output" || id.Text == "HostBinding" || id.Text == "HostListener" || id.Text == "ViewChild" || id.Text == "ContentChild" {
-											keep = false
-										}
+			if member.Kind == ast.KindPropertyDeclaration || member.Kind == ast.KindMethodDeclaration {
+				var modifiers *ast.ModifierList
+				if member.Kind == ast.KindPropertyDeclaration {
+					modifiers = member.AsPropertyDeclaration().Modifiers()
+				} else {
+					modifiers = member.AsMethodDeclaration().Modifiers()
+				}
+				if modifiers != nil {
+					var cleanMods []*ast.Node
+					for _, mod := range modifiers.Nodes {
+						keep := true
+						if mod.Kind == ast.KindDecorator {
+							decExpr := mod.AsDecorator().Expression
+							if decExpr.Kind == ast.KindCallExpression {
+								callExpr := decExpr.AsCallExpression()
+								if callExpr.Expression.Kind == ast.KindIdentifier {
+									id := callExpr.Expression.AsIdentifier()
+									if id.Text == "Input" || id.Text == "Output" || id.Text == "HostBinding" || id.Text == "HostListener" || id.Text == "ViewChild" || id.Text == "ContentChild" {
+										keep = false
 									}
 								}
 							}
-							if keep {
-								cleanMods = append(cleanMods, mod)
-							}
 						}
-						if len(cleanMods) == 0 {
-							if member.Kind == ast.KindPropertyDeclaration {
-								member.AsPropertyDeclaration().AsMutable().SetModifiers(nil)
-							} else {
-								member.AsMethodDeclaration().AsMutable().SetModifiers(nil)
-							}
-						} else {
-							modifiers.Nodes = cleanMods
+						if keep {
+							cleanMods = append(cleanMods, mod)
 						}
 					}
+					if len(cleanMods) == 0 {
+						if member.Kind == ast.KindPropertyDeclaration {
+							member.AsPropertyDeclaration().AsMutable().SetModifiers(nil)
+						} else {
+							member.AsMethodDeclaration().AsMutable().SetModifiers(nil)
+						}
+					} else {
+						modifiers.Nodes = cleanMods
+					}
 				}
+			}
 		}
 	}
 
@@ -804,23 +1124,26 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 		extraStatements = append(extraStatements, classDebugInfoNode)
 	}
 
-		return []transform.CompileResult{
-			{
-				PropertyName: "ɵfac",
-				Initializer:  facInitializerNode,
+	return []transform.CompileResult{
+		{
+			PropertyName: "ɵfac",
+			Initializer:  facInitializerNode,
 		},
 		{
 			PropertyName: "ɵcmp",
 			Initializer:  initializerNode,
-				Statements:   extraStatements,
-			},
-		}, diagnostics
-	}
+			Statements:   extraStatements,
+		},
+	}, diagnostics
+}
 
 func extractDependencies(refHost reflection.ReflectionHost, classDecl *ast.Node) interface{} {
 	ctorParams := refHost.GetConstructorParameters(classDecl)
 	if ctorParams == nil {
-		return nil
+		if refHost.HasBaseClass(classDecl) {
+			return nil
+		}
+		return []render3.R3DependencyMetadata{}
 	}
 
 	deps := make([]render3.R3DependencyMetadata, len(ctorParams))

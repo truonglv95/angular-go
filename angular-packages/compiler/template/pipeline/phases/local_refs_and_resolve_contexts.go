@@ -24,8 +24,7 @@ func LiftLocalRefs(job *compilation.ComponentCompilationJob) {
 					}
 					lr.AddNumSlotsUsed(len(refs))
 					if len(refs) > 0 {
-						localRefsExpr := serializeLocalRefs(refs)
-						constIdx := job.AddConst(localRefsExpr, nil)
+						constIdx := job.AddConst(serializeLocalRefs(refs), nil)
 						lr.SetLocalRefs(constIdx)
 					} else {
 						lr.SetLocalRefs(nil)

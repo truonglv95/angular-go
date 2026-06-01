@@ -351,6 +351,10 @@ func (h *NgModuleDecoratorHandler) CompileFull(node *ast.ClassDeclaration, analy
 func extractDependenciesNg(refHost reflection.ReflectionHost, classDecl *ast.Node) interface{} {
 	ctorParams := refHost.GetConstructorParameters(classDecl)
 	if ctorParams == nil {
+		if refHost.HasBaseClass(classDecl) {
+			return nil
+		}
+		return []render3.R3DependencyMetadata{}
 		return nil
 	}
 

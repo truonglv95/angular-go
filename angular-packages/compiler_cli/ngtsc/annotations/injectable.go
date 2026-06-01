@@ -250,6 +250,10 @@ func (h *InjectableDecoratorHandler) CompileFull(node *ast.ClassDeclaration, ana
 func extractDependenciesInj(refHost reflection.ReflectionHost, classDecl *ast.Node) interface{} {
 	ctorParams := refHost.GetConstructorParameters(classDecl)
 	if ctorParams == nil {
+		if refHost.HasBaseClass(classDecl) {
+			return nil
+		}
+		return []render3.R3DependencyMetadata{}
 		return nil
 	}
 

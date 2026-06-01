@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/core"
+	"github.com/microsoft/typescript-go/internal/ast"
 	"github.com/microsoft/typescript-go/internal/compiler"
 	"github.com/microsoft/typescript-go/internal/tsoptions"
 )
@@ -43,6 +44,13 @@ func (p *NgtscProgram) LoadNgStructureAsync(ctx context.Context) error {
 	p.compiler.AnalyzeSync()
 	p.compiler.Resolve()
 	return nil
+}
+
+func (p *NgtscProgram) GetNgDiagnostics() []*ast.Diagnostic {
+	var diags []*ast.Diagnostic
+	diags = append(diags, p.compiler.AnalyzeSync()...)
+	diags = append(diags, p.compiler.Resolve()...)
+	return diags
 }
 
 func (p *NgtscProgram) Emit(ctx context.Context, opts compiler.EmitOptions) *compiler.EmitResult {

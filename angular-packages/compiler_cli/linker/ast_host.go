@@ -108,6 +108,11 @@ func (h *TypeScriptAstHost) IsArrayLiteral(node *ast.Node) bool {
 }
 
 func (h *TypeScriptAstHost) ParseArrayLiteral(node *ast.Node) ([]*ast.Node, error) {
+	if ast.IsIdentifier(node) {
+		if resolved := h.resolveIdentifierArrayLiteral(node); resolved != nil {
+			node = resolved
+		}
+	}
 	if !h.IsArrayLiteral(node) {
 		return nil, linkerError(node, "Expected array literal.")
 	}
@@ -115,6 +120,39 @@ func (h *TypeScriptAstHost) ParseArrayLiteral(node *ast.Node) ([]*ast.Node, erro
 		return nil, nil
 	}
 	return node.AsArrayLiteralExpression().Elements.Nodes, nil
+}
+
+func (h *TypeScriptAstHost) resolveIdentifierArrayLiteral(node *ast.Node) *ast.Node {
+	if node == nil || !ast.IsIdentifier(node) {
+		return nil
+	}
+	sourceFile := ast.GetSourceFileOfNode(node)
+	if sourceFile == nil || sourceFile.Statements == nil {
+		return nil
+	}
+	name := node.Text()
+	for _, statement := range sourceFile.Statements.Nodes {
+		if !ast.IsVariableStatement(statement) {
+			continue
+		}
+		declList := statement.AsVariableStatement().DeclarationList
+		if declList == nil || declList.AsVariableDeclarationList().Declarations == nil {
+			continue
+		}
+		for _, declNode := range declList.AsVariableDeclarationList().Declarations.Nodes {
+			if !ast.IsVariableDeclaration(declNode) {
+				continue
+			}
+			decl := declNode.AsVariableDeclaration()
+			if decl.Name() == nil || !ast.IsIdentifier(decl.Name()) || decl.Name().Text() != name {
+				continue
+			}
+			if decl.Initializer != nil && ast.IsArrayLiteralExpression(decl.Initializer) {
+				return decl.Initializer
+			}
+		}
+	}
+	return nil
 }
 
 func (h *TypeScriptAstHost) IsObjectLiteral(node *ast.Node) bool {

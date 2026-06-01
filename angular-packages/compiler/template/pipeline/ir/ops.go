@@ -13,33 +13,17 @@ type XrefId int
 // ConstIndex is a branded integer type for an index into the component's consts array.
 type ConstIndex int
 
-// Op is the base interface for all IR operations in a doubly-linked list.
 type Op interface {
 	// Kind returns the OpKind discriminant.
 	Kind() OpKind
 	// GetKind returns the OpKind discriminant (alias for Kind).
 	GetKind() OpKind
-	// Next returns the next Op in the linked list, or nil.
-	Next() Op
-	// Prev returns the previous Op in the linked list, or nil.
-	Prev() Op
-	// SetNext sets the next pointer.
-	SetNext(op Op)
-	// SetPrev sets the previous pointer.
-	SetPrev(op Op)
 }
 
 // OpBase is the base struct embedded into all Op implementations.
-// It provides the linked-list pointers.
 type OpBase struct {
-	next Op
-	prev Op
 }
 
-func (o *OpBase) Next() Op        { return o.next }
-func (o *OpBase) Prev() Op        { return o.prev }
-func (o *OpBase) SetNext(op Op)   { o.next = op }
-func (o *OpBase) SetPrev(op Op)   { o.prev = op }
 func (o *OpBase) GetKind() OpKind { return 0 }
 
 // CreateAdvanceOp creates an AdvanceOp.
@@ -248,9 +232,6 @@ func TransformExpressionsInOp(op Op, transform func(expr output.Expression, flag
 		}
 		if o.ResolverFn != nil {
 			o.ResolverFn = TransformExpressionsInExpression(o.ResolverFn, transform, flags)
-		}
-		if o.OwnResolverFn != nil {
-			o.OwnResolverFn = TransformExpressionsInExpression(o.OwnResolverFn, transform, flags)
 		}
 	case *DeferWhenOp:
 		if o.Expr != nil {

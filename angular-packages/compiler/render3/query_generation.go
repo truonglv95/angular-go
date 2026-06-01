@@ -1,7 +1,6 @@
 package render3
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/microsoft/typescript-go/angular-packages/compiler/core"
@@ -10,15 +9,16 @@ import (
 
 const CONTEXT_NAME = "ctx"
 const RENDER_FLAGS = "rf"
-const TEMPORARY_NAME = "tmp"
+const TEMPORARY_NAME = "_t"
 
 func TemporaryAllocator(pushStatement func(output.Statement), name string) func() *output.ReadVarExpr {
-	count := 0
+	var temp *output.ReadVarExpr
 	return func() *output.ReadVarExpr {
-		varName := fmt.Sprintf("%s_%d", name, count)
-		count++
-		pushStatement(output.NewDeclareVarStmt(varName, LiteralExpr(nil), nil, 0, nil, nil))
-		return output.NewReadVarExpr(varName, nil, nil, nil)
+		if temp == nil {
+			pushStatement(output.NewDeclareVarStmt(name, nil, output.DYNAMIC_TYPE, 0, nil, nil))
+			temp = output.NewReadVarExpr(name, nil, nil, nil)
+		}
+		return temp
 	}
 }
 
@@ -49,7 +49,7 @@ func toQueryFlags(query R3QueryMetadata) int {
 	return int(flags)
 }
 
-func GetQueryPredicate(query R3QueryMetadata, constantPool any) output.Expression {
+func GetQueryPredicate(query R3QueryMetadata, constantPool ConstantPool) output.Expression {
 	if predicateArr, ok := query.Predicate.([]string); ok {
 		var predicate []output.Expression
 		for _, selector := range predicateArr {
@@ -57,6 +57,9 @@ func GetQueryPredicate(query R3QueryMetadata, constantPool any) output.Expressio
 			for _, token := range tokens {
 				predicate = append(predicate, LiteralExpr(strings.TrimSpace(token)))
 			}
+		}
+		if constantPool != nil {
+			return constantPool.GetConstLiteral(LiteralArr(predicate), true)
 		}
 		return LiteralArr(predicate)
 	} else if forwardRef, ok := query.Predicate.(MaybeForwardRefExpression); ok {
@@ -70,7 +73,7 @@ func GetQueryPredicate(query R3QueryMetadata, constantPool any) output.Expressio
 	return nil
 }
 
-func getQueryCreateParameters(query R3QueryMetadata, constantPool any, prependParams []output.Expression) []output.Expression {
+func getQueryCreateParameters(query R3QueryMetadata, constantPool ConstantPool, prependParams []output.Expression) []output.Expression {
 	parameters := []output.Expression{}
 	if prependParams != nil {
 		parameters = append(parameters, prependParams...)
@@ -115,7 +118,7 @@ func collapseAdvanceStatements(statements []output.Statement) []output.Statement
 	return result
 }
 
-func CreateViewQueriesFunction(viewQueries []R3QueryMetadata, constantPool any, name string) output.Expression {
+func CreateViewQueriesFunction(viewQueries []R3QueryMetadata, constantPool ConstantPool, name string) output.Expression {
 	createStatements := []output.Statement{}
 	updateStatements := []output.Statement{}
 	tempAllocator := TemporaryAllocator(func(st output.Statement) {
@@ -172,7 +175,7 @@ func CreateViewQueriesFunction(viewQueries []R3QueryMetadata, constantPool any, 
 	)
 }
 
-func CreateContentQueriesFunction(queries []R3QueryMetadata, constantPool any, name string) output.Expression {
+func CreateContentQueriesFunction(queries []R3QueryMetadata, constantPool ConstantPool, name string) output.Expression {
 	createStatements := []output.Statement{}
 	updateStatements := []output.Statement{}
 	tempAllocator := TemporaryAllocator(func(st output.Statement) {

@@ -1,7 +1,6 @@
 package phases
 
 import (
-	"fmt"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/output"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline/compilation"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline/ir"
@@ -48,7 +47,6 @@ func AllocateSlots(job *compilation.ComponentCompilationJob) {
 			ir.TransformExpressionsInOp(op, func(expr output.Expression, flags ir.VisitorContextFlag) output.Expression {
 				if trait, ok := expr.(ir.DependsOnSlotContextTrait); ok {
 					if slot, found := slotMap[trait.Target()]; found {
-						fmt.Printf("slot_allocation found target: %v, slot: %v, expr type: %T\n", trait.Target(), slot, expr)
 						// Assuming the trait allows setting the target slot, but actually we need to switch on the type
 						switch e := expr.(type) {
 						case *ir.PipeBindingExpr:

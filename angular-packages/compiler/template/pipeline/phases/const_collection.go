@@ -184,6 +184,9 @@ func buildAttrArrayExpr(ea *elementAttrs) *output.LiteralArrayExpr {
 			if a.trustedValueFn != nil {
 				entries = append(entries, a.trustedValueFn)
 			} else if a.value != nil {
+				if lit, ok := a.value.(*output.LiteralExpr); ok && lit.Value == "" {
+					continue
+				}
 				entries = append(entries, a.value)
 			}
 		}

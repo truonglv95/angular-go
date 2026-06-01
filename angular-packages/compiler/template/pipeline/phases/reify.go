@@ -113,6 +113,13 @@ func reifyIrExpression(unit compilation.CompilationUnit, expr output.Expression)
 	case ir.ExpressionKindLexicalRead:
 		// LexicalRead should have been replaced in earlier phases.
 		panic("AssertionError: LexicalReadExpr should have been resolved before reify")
+	case ir.ExpressionKindArrowFunction:
+		arrowExpr := irExpr.(*ir.ArrowFunctionExpr)
+		var params []*output.FnParam
+		for i := range arrowExpr.Parameters {
+			params = append(params, &arrowExpr.Parameters[i])
+		}
+		return output.NewArrowFunctionExpr(params, arrowExpr.Body, nil, nil, nil)
 	case ir.ExpressionKindSlotLiteralExpr:
 		slotExpr := irExpr.(*ir.SlotLiteralExpr)
 		slotVal := -1
@@ -139,7 +146,7 @@ func reifyIrExpression(unit compilation.CompilationUnit, expr output.Expression)
 		fn := output.NewReadVarExpr("ɵɵreference", nil, nil, nil)
 		slot := 0
 		if ref.TargetSlot != nil && ref.TargetSlot.Slot != nil {
-			slot = *ref.TargetSlot.Slot
+			slot = *ref.TargetSlot.Slot + 1 + ref.Offset
 		}
 		args := []output.Expression{output.NewLiteralExpr(slot, nil, nil, nil)}
 		return output.NewInvokeFunctionExpr(fn, args, nil, nil, false, nil, false)
@@ -233,7 +240,11 @@ func reifyIrExpression(unit compilation.CompilationUnit, expr output.Expression)
 		if pb.TargetSlot != nil && pb.TargetSlot.Slot != nil {
 			slotVal = *pb.TargetSlot.Slot
 		}
-		args := append([]output.Expression{output.NewLiteralExpr(slotVal, nil, nil, nil)}, pb.Args...)
+		args := []output.Expression{
+			output.NewLiteralExpr(slotVal, nil, nil, nil),
+			output.NewLiteralExpr(pb.GetVarOffset(), nil, nil, nil),
+		}
+		args = append(args, pb.Args...)
 		return output.NewInvokeFunctionExpr(fn, args, nil, nil, false, nil, false)
 	case ir.ExpressionKindTwoWayBindingSet:
 		tb := irExpr.(*ir.TwoWayBindingSetExpr)
@@ -255,6 +266,38 @@ func reifyIrExpression(unit compilation.CompilationUnit, expr output.Expression)
 
 // reifyCreateOp converts a create-phase op to statement(s).
 func reifyCreateOp(unit compilation.CompilationUnit, op ir.Op) {
+	getSlot := func(slot any) output.Expression {
+		if slot == nil {
+			return output.NULL_EXPR
+		}
+		if i, ok := slot.(int); ok {
+			return output.NewLiteralExpr(i, nil, nil, nil)
+		}
+		if sh, ok := slot.(*ir.SlotHandle); ok && sh != nil && sh.Slot != nil {
+			return output.NewLiteralExpr(*sh.Slot, nil, nil, nil)
+		}
+		return output.NULL_EXPR
+	}
+
+	isNilExpression := func(e output.Expression) bool {
+		// e is typed nil if we can't type assert it, or if reflection says it's nil.
+		// A simpler check: in Go, comparing an interface to nil doesn't work for typed nils.
+		// However, we can use a type switch or reflection.
+		// For our AST, if it is exactly (*output.ReadVarExpr)(nil), etc.
+		if e == nil {
+			return true
+		}
+		switch val := e.(type) {
+		case *output.ReadVarExpr:
+			return val == nil
+		case *output.LiteralExpr:
+			return val == nil
+		case *output.InvokeFunctionExpr:
+			return val == nil
+		}
+		return false
+	}
+
 	// Each create op gets converted to one or more StatementOps.
 	// The actual instruction calls depend on the op kind.
 	// We delegate to a simple switch here; the full implementation would call
@@ -527,7 +570,11 @@ func reifyCreateOp(unit compilation.CompilationUnit, op ir.Op) {
 	case ir.OpKindTemplate:
 		tmpl := op.(*ir.TemplateOp)
 		var fn output.Expression
-		if unit.GetJob().GetMode() == compilation.TemplateCompilationMode_DomOnly {
+		isBlock := false
+		if k, ok := tmpl.TemplateKind.(ir.TemplateKind); ok && k == ir.TemplateKindBlock {
+			isBlock = true
+		}
+		if unit.GetJob().GetMode() == compilation.TemplateCompilationMode_DomOnly || isBlock {
 			fn = output.NewReadVarExpr("\u0275\u0275domTemplate", nil, nil, nil)
 		} else {
 			fn = output.NewReadVarExpr("\u0275\u0275template", nil, nil, nil)
@@ -536,11 +583,6 @@ func reifyCreateOp(unit compilation.CompilationUnit, op ir.Op) {
 		var slotVal int = -1
 		if tmpl.SlotHandle != nil && tmpl.SlotHandle.Slot != nil {
 			slotVal = *tmpl.SlotHandle.Slot
-		}
-
-		tagVal := ""
-		if tmpl.Tag != nil {
-			tagVal = *tmpl.Tag
 		}
 
 		var tmplFn output.Expression = output.NULL_EXPR
@@ -563,7 +605,13 @@ func reifyCreateOp(unit compilation.CompilationUnit, op ir.Op) {
 			tmplFn,
 			output.NewLiteralExpr(decls, nil, nil, nil),
 			output.NewLiteralExpr(vars, nil, nil, nil),
-			output.NewLiteralExpr(tagVal, nil, nil, nil),
+		}
+
+		hasAttrsOrRefs := tmpl.Attributes != nil || tmpl.LocalRefsField != nil
+		if tmpl.Tag != nil {
+			args = append(args, output.NewLiteralExpr(*tmpl.Tag, nil, nil, nil))
+		} else if hasAttrsOrRefs {
+			args = append(args, output.NULL_EXPR)
 		}
 		if tmpl.Attributes != nil || tmpl.LocalRefsField != nil {
 			if tmpl.Attributes != nil {
@@ -843,6 +891,167 @@ func reifyCreateOp(unit compilation.CompilationUnit, op ir.Op) {
 		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
 		ir.OpListInsertBefore(unit.GetCreate(), stmt, op)
 		unit.GetCreate().Remove(op)
+	case ir.OpKindControlCreate:
+		fn := output.NewReadVarExpr("\u0275\u0275controlCreate", nil, nil, nil)
+		call := output.NewInvokeFunctionExpr(fn, nil, nil, nil, false, nil, false)
+		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
+		ir.OpListInsertBefore(unit.GetCreate(), stmt, op)
+		unit.GetCreate().Remove(op)
+	case ir.OpKindDefer:
+		deferOp := op.(*ir.DeferOp)
+		fn := output.NewReadVarExpr("ɵɵdefer", nil, nil, nil)
+
+		slot := getSlot(deferOp.Handle())
+		mainSlot := getSlot(deferOp.MainSlot)
+		var depsFn output.Expression
+		if deferOp.ResolverFn != nil && !isNilExpression(deferOp.ResolverFn) {
+			depsFn = deferOp.ResolverFn
+		} else {
+			depsFn = output.NULL_EXPR
+		}
+
+		var config output.Expression = output.NULL_EXPR
+		if deferOp.PlaceholderConfig != nil && !isNilExpression(deferOp.PlaceholderConfig) {
+			config = deferOp.PlaceholderConfig
+		}
+
+		placeholderSlot := getSlot(deferOp.PlaceholderSlot)
+		errorSlot := getSlot(deferOp.ErrorSlot)
+		loadingSlot := getSlot(deferOp.LoadingSlot)
+		loadingConfig := deferOp.LoadingConfig
+		if loadingConfig == nil || isNilExpression(loadingConfig) {
+			loadingConfig = output.NULL_EXPR
+		}
+
+		args := []output.Expression{
+			slot,
+			mainSlot,
+			depsFn,
+			loadingSlot,
+			placeholderSlot,
+			errorSlot,
+			loadingConfig,
+			config, // placeholderConfig
+		}
+
+		// Remove trailing nulls. But actually, if we have configs, we need to pass deferEnableTimerScheduling.
+		for len(args) > 2 && args[len(args)-1] == output.NULL_EXPR {
+			args = args[:len(args)-1]
+		}
+		
+		// ngc appends deferEnableTimerScheduling if we reach the config parameters and they require it.
+		// Actually ngtsc appends it if timer scheduling is used (e.g. `minimum`, `after`).
+		// Let's assume it's needed if we have config indices.
+		if deferOp.PlaceholderConfig != nil || deferOp.LoadingConfig != nil {
+			// Pad with nulls if needed
+			for len(args) < 8 {
+				args = append(args, output.NULL_EXPR)
+			}
+			args = append(args, output.NewReadVarExpr("\u0275\u0275deferEnableTimerScheduling", nil, nil, nil))
+		}
+
+		call := output.NewInvokeFunctionExpr(fn, args, nil, nil, false, nil, false)
+		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
+		ir.OpListInsertBefore(unit.GetCreate(), stmt, op)
+		unit.GetCreate().Remove(op)
+
+	case ir.OpKindDeferOn:
+		deferOnOp := op.(*ir.DeferOnOp)
+
+		var fnName string
+		var args []output.Expression
+
+		switch t := deferOnOp.Trigger.(type) {
+		case ir.DeferIdleTrigger, *ir.DeferIdleTrigger:
+			fnName = "OnIdle"
+		case ir.DeferImmediateTrigger, *ir.DeferImmediateTrigger:
+			fnName = "OnImmediate"
+		case ir.DeferTimerTrigger:
+			fnName = "OnTimer"
+			args = append(args, output.NewLiteralExpr(t.Delay, nil, nil, nil))
+		case *ir.DeferTimerTrigger:
+			fnName = "OnTimer"
+			args = append(args, output.NewLiteralExpr(t.Delay, nil, nil, nil))
+		case ir.DeferHoverTrigger:
+			fnName = "OnHover"
+			args = append(args, getSlot(t.TargetSlot))
+			if t.TargetSlotViewSteps != nil {
+				args = append(args, output.NewLiteralExpr(*t.TargetSlotViewSteps, nil, nil, nil))
+			} else {
+				args = append(args, output.NULL_EXPR)
+			}
+		case *ir.DeferHoverTrigger:
+			fnName = "OnHover"
+			args = append(args, getSlot(t.TargetSlot))
+			if t.TargetSlotViewSteps != nil {
+				args = append(args, output.NewLiteralExpr(*t.TargetSlotViewSteps, nil, nil, nil))
+			} else {
+				args = append(args, output.NULL_EXPR)
+			}
+		case ir.DeferInteractionTrigger:
+			fnName = "OnInteraction"
+			args = append(args, getSlot(t.TargetSlot))
+			if t.TargetSlotViewSteps != nil {
+				args = append(args, output.NewLiteralExpr(*t.TargetSlotViewSteps, nil, nil, nil))
+			} else {
+				args = append(args, output.NULL_EXPR)
+			}
+		case *ir.DeferInteractionTrigger:
+			fnName = "OnInteraction"
+			args = append(args, getSlot(t.TargetSlot))
+			if t.TargetSlotViewSteps != nil {
+				args = append(args, output.NewLiteralExpr(*t.TargetSlotViewSteps, nil, nil, nil))
+			} else {
+				args = append(args, output.NULL_EXPR)
+			}
+		case ir.DeferViewportTrigger:
+			fnName = "OnViewport"
+			args = append(args, getSlot(t.TargetSlot))
+			if t.TargetSlotViewSteps != nil {
+				args = append(args, output.NewLiteralExpr(*t.TargetSlotViewSteps, nil, nil, nil))
+			} else {
+				args = append(args, output.NULL_EXPR)
+			}
+		case *ir.DeferViewportTrigger:
+			fnName = "OnViewport"
+			args = append(args, getSlot(t.TargetSlot))
+			if t.TargetSlotViewSteps != nil {
+				args = append(args, output.NewLiteralExpr(*t.TargetSlotViewSteps, nil, nil, nil))
+			} else {
+				args = append(args, output.NULL_EXPR)
+			}
+		default:
+			panic(fmt.Sprintf("Unknown trigger type: %T", t))
+		}
+
+		var modifier ir.DeferOpModifierKind
+		if deferOnOp.Modifier != nil {
+			modifier = deferOnOp.Modifier.(ir.DeferOpModifierKind)
+		} else {
+			modifier = ir.DeferOpModifierKindNONE
+		}
+
+		fullFnName := ""
+		switch modifier {
+		case ir.DeferOpModifierKindNONE:
+			fullFnName = "ɵɵdefer" + fnName
+		case ir.DeferOpModifierKindPREFETCH:
+			fullFnName = "ɵɵdeferPrefetch" + fnName
+		case ir.DeferOpModifierKindHYDRATE:
+			fullFnName = "ɵɵdeferHydrate" + fnName
+		default:
+			fullFnName = "ɵɵdefer" + fnName
+		}
+
+		fn := output.NewReadVarExpr(fullFnName, nil, nil, nil)
+		for len(args) > 0 && args[len(args)-1] == output.NULL_EXPR {
+			args = args[:len(args)-1]
+		}
+		call := output.NewInvokeFunctionExpr(fn, args, nil, nil, false, nil, false)
+		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
+		ir.OpListInsertBefore(unit.GetCreate(), stmt, op)
+		unit.GetCreate().Remove(op)
+
 	default:
 		// For unhandled ops, log or remove them to prevent panics in emit, or leave them for debugging.
 		// For now, let's remove them so emit doesn't panic on unimplemented ops.
@@ -964,6 +1173,12 @@ func reifyUpdateOp(unit compilation.CompilationUnit, opList *ir.OpList, op ir.Op
 		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
 		ir.OpListInsertBefore(opList, stmt, op)
 		opList.Remove(op)
+	case ir.OpKindControl:
+		fn := output.NewReadVarExpr("\u0275\u0275control", nil, nil, nil)
+		call := output.NewInvokeFunctionExpr(fn, nil, nil, nil, false, nil, false)
+		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
+		ir.OpListInsertBefore(opList, stmt, op)
+		opList.Remove(op)
 	case ir.OpKindTwoWayProperty:
 		prop := op.(*ir.TwoWayPropertyOp)
 		fn := output.NewReadVarExpr("ɵɵtwoWayProperty", nil, nil, nil)
@@ -1077,6 +1292,33 @@ func reifyUpdateOp(unit compilation.CompilationUnit, opList *ir.OpList, op ir.Op
 			styleMap.Expression,
 		}
 		call := output.NewInvokeFunctionExpr(fn, args, nil, nil, false, nil, false)
+		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
+		ir.OpListInsertBefore(opList, stmt, op)
+		opList.Remove(op)
+	case ir.OpKindDeferWhen:
+		deferWhen := op.(*ir.DeferWhenOp)
+
+		var modifier ir.DeferOpModifierKind
+		if deferWhen.Modifier != nil {
+			modifier = deferWhen.Modifier.(ir.DeferOpModifierKind)
+		} else {
+			modifier = ir.DeferOpModifierKindNONE
+		}
+
+		fnName := ""
+		switch modifier {
+		case ir.DeferOpModifierKindNONE:
+			fnName = "ɵɵdeferWhen"
+		case ir.DeferOpModifierKindPREFETCH:
+			fnName = "ɵɵdeferPrefetchWhen"
+		case ir.DeferOpModifierKindHYDRATE:
+			fnName = "ɵɵdeferHydrateWhen"
+		default:
+			fnName = "ɵɵdeferWhen"
+		}
+
+		fn := output.NewReadVarExpr(fnName, nil, nil, nil)
+		call := output.NewInvokeFunctionExpr(fn, []output.Expression{deferWhen.Expr}, nil, nil, false, nil, false)
 		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
 		ir.OpListInsertBefore(opList, stmt, op)
 		opList.Remove(op)

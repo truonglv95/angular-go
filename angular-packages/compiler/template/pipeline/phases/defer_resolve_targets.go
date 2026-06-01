@@ -50,13 +50,11 @@ func ResolveDeferTargetNames(job *compilation.ComponentCompilationJob) {
 				continue
 			}
 			for _, ref := range localRefs.GetLocalRefs() {
-				if ref.Target == "" {
-					var slotHandle *ir.SlotHandle
-					if slot, ok3 := op.(ir.ConsumesSlotTrait); ok3 {
-						slotHandle = slot.Handle()
-					}
-					scope.targets[ref.Name] = deferTargetInfo{xref: xg.GetXref(), slot: slotHandle}
+				var slotHandle *ir.SlotHandle
+				if slot, ok3 := op.(ir.ConsumesSlotTrait); ok3 {
+					slotHandle = slot.Handle()
 				}
+				scope.targets[ref.Name] = deferTargetInfo{xref: xg.GetXref(), slot: slotHandle}
 			}
 		}
 		scopes[viewXref] = scope
@@ -119,6 +117,30 @@ func ResolveDeferTargetNames(job *compilation.ComponentCompilationJob) {
 					step++
 				} else {
 					break
+				}
+			}
+			if placeholderView != 0 {
+				placeholder, exists := job.Views[placeholderView]
+				if !exists {
+					return
+				}
+				for _, phOp := range placeholder.GetCreate().Elements() {
+					if !ir.HasConsumesSlotTrait(phOp) {
+						continue
+					}
+					if !ir.IsElementOrContainerOp(phOp) && phOp.Kind() != ir.OpKindProjection {
+						continue
+					}
+					xg, ok2 := phOp.(interface{ GetXref() ir.XrefId })
+					if !ok2 {
+						continue
+					}
+					var slotHandle *ir.SlotHandle
+					if slot, ok3 := phOp.(ir.ConsumesSlotTrait); ok3 {
+						slotHandle = slot.Handle()
+					}
+					trigger.SetTarget(xg.GetXref(), placeholderView, slotHandle, -1)
+					return
 				}
 			}
 		}

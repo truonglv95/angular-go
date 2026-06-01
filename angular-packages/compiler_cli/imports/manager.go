@@ -1,8 +1,9 @@
 package imports
 
 import (
-	"fmt"
+	"sort"
 	"strconv"
+
 	"github.com/microsoft/typescript-go/internal/ast"
 )
 
@@ -141,6 +142,9 @@ func (m *ImportManager) AddImport(request ImportRequest) *ast.Node {
 }
 
 func (m *ImportManager) RemoveImport(requestedFile *ast.Node, exportSymbolName string, moduleSpecifier string) {
+	if m.removedImports == nil {
+		m.removedImports = make(map[*ast.Node]map[ModuleName]map[string]bool)
+	}
 	moduleMap, ok := m.removedImports[requestedFile]
 	if !ok {
 		moduleMap = make(map[ModuleName]map[string]bool)
@@ -156,6 +160,17 @@ func (m *ImportManager) RemoveImport(requestedFile *ast.Node, exportSymbolName s
 	removedSymbols[exportSymbolName] = true
 }
 
+func (m *ImportManager) IsRemoved(requestedFile *ast.Node, exportSymbolName string, moduleSpecifier string) bool {
+	if m.removedImports != nil {
+		if moduleMap, ok := m.removedImports[requestedFile]; ok {
+			if removedSymbols, ok := moduleMap[ModuleName(moduleSpecifier)]; ok {
+				return removedSymbols[exportSymbolName]
+			}
+		}
+	}
+	return false
+}
+
 func (m *ImportManager) generateNewImport(request ImportRequest) *ast.Node {
 	sourceFile := request.RequestedFile
 
@@ -163,7 +178,6 @@ func (m *ImportManager) generateNewImport(request ImportRequest) *ast.Node {
 	namedImports := tracker.NamedImports
 	namespaceImports := tracker.NamespaceImports
 
-	fmt.Printf("generateNewImport: %v, force=%v\n", request.ExportModuleSpecifier, m.config.ForceGenerateNamespacesForNewImports)
 	if request.ExportSymbolName == nil || m.config.ForceGenerateNamespacesForNewImports {
 		var namespaceImportName string
 		if existingImport, ok := namespaceImports[ModuleName(request.ExportModuleSpecifier)]; ok {
@@ -246,13 +260,24 @@ func createImportReference(asTypeReference bool, ref *ast.Node, factory *ast.Nod
 }
 
 func (m *ImportManager) GetAllImports(file *ast.Node) []*ast.Node {
-	fmt.Printf("GetAllImports: file=%s\n", file.AsSourceFile().FileName)
+	// We don't need to panic here, it might just mean that it's a generated file
+	if file != nil && file.Kind == ast.KindSourceFile {
+		// fmt.Printf("DEBUG: ImportManager.generateNewImport: Could not find node %s in file %s\n", request.ExportSymbolName, file.AsSourceFile().FileName())
+	}
 	tracker, ok := m.newImports[file]
 	if !ok {
 		return nil
 	}
+	var moduleNames []string
+	for moduleName := range tracker.NamespaceImports {
+		moduleNames = append(moduleNames, string(moduleName))
+	}
+	sort.Strings(moduleNames)
+
 	var declarations []*ast.Node
-	for moduleName, namespaceImport := range tracker.NamespaceImports {
+	for _, moduleNameStr := range moduleNames {
+		moduleName := ModuleName(moduleNameStr)
+		namespaceImport := tracker.NamespaceImports[moduleName]
 		importClause := m.factory.NewImportClause(ast.KindUnknown, nil, namespaceImport)
 		importClause.Flags |= ast.NodeFlagsSynthesized
 		namespaceImport.AsNode().Flags |= ast.NodeFlagsSynthesized
@@ -260,7 +285,6 @@ func (m *ImportManager) GetAllImports(file *ast.Node) []*ast.Node {
 		importDecl := m.factory.NewImportDeclaration(nil, importClause, moduleSpecifier, nil)
 		importDecl.Flags |= ast.NodeFlagsSynthesized
 		declarations = append(declarations, importDecl.AsNode())
-		fmt.Printf("GetAllImports -> added module: %s\n", string(moduleName))
 	}
 	// TODO: Handle NamedImports and SideEffectImports if needed
 	return declarations

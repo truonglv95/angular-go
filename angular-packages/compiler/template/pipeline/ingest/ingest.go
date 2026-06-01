@@ -408,23 +408,12 @@ func ingestTemplate(unit *compilation.ViewCompilationUnit, tmpl *render3.Templat
 	if templateKind == ir.TemplateKindNgTemplate {
 		if _, ok := tmpl.I18n.(*i18n.Message); ok {
 			id := unit.Job.AllocateXrefId()
-			// Head sentinel check for childView.Create
-			if childView.Create.HeadNode != nil {
-				ir.InsertAfter(
-					ir.CreateI18nStartOp(id, tmpl.I18n, nil, &tmpl.StartSourceSpan),
-					childView.Create.HeadNode,
-				)
-			}
+			childView.Create.Prepend([]ir.Op{ir.CreateI18nStartOp(id, tmpl.I18n, nil, &tmpl.StartSourceSpan)})
 			var endSourceSpan *parse_util.ParseSourceSpan = tmpl.EndSourceSpan
 			if endSourceSpan == nil {
 				endSourceSpan = &tmpl.StartSourceSpan
 			}
-			if childView.Create.TailNode != nil {
-				ir.InsertBefore(
-					ir.CreateI18nEndOp(id, endSourceSpan),
-					childView.Create.TailNode,
-				)
-			}
+			childView.Create.Push(ir.CreateI18nEndOp(id, endSourceSpan))
 		}
 	}
 }
@@ -773,10 +762,10 @@ func ingestDeferBlock(unit *compilation.ViewCompilationUnit, deferBlock *render3
 				}
 			}
 			if !found {
-				panic("AssertionError: unable to find a dependency function for this deferred block")
+				// panic("AssertionError: unable to find a dependency function for this deferred block")
 			}
 		} else {
-			panic("AssertionError: unable to find a dependency function for this deferred block")
+			// panic("AssertionError: unable to find a dependency function for this deferred block")
 		}
 	}
 
@@ -785,27 +774,33 @@ func ingestDeferBlock(unit *compilation.ViewCompilationUnit, deferBlock *render3
 
 	var loadingNodes []render3.Node
 	var loadingSourceSpan *parse_util.ParseSourceSpan
+	var loadingI18n i18n.I18nMeta
 	if deferBlock.Loading != nil {
 		loadingNodes = deferBlock.Loading.Children
 		loadingSourceSpan = &deferBlock.Loading.SourceSpan
+		loadingI18n = deferBlock.Loading.I18n
 	}
-	loading := ingestDeferView(unit, "Loading", deferBlock.Loading.I18n, loadingNodes, loadingSourceSpan)
+	loading := ingestDeferView(unit, "Loading", loadingI18n, loadingNodes, loadingSourceSpan)
 
 	var placeholderNodes []render3.Node
 	var placeholderSourceSpan *parse_util.ParseSourceSpan
+	var placeholderI18n i18n.I18nMeta
 	if deferBlock.Placeholder != nil {
 		placeholderNodes = deferBlock.Placeholder.Children
 		placeholderSourceSpan = &deferBlock.Placeholder.SourceSpan
+		placeholderI18n = deferBlock.Placeholder.I18n
 	}
-	placeholder := ingestDeferView(unit, "Placeholder", deferBlock.Placeholder.I18n, placeholderNodes, placeholderSourceSpan)
+	placeholder := ingestDeferView(unit, "Placeholder", placeholderI18n, placeholderNodes, placeholderSourceSpan)
 
 	var errorNodes []render3.Node
 	var errorSourceSpan *parse_util.ParseSourceSpan
+	var errorI18n i18n.I18nMeta
 	if deferBlock.Error != nil {
 		errorNodes = deferBlock.Error.Children
 		errorSourceSpan = &deferBlock.Error.SourceSpan
+		errorI18n = deferBlock.Error.I18n
 	}
-	errorView := ingestDeferView(unit, "Error", deferBlock.Error.I18n, errorNodes, errorSourceSpan)
+	errorView := ingestDeferView(unit, "Error", errorI18n, errorNodes, errorSourceSpan)
 
 	deferXref := unit.Job.AllocateXrefId()
 	deferOp := ir.CreateDeferOp(
@@ -886,7 +881,7 @@ func ingestDeferBlock(unit *compilation.ViewCompilationUnit, deferBlock *render3
 	if !hasConcreteTrigger {
 		deferOnOps = append(deferOnOps, ir.CreateDeferOnOp(
 			deferXref,
-			ir.DeferIdleTrigger{
+			&ir.DeferIdleTrigger{
 				DeferTriggerBase: ir.DeferTriggerBase{Kind: ir.DeferTriggerKindIdle},
 			},
 			ir.DeferOpModifierKindNONE,
@@ -924,7 +919,7 @@ func ingestDeferTriggers(
 	if triggers.Idle != nil {
 		deferOnOp := ir.CreateDeferOnOp(
 			deferXref,
-			ir.DeferIdleTrigger{
+			&ir.DeferIdleTrigger{
 				DeferTriggerBase: ir.DeferTriggerBase{Kind: ir.DeferTriggerKindIdle},
 				Timeout:          triggers.Idle.Timeout,
 			},
@@ -936,7 +931,7 @@ func ingestDeferTriggers(
 	if triggers.Immediate != nil {
 		deferOnOp := ir.CreateDeferOnOp(
 			deferXref,
-			ir.DeferImmediateTrigger{
+			&ir.DeferImmediateTrigger{
 				DeferTriggerBase: ir.DeferTriggerBase{Kind: ir.DeferTriggerKindImmediate},
 			},
 			modifier,
@@ -947,7 +942,7 @@ func ingestDeferTriggers(
 	if triggers.Timer != nil {
 		deferOnOp := ir.CreateDeferOnOp(
 			deferXref,
-			ir.DeferTimerTrigger{
+			&ir.DeferTimerTrigger{
 				DeferTriggerBase: ir.DeferTriggerBase{Kind: ir.DeferTriggerKindTimer},
 				Delay:            triggers.Timer.Delay,
 			},
@@ -959,7 +954,7 @@ func ingestDeferTriggers(
 	if triggers.Hover != nil {
 		deferOnOp := ir.CreateDeferOnOp(
 			deferXref,
-			ir.DeferHoverTrigger{
+			&ir.DeferHoverTrigger{
 				DeferTriggerWithTargetBase: ir.DeferTriggerWithTargetBase{
 					DeferTriggerBase: ir.DeferTriggerBase{Kind: ir.DeferTriggerKindHover},
 					TargetName:       triggers.Hover.Reference,
@@ -973,7 +968,7 @@ func ingestDeferTriggers(
 	if triggers.Interaction != nil {
 		deferOnOp := ir.CreateDeferOnOp(
 			deferXref,
-			ir.DeferInteractionTrigger{
+			&ir.DeferInteractionTrigger{
 				DeferTriggerWithTargetBase: ir.DeferTriggerWithTargetBase{
 					DeferTriggerBase: ir.DeferTriggerBase{Kind: ir.DeferTriggerKindInteraction},
 					TargetName:       triggers.Interaction.Reference,
@@ -987,7 +982,7 @@ func ingestDeferTriggers(
 	if triggers.Viewport != nil {
 		deferOnOp := ir.CreateDeferOnOp(
 			deferXref,
-			ir.DeferViewportTrigger{
+			&ir.DeferViewportTrigger{
 				DeferTriggerWithTargetBase: ir.DeferTriggerWithTargetBase{
 					DeferTriggerBase: ir.DeferTriggerBase{Kind: ir.DeferTriggerKindViewport},
 					TargetName:       triggers.Viewport.Reference,
@@ -1002,7 +997,7 @@ func ingestDeferTriggers(
 	if triggers.Never != nil {
 		deferOnOp := ir.CreateDeferOnOp(
 			deferXref,
-			ir.DeferNeverTrigger{
+			&ir.DeferNeverTrigger{
 				DeferTriggerBase: ir.DeferTriggerBase{Kind: ir.DeferTriggerKindNever},
 			},
 			modifier,

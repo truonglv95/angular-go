@@ -23,6 +23,8 @@ type NgCompiler struct {
 	scopeRegistry *scope.LocalModuleScopeRegistry
 
 	analyzed bool
+	resolved bool
+	prepared bool
 }
 
 func NewNgCompiler(tsProgram *compiler.Program) (*NgCompiler, error) {
@@ -57,6 +59,9 @@ func NewNgCompiler(tsProgram *compiler.Program) (*NgCompiler, error) {
 }
 
 func (c *NgCompiler) AnalyzeSync() []*ast.Diagnostic {
+	if c.analyzed {
+		return nil
+	}
 	for _, sf := range c.tsProgram.SourceFiles() {
 		c.traitCompiler.AnalyzeSync(sf)
 	}
@@ -65,14 +70,22 @@ func (c *NgCompiler) AnalyzeSync() []*ast.Diagnostic {
 }
 
 func (c *NgCompiler) Resolve() []*ast.Diagnostic {
+	if c.resolved {
+		return nil
+	}
 	c.traitCompiler.Resolve()
+	c.resolved = true
 	return nil
 }
 
 func (c *NgCompiler) PrepareEmit() []*ast.Diagnostic {
+	if c.prepared {
+		return nil
+	}
 	factory := ast.NewNodeFactory(ast.NodeFactoryHooks{})
 	for _, sf := range c.tsProgram.SourceFiles() {
 		c.traitCompiler.UpdateSourceFile(sf, factory)
 	}
+	c.prepared = true
 	return nil
 }

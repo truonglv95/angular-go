@@ -10,15 +10,13 @@ import (
 func AssignI18nSlotDependencies(job compilation.CompilationJob) {
 	for _, unit := range job.GetUnits() {
 		type blockState struct {
-			blockXref       ir.XrefId
+			blockXref        ir.XrefId
 			lastSlotConsumer ir.XrefId
 		}
 
-		// The first update op.
-		var updateOp ir.Op
-		if elems := unit.GetUpdate().Elements(); len(elems) > 0 {
-			updateOp = elems[0]
-		}
+		oldUpdateOps := unit.GetUpdate().Elements()
+		var newUpdateOps []ir.Op
+		updateIdx := 0
 
 		var i18nExpressionsInProgress []*ir.I18nExpressionOp
 		var state *blockState
@@ -34,9 +32,7 @@ func AssignI18nSlotDependencies(job compilation.CompilationJob) {
 					if state != nil {
 						exprOp.Target = state.lastSlotConsumer
 					}
-					if updateOp != nil {
-						ir.InsertBefore(exprOp, updateOp)
-					}
+					newUpdateOps = append(newUpdateOps, exprOp)
 				}
 				i18nExpressionsInProgress = i18nExpressionsInProgress[:0]
 				state = nil
@@ -51,18 +47,17 @@ func AssignI18nSlotDependencies(job compilation.CompilationJob) {
 			}
 
 			for {
-				if updateOp == nil || updateOp.Kind() == ir.OpKindListEnd {
+				if updateIdx >= len(oldUpdateOps) {
 					break
 				}
-				nextOp := updateOp.Next()
+				updateOp := oldUpdateOps[updateIdx]
 
 				if state != nil {
 					if exprOp, ok := updateOp.(*ir.I18nExpressionOp); ok &&
 						exprOp.Usage == ir.I18nExpressionForI18nText &&
 						exprOp.I18nOwner == state.blockXref {
-						unit.GetUpdate().Remove(updateOp)
 						i18nExpressionsInProgress = append(i18nExpressionsInProgress, exprOp)
-						updateOp = nextOp
+						updateIdx++
 						continue
 					}
 				}
@@ -87,9 +82,16 @@ func AssignI18nSlotDependencies(job compilation.CompilationJob) {
 				if hasDifferentTarget {
 					break
 				}
-				updateOp = nextOp
+
+				newUpdateOps = append(newUpdateOps, updateOp)
+				updateIdx++
 			}
 		}
+
+		for ; updateIdx < len(oldUpdateOps); updateIdx++ {
+			newUpdateOps = append(newUpdateOps, oldUpdateOps[updateIdx])
+		}
+		unit.GetUpdate().Ops = newUpdateOps
 	}
 }
 
@@ -105,6 +107,7 @@ func ConvertI18nBindings(job compilation.CompilationJob) {
 			}
 		}
 
+		var newUpdateOps []ir.Op
 		for _, op := range unit.GetUpdate().Elements() {
 			switch op.Kind() {
 			case ir.OpKindProperty, ir.OpKindAttribute:
@@ -116,14 +119,11 @@ func ConvertI18nBindings(job compilation.CompilationJob) {
 					GetSourceSpan() interface{}
 				}
 				bop, ok := op.(bindingOp)
-				if !ok {
+				if !ok || bop.GetI18nContext() == 0 {
+					newUpdateOps = append(newUpdateOps, op)
 					continue
 				}
-				if bop.GetI18nContext() == 0 {
-					continue
-				}
-				// Interpolation embeds output.Expression, so can't directly type-assert ir.Expression to *ir.Interpolation.
-				// Use interface trick: cast expression raw to check it's actually a *ir.Interpolation.
+
 				var interp *ir.Interpolation
 				if raw := bop.GetExpression(); raw != nil {
 					if ip, ok2 := any(raw).(*ir.Interpolation); ok2 {
@@ -131,14 +131,15 @@ func ConvertI18nBindings(job compilation.CompilationJob) {
 					}
 				}
 				if interp == nil {
+					newUpdateOps = append(newUpdateOps, op)
 					continue
 				}
+
 				i18nAttr, exists := i18nAttributesByElem[bop.GetTarget()]
 				if !exists {
 					panic("AssertionError: An i18n attribute binding instruction requires the owning element to have an I18nAttributes create instruction")
 				}
 
-				var newOps []ir.Op
 				for i, expr := range interp.Expressions {
 					if len(interp.I18nPlaceholders) != len(interp.Expressions) {
 						panic("AssertionError: mismatched expressions and placeholders in i18n attribute binding")
@@ -155,13 +156,12 @@ func ConvertI18nBindings(job compilation.CompilationJob) {
 						Usage:           ir.I18nExpressionForI18nAttribute,
 						Name:            bop.GetName(),
 					}
-					newOps = append(newOps, exprOp)
+					newUpdateOps = append(newUpdateOps, exprOp)
 				}
-				for _, newOp := range newOps {
-					ir.InsertBefore(newOp, op)
-				}
-				unit.GetUpdate().Remove(op)
+			default:
+				newUpdateOps = append(newUpdateOps, op)
 			}
 		}
+		unit.GetUpdate().Ops = newUpdateOps
 	}
 }

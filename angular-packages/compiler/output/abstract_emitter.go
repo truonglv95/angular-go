@@ -194,7 +194,7 @@ func (c *EmitterVisitorContext) ToSourceMapGenerator(genFilePath string, startsA
 			source := span.GetStart().GetFile()
 			sourceLine := span.GetStart().GetLine()
 			sourceCol := span.GetStart().GetCol()
-			
+
 			content := source.GetContent()
 			url := source.GetUrl()
 			mapGen.AddSource(url, &content).
