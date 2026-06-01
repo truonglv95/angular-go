@@ -3,6 +3,7 @@ package phases
 import (
 	"fmt"
 
+	"github.com/microsoft/typescript-go/angular-packages/compiler"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/output"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline/compilation"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline/ir"
@@ -18,7 +19,7 @@ func ExtractPureFunctions(job compilation.CompilationJob) {
 					return
 				}
 				if pool, ok2 := job.GetPool().(interface {
-					GetSharedConstant(def interface{}, expr output.Expression) output.Expression
+					GetSharedConstant(def compiler.SharedConstantDefinition, expr output.Expression) output.Expression
 				}); ok2 {
 					constDef := &pureFunctionConstant{numArgs: len(pf.Args)}
 					pf.Fn = pool.GetSharedConstant(constDef, pf.Body)

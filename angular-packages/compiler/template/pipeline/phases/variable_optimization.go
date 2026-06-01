@@ -10,7 +10,7 @@ import (
 type Fence int
 
 const (
-	FenceNone            Fence = 0b000
+	FenceNone             Fence = 0b000
 	FenceViewContextRead  Fence = 0b001
 	FenceViewContextWrite Fence = 0b010
 	FenceSideEffectful    Fence = 0b100
@@ -38,7 +38,7 @@ func OptimizeVariables(job compilation.CompilationJob) {
 			switch op.Kind() {
 			case ir.OpKindListener, ir.OpKindAnimation, ir.OpKindAnimationListener, ir.OpKindTwoWayListener:
 				if lOp, ok := op.(ir.ListenerTrait); ok {
-					inlineAlwaysInlineVariables(lOp.HandlerOps())
+					inlineAlwaysInlineVariables(lOp.GetHandlerOps())
 				}
 			case ir.OpKindRepeaterCreate:
 				if r, ok := op.(*ir.RepeaterCreateOp); ok {
@@ -62,12 +62,14 @@ func OptimizeVariables(job compilation.CompilationJob) {
 			switch op.Kind() {
 			case ir.OpKindListener, ir.OpKindAnimation, ir.OpKindAnimationListener, ir.OpKindTwoWayListener:
 				if lOp, ok := op.(ir.ListenerTrait); ok {
-					optimizeVariablesInOpList(lOp.HandlerOps(), skipArrowFnOps)
-					optimizeSaveRestoreView(lOp.HandlerOps())
+					optimizeVariablesInOpList(lOp.GetHandlerOps(), skipArrowFnOps)
+					optimizeVariablesInOpList(lOp.GetHandlerOps(), skipArrowFnOps)
+					optimizeSaveRestoreView(lOp.GetHandlerOps())
 				}
 			case ir.OpKindRepeaterCreate:
 				if r, ok := op.(*ir.RepeaterCreateOp); ok {
 					if opList, ok2 := r.TrackByOps.(*ir.OpList); ok2 {
+						optimizeVariablesInOpList(opList, skipArrowFnOps)
 						optimizeVariablesInOpList(opList, skipArrowFnOps)
 					}
 				}
@@ -75,6 +77,8 @@ func OptimizeVariables(job compilation.CompilationJob) {
 		}
 
 		optimizeVariablesInOpList(unit.GetCreate(), skipArrowFnOps)
+		optimizeVariablesInOpList(unit.GetCreate(), skipArrowFnOps)
+		optimizeVariablesInOpList(unit.GetUpdate(), skipArrowFnOps)
 		optimizeVariablesInOpList(unit.GetUpdate(), skipArrowFnOps)
 	}
 }
@@ -86,20 +90,32 @@ func skipArrowFnOps(flags ir.VisitorContextFlag) bool {
 
 // inlineAlwaysInlineVariables inlines variables marked with AlwaysInline.
 func inlineAlwaysInlineVariables(ops *ir.OpList) {
-	vars := map[ir.XrefId]*ir.VariableOp{}
+	vars := map[ir.XrefId]ir.Op{}
+	varInits := map[ir.XrefId]output.Expression{}
 	for _, op := range ops.Elements() {
-		varOp, ok := op.(*ir.VariableOp)
-		if !ok {
+		var flags ir.VariableFlags
+		var init output.Expression
+		var xref ir.XrefId
+		if varOp, ok := op.(*ir.VariableOp); ok {
+			flags = varOp.Flags
+			init = varOp.Initializer
+			xref = varOp.Xref
+		} else if cvOp, ok := op.(*ir.CreateVariableOp); ok {
+			flags = cvOp.Flags
+			init = cvOp.Initializer
+			xref = cvOp.Xref
+		} else {
 			continue
 		}
-		if varOp.Flags&ir.VariableFlagsAlwaysInline != 0 {
+		if flags&ir.VariableFlagsAlwaysInline != 0 {
 			// Validate no fence-sensitive expressions.
 			ir.VisitExpressionsInOp(op, func(expr ir.Expression) {
 				if ir.IsIrExpression(expr) && fencesForIrExpr(expr) != FenceNone {
 					panic("AssertionError: A context-sensitive variable was marked AlwaysInline")
 				}
 			})
-			vars[varOp.Xref] = varOp
+			vars[xref] = op
+			varInits[xref] = init
 		}
 	}
 
@@ -114,8 +130,8 @@ func inlineAlwaysInlineVariables(ops *ir.OpList) {
 			if !ok {
 				return expr
 			}
-			if varOp, exists := vars[rv.Xref]; exists {
-				return varOp.Initializer
+			if init, exists := varInits[rv.Xref]; exists {
+				return init
 			}
 			return expr
 		}, ir.VisitorContextFlagNone)
@@ -130,22 +146,43 @@ func inlineAlwaysInlineVariables(ops *ir.OpList) {
 // optimizeVariablesInOpList performs full variable optimization on a list of ops.
 func optimizeVariablesInOpList(ops *ir.OpList, predicate func(ir.VisitorContextFlag) bool) {
 	// Collect all variable declarations.
-	varOps := map[ir.XrefId]*ir.VariableOp{}
+	varOps := map[ir.XrefId]ir.Op{}
+	varKinds := map[ir.XrefId]ir.SemanticVariableKind{}
+	varInits := map[ir.XrefId]output.Expression{}
 	varFences := map[ir.XrefId]Fence{}
 	varUsages := map[ir.XrefId]int{}
 	varRemoteUsage := map[ir.XrefId]bool{}
 
 	elements := ops.Elements()
 	for _, op := range elements {
+		var flags ir.VariableFlags
+		var init output.Expression
+		var xref ir.XrefId
+		var kind ir.SemanticVariableKind
 		if varOp, ok := op.(*ir.VariableOp); ok {
-			if varOp.Flags&ir.VariableFlagsAlwaysInline != 0 {
-				continue
-			}
-			varOps[varOp.Xref] = varOp
-			varFences[varOp.Xref] = collectFences(varOp.Initializer)
-			varUsages[varOp.Xref] = 0
+			flags = varOp.Flags
+			init = varOp.Initializer
+			xref = varOp.Xref
+			kind = varOp.Variable.Kind
+		} else if cvOp, ok := op.(*ir.CreateVariableOp); ok {
+			flags = cvOp.Flags
+			init = cvOp.Initializer
+			xref = cvOp.Xref
+			kind = cvOp.Variable.Kind
+		} else {
+			continue
 		}
+		if flags&ir.VariableFlagsAlwaysInline != 0 {
+			continue
+		}
+		varOps[xref] = op
+		varKinds[xref] = kind
+		varInits[xref] = init
+		varFences[xref] = collectFences(init)
+		varUsages[xref] = 0
 	}
+
+	inlineRestoredContextIntoIdentifierInitializers(varOps, varKinds, varInits, varFences)
 
 	// Count usages.
 	for _, op := range elements {
@@ -165,30 +202,126 @@ func optimizeVariablesInOpList(ops *ir.OpList, predicate func(ir.VisitorContextF
 	}
 
 	// Optimize each variable.
-	for _, varOp := range varOps {
-		xref := varOp.Xref
+	for xref, varOp := range varOps {
 		usages := varUsages[xref]
 		fences := varFences[xref]
+		init := varInits[xref]
+		kind := varKinds[xref]
 
 		if usages == 0 {
+			if kind == ir.SemanticVariableKindContext {
+				if nextCtx, ok := init.(*ir.NextContextExpr); ok {
+					mergeUnusedNextContext(varOp, nextCtx.Steps, ops, elements)
+				}
+			}
 			if fences&FenceSideEffectful != 0 {
 				// Keep as expression statement.
-				exprStmt := &output.ExpressionStatement{Expr: varOp.Initializer}
+				exprStmt := &output.ExpressionStatement{Expr: init}
 				stmtOp := &ir.StatementOp{Statement: exprStmt}
-				ir.InsertBefore(stmtOp, varOp)
+				ir.OpListInsertBefore(ops, stmtOp, varOp)
 			}
 			ops.Remove(varOp)
+		} else if kind == ir.SemanticVariableKindSavedView {
+			continue
 		} else if usages == 1 && !varRemoteUsage[xref] {
-			// Try inlining.
-			if tryInlineVariable(xref, varOp.Initializer, fences, ops, elements, predicate) {
+			// Try inlining. For Context kind variables, only inline into other Variable ops
+			// (matching ngtsc's allowConservativeInlining which prevents inlining Context
+			// variables into general update ops like repeater, classProp, etc.).
+			if tryInlineVariable(xref, init, kind, fences, ops, elements, predicate) {
 				ops.Remove(varOp)
 			}
 		}
 	}
 }
 
+func mergeUnusedNextContext(varOp ir.Op, steps int, ops *ir.OpList, elements []ir.Op) {
+	seenDecl := false
+	for _, op := range elements {
+		if op == varOp {
+			seenDecl = true
+			continue
+		}
+		if !seenDecl {
+			continue
+		}
+		merged := false
+		ir.TransformExpressionsInOp(op, func(expr output.Expression, flags ir.VisitorContextFlag) output.Expression {
+			if merged {
+				return expr
+			}
+			if nextCtx, ok := expr.(*ir.NextContextExpr); ok {
+				nextCtx.Steps += steps
+				merged = true
+			}
+			return expr
+		}, ir.VisitorContextFlagNone)
+		if merged {
+			return
+		}
+	}
+}
+
+func inlineRestoredContextIntoIdentifierInitializers(
+	varOps map[ir.XrefId]ir.Op,
+	varKinds map[ir.XrefId]ir.SemanticVariableKind,
+	varInits map[ir.XrefId]output.Expression,
+	varFences map[ir.XrefId]Fence,
+) {
+	restoreContextUsage := map[ir.XrefId]int{}
+	for xref := range varOps {
+		if varKinds[xref] != ir.SemanticVariableKindIdentifier {
+			continue
+		}
+		readProp, ok := varInits[xref].(*output.ReadPropExpr)
+		if !ok {
+			continue
+		}
+		readVar, ok := readProp.Receiver.(*ir.ReadVariableExpr)
+		if !ok || varKinds[readVar.Xref] != ir.SemanticVariableKindContext {
+			continue
+		}
+		if _, ok := varInits[readVar.Xref].(*ir.RestoreViewExpr); ok {
+			restoreContextUsage[readVar.Xref]++
+		}
+	}
+
+	for xref, op := range varOps {
+		if varKinds[xref] != ir.SemanticVariableKindIdentifier {
+			continue
+		}
+		readProp, ok := varInits[xref].(*output.ReadPropExpr)
+		if !ok {
+			continue
+		}
+		readVar, ok := readProp.Receiver.(*ir.ReadVariableExpr)
+		if !ok || varKinds[readVar.Xref] != ir.SemanticVariableKindContext {
+			continue
+		}
+		if _, ok := varInits[readVar.Xref].(*ir.RestoreViewExpr); !ok {
+			continue
+		}
+		if restoreContextUsage[readVar.Xref] != 1 {
+			continue
+		}
+
+		readProp.Receiver = varInits[readVar.Xref].Clone()
+		varInits[xref] = readProp
+		varFences[readVar.Xref] = FenceNone
+		switch varOp := op.(type) {
+		case *ir.VariableOp:
+			varOp.Initializer = readProp
+		case *ir.CreateVariableOp:
+			varOp.Initializer = readProp
+		}
+	}
+}
+
+
+
 // tryInlineVariable attempts to inline a variable into its single usage site.
-func tryInlineVariable(xref ir.XrefId, init output.Expression, declFences Fence, ops *ir.OpList, elements []ir.Op, predicate func(ir.VisitorContextFlag) bool) bool {
+// For Context kind variables (nextContext results), only inlining into other VariableOps
+// is allowed (conservative inlining, matching ngtsc's allowConservativeInlining).
+func tryInlineVariable(xref ir.XrefId, init output.Expression, kind ir.SemanticVariableKind, declFences Fence, ops *ir.OpList, elements []ir.Op, predicate func(ir.VisitorContextFlag) bool) bool {
 	inlined := false
 	inliningAllowed := true
 
@@ -201,6 +334,22 @@ func tryInlineVariable(xref ir.XrefId, init output.Expression, declFences Fence,
 
 		if inlined {
 			break
+		}
+
+		// Conservative inlining matches ngtsc's allowConservativeInlining behavior.
+		if kind == ir.SemanticVariableKindContext {
+			_, isVarOp := op.(*ir.VariableOp)
+			_, isCreateVarOp := op.(*ir.CreateVariableOp)
+			if !isVarOp && !isCreateVarOp {
+				// Cannot inline Context variable into a non-variable op.
+				break
+			}
+		} else if kind == ir.SemanticVariableKindIdentifier {
+			if readVar, ok := init.(*output.ReadVarExpr); ok && readVar.Name == "ctx" {
+				// Allowed
+			} else {
+				break
+			}
 		}
 
 		ir.TransformExpressionsInOp(op, func(expr output.Expression, flags ir.VisitorContextFlag) output.Expression {

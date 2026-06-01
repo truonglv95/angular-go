@@ -22,7 +22,7 @@ func CreateVariadicPipes(job compilation.CompilationJob) {
 				}
 
 				variadicPipe := &ir.PipeBindingVariadicExpr{
-					Target:     binding.Target,
+					TargetXref: binding.Target(),
 					TargetSlot: binding.TargetSlot,
 					PipeName:   binding.PipeName,
 					Args:       output.NewLiteralArrayExpr(binding.Args, nil, nil, nil),

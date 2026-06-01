@@ -77,7 +77,7 @@ func resolveContextsInScope(view compilation.CompilationUnit, ops []ir.Op) {
 			}
 		case ir.OpKindAnimation, ir.OpKindAnimationListener, ir.OpKindListener, ir.OpKindTwoWayListener:
 			if lOp, ok := op.(ir.ListenerTrait); ok {
-				resolveContextsInScope(view, lOp.HandlerOps().Elements())
+				resolveContextsInScope(view, lOp.GetHandlerOps().Elements())
 			}
 		case ir.OpKindRepeaterCreate:
 			if r, ok := op.(*ir.RepeaterCreateOp); ok && r.TrackByOps != nil {

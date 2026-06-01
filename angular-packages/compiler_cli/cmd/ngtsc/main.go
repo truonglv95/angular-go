@@ -11,7 +11,17 @@ import (
 
 func main() {
 	projectFlag := flag.String("p", ".", "Path to the project directory or tsconfig.json file")
+	linkFlag := flag.String("link", "", "Path to a JavaScript file to link (AOT compile)")
 	flag.Parse()
+
+	if *linkFlag != "" {
+		err := compiler_cli.LinkFile(*linkFlag)
+		if err != nil {
+			os.Stderr.WriteString(err.Error() + "\n")
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 
 	config := compiler_cli.ReadConfiguration(*projectFlag)
 	if len(config.Errors) > 0 {

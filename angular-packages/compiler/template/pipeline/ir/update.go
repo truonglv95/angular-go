@@ -20,6 +20,10 @@ func (o *InterpolateTextOp) ConsumesVars() bool {
 	return true
 }
 
+func (o *InterpolateTextOp) GetTarget() XrefId {
+	return o.Target
+}
+
 type Interpolation struct {
 	output.Expression
 	Strings          []string
@@ -237,6 +241,12 @@ type AttributeOp struct {
 
 func (o *AttributeOp) Kind() OpKind {
 	return OpKindAttribute
+}
+
+func (o *AttributeOp) GetTarget() XrefId { return o.Target }
+
+func (o *AttributeOp) ConsumesVars() bool {
+	return true
 }
 
 type AdvanceOp struct {

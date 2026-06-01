@@ -36,34 +36,42 @@ func processLexicalScope(unit compilation.CompilationUnit, ops []ir.Op, sv *save
 	for _, op := range ops {
 		switch op.Kind() {
 		case ir.OpKindVariable:
+			var variable *ir.SemanticVariable
+			var xref ir.XrefId
 			if v, ok := op.(*ir.VariableOp); ok {
-				variable := v.Variable
+				variable = v.Variable
+				xref = v.Xref
+			} else if cv, ok := op.(*ir.CreateVariableOp); ok {
+				variable = cv.Variable
+				xref = cv.Xref
+			}
+			if variable != nil {
 				switch variable.Kind {
 				case ir.SemanticVariableKindIdentifier:
 					if variable.Local {
 						if _, exists := localDefinitions[variable.Identifier]; exists {
 							continue
 						}
-						localDefinitions[variable.Identifier] = v.Xref
+						localDefinitions[variable.Identifier] = xref
 					} else if _, exists := scope[variable.Identifier]; exists {
 						continue
 					}
-					scope[variable.Identifier] = v.Xref
+					scope[variable.Identifier] = xref
 				case ir.SemanticVariableKindAlias:
 					if _, exists := scope[variable.Identifier]; exists {
 						continue
 					}
-					scope[variable.Identifier] = v.Xref
+					scope[variable.Identifier] = xref
 				case ir.SemanticVariableKindSavedView:
 					sv = &savedViewInfo{
 						view:     variable.View,
-						variable: v.Xref,
+						variable: xref,
 					}
 				}
 			}
 		case ir.OpKindAnimation, ir.OpKindAnimationListener, ir.OpKindListener, ir.OpKindTwoWayListener:
 			if lOp, ok := op.(ir.ListenerTrait); ok {
-				processLexicalScope(unit, lOp.HandlerOps().Elements(), sv)
+				processLexicalScope(unit, lOp.GetHandlerOps().Elements(), sv)
 			}
 		case ir.OpKindRepeaterCreate:
 			if r, ok := op.(*ir.RepeaterCreateOp); ok {

@@ -15,19 +15,32 @@ func GenerateNgContainerOps(job compilation.CompilationJob) {
 
 		for _, op := range unit.GetCreate().Elements() {
 			if op.Kind() == ir.OpKindElementStart {
-				if tagged, ok := op.(interface{ GetTag() *string }); ok {
-					tag := tagged.GetTag()
+				if el, ok := op.(*ir.ElementStartOp); ok {
+					tag := el.Tag
 					if tag != nil && *tag == ngContainerTag {
-						op.(interface{ SetKind(ir.OpKind) }).SetKind(ir.OpKindContainerStart)
-						if xg, ok2 := op.(interface{ GetXref() ir.XrefId }); ok2 {
-							updatedElementXrefs[xg.GetXref()] = true
-						}
+						newOp := &ir.ContainerStartOp{ElementOrContainerOpBase: el.ElementOrContainerOpBase}
+						ir.OpListInsertBefore(unit.GetCreate(), newOp, op)
+						unit.GetCreate().Remove(op)
+						updatedElementXrefs[el.Xref] = true
+					}
+				}
+			}
+			if op.Kind() == ir.OpKindElement {
+				if el, ok := op.(*ir.ElementOp); ok {
+					tag := el.Tag
+					if tag != nil && *tag == ngContainerTag {
+						newOp := &ir.ContainerOp{ElementOrContainerOpBase: el.ElementOrContainerOpBase}
+						ir.OpListInsertBefore(unit.GetCreate(), newOp, op)
+						unit.GetCreate().Remove(op)
+						updatedElementXrefs[el.Xref] = true
 					}
 				}
 			}
 			if op.Kind() == ir.OpKindElementEnd {
-				if xg, ok := op.(interface{ GetXref() ir.XrefId }); ok && updatedElementXrefs[xg.GetXref()] {
-					op.(interface{ SetKind(ir.OpKind) }).SetKind(ir.OpKindContainerEnd)
+				if end, ok := op.(*ir.ElementEndOp); ok && updatedElementXrefs[end.Xref] {
+					newOp := &ir.ContainerEndOp{Xref: end.Xref, SourceSpan: end.SourceSpan}
+					ir.OpListInsertBefore(unit.GetCreate(), newOp, op)
+					unit.GetCreate().Remove(op)
 				}
 			}
 		}

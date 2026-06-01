@@ -41,9 +41,7 @@ func SaveAndRestoreView(job *compilation.ComponentCompilationJob) {
 					handlerOps = h
 				}
 			case *ir.TwoWayListenerOp:
-				if h, ok := o.HandlerOps.(*ir.OpList); ok {
-					handlerOps = h
-				}
+				handlerOps = o.HandlerOps
 			case *ir.AnimationOp:
 				if h, ok := o.HandlerOps.(*ir.OpList); ok {
 					handlerOps = h

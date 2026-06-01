@@ -1,6 +1,8 @@
 package phases
 
 import (
+	"fmt"
+	"github.com/microsoft/typescript-go/angular-packages/compiler/output"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline/compilation"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline/ir"
 )
@@ -21,19 +23,57 @@ func AllocateSlots(job *compilation.ComponentCompilationJob) {
 				continue
 			}
 			handle := trait.Handle()
-			handle.Slot = &slotCount
-			slotMap[trait.Xref()] = slotCount
-			// NumSlotsUsed is a concrete field, use a duck-typed interface to retrieve it.
-			type numSlotsUsedGetter interface {
-				GetNumSlotsUsed() int
-			}
-			numSlots := 1
-			if getter, ok := op.(numSlotsUsedGetter); ok {
-				numSlots = getter.GetNumSlotsUsed()
-			}
+			val := slotCount
+			handle.Slot = &val
+			slotMap[trait.GetXref()] = slotCount
+			numSlots := trait.GetNumSlotsUsed()
 			slotCount += numSlots
 		}
 
+		for _, op := range view.GetCreate().Elements() {
+			switch op.Kind() {
+			case ir.OpKindListener:
+				if l, ok := op.(*ir.ListenerOp); ok {
+					if !l.HostListener {
+						if slot, found := slotMap[l.Target]; found {
+							l.TargetSlot = ir.SlotHandle{Slot: &slot}
+						} else {
+							panic("AssertionError: expected Listener to have a target with an allocated slot")
+						}
+					}
+				}
+			}
+		}
+		for _, op := range view.Ops() {
+			ir.TransformExpressionsInOp(op, func(expr output.Expression, flags ir.VisitorContextFlag) output.Expression {
+				if trait, ok := expr.(ir.DependsOnSlotContextTrait); ok {
+					if slot, found := slotMap[trait.Target()]; found {
+						fmt.Printf("slot_allocation found target: %v, slot: %v, expr type: %T\n", trait.Target(), slot, expr)
+						// Assuming the trait allows setting the target slot, but actually we need to switch on the type
+						switch e := expr.(type) {
+						case *ir.PipeBindingExpr:
+							if e.TargetSlot == nil {
+								e.TargetSlot = &ir.SlotHandle{}
+							}
+							slotVal := slot
+							e.TargetSlot.Slot = &slotVal
+						case *ir.ContextLetReferenceExpr:
+							if e.TargetSlot == nil {
+								e.TargetSlot = &ir.SlotHandle{}
+							}
+							slotVal := slot
+							e.TargetSlot.Slot = &slotVal
+						case *ir.RestoreViewExpr:
+							// handle if needed
+						}
+					} else {
+						panic("AssertionError: expected slot to be allocated for expression")
+					}
+				}
+				return expr
+			}, ir.VisitorContextFlagNone)
+		}
+		
 		view.Decls = &slotCount
 	}
 

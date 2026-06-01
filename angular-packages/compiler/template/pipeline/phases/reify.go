@@ -2,6 +2,8 @@ package phases
 
 import (
 	"fmt"
+	"strings"
+
 	"github.com/microsoft/typescript-go/angular-packages/compiler/output"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline/compilation"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline/ir"
@@ -17,6 +19,31 @@ var domPropertyRemapping = map[string]string{
 	"tabindex":   "tabIndex",
 }
 
+func legacyAnimationName(name string) string {
+	if strings.HasPrefix(name, "@") {
+		return name
+	}
+	return "@" + name
+}
+
+func legacyAnimationListenerName(name string, phase *string) string {
+	eventName := legacyAnimationName(name)
+	if phase == nil || *phase == "" {
+		return eventName
+	}
+	if strings.HasSuffix(eventName, "."+*phase) {
+		return eventName
+	}
+	return eventName + "." + *phase
+}
+
+func listenerName(listener *ir.ListenerOp) string {
+	if listener.IsLegacyAnimationListener {
+		return legacyAnimationListenerName(listener.Name, listener.LegacyAnimationPhase)
+	}
+	return listener.Name
+}
+
 // Reify compiles semantic IR operations into actual runtime call statements.
 // After reification, the create/update operation lists should only contain StatementOps.
 func Reify(job compilation.CompilationJob) {
@@ -30,12 +57,7 @@ func Reify(job compilation.CompilationJob) {
 func reifyCreateOperations(unit compilation.CompilationUnit) {
 	ops := make([]ir.Op, len(unit.GetCreate().Elements()))
 	copy(ops, unit.GetCreate().Elements())
-	
-	fmt.Printf("reifyCreateOperations ops:\n")
-	for i, op := range ops {
-		fmt.Printf("  %d: %v\n", i, op.Kind())
-	}
-	
+
 	for _, op := range ops {
 		// First transform any IR expressions within the op to output expressions.
 		ir.TransformExpressionsInOp(op, func(expr output.Expression, flags ir.VisitorContextFlag) output.Expression {
@@ -69,7 +91,7 @@ func reifyListenerHandler(unit compilation.CompilationUnit, name string, handler
 	var handlerStmts []output.Statement
 	for _, op := range handlerOps.Elements() {
 		if op.Kind() != ir.OpKindStatement {
-			panic(fmt.Sprintf("AssertionError: expected reified statements, but found op %v", op.Kind()))
+			panic("AssertionError: expected reified statements")
 		}
 		stmtOp := op.(*ir.StatementOp)
 		handlerStmts = append(handlerStmts, stmtOp.Statement)
@@ -176,8 +198,27 @@ func reifyIrExpression(unit compilation.CompilationUnit, expr output.Expression)
 	case ir.ExpressionKindPureFunctionExpr:
 		pf := irExpr.(*ir.PureFunctionExpr)
 		if pf.Fn != nil {
-			fn := output.NewReadVarExpr("\u0275\u0275pureFunction0", nil, nil, nil)
-			args := append([]output.Expression{output.NewLiteralExpr(len(pf.Args), nil, nil, nil), pf.Fn}, pf.Args...)
+			varOffset := 0
+			if pf.VarOffset != nil {
+				varOffset = *pf.VarOffset
+			}
+			numArgs := len(pf.Args)
+			var fnName string
+			var args []output.Expression
+
+			if numArgs <= 8 {
+				fnName = fmt.Sprintf("\u0275\u0275pureFunction%d", numArgs)
+				args = append([]output.Expression{output.NewLiteralExpr(varOffset, nil, nil, nil), pf.Fn}, pf.Args...)
+			} else {
+				fnName = "\u0275\u0275pureFunctionV"
+				args = []output.Expression{
+					output.NewLiteralExpr(varOffset, nil, nil, nil),
+					pf.Fn,
+					output.NewLiteralArrayExpr(pf.Args, nil, nil, nil),
+				}
+			}
+
+			fn := output.NewReadVarExpr(fnName, nil, nil, nil)
 			return output.NewInvokeFunctionExpr(fn, args, nil, nil, false, nil, false)
 		}
 		return output.NULL_EXPR
@@ -221,9 +262,27 @@ func reifyCreateOp(unit compilation.CompilationUnit, op ir.Op) {
 	switch op.Kind() {
 	case ir.OpKindStatement:
 		// Already a statement, nothing to do.
+	case ir.OpKindNamespace:
+		ns := op.(*ir.NamespaceOp)
+		var fnName string
+		switch ns.Active {
+		case ir.NamespaceHTML:
+			fnName = "ɵɵnamespaceHTML"
+		case ir.NamespaceSVG:
+			fnName = "ɵɵnamespaceSVG"
+		case ir.NamespaceMath:
+			fnName = "ɵɵnamespaceMathML"
+		default:
+			fnName = "ɵɵnamespaceHTML"
+		}
+		fn := output.NewReadVarExpr(fnName, nil, nil, nil)
+		call := output.NewInvokeFunctionExpr(fn, nil, nil, nil, false, nil, false)
+		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
+		ir.OpListInsertBefore(unit.GetCreate(), stmt, op)
+		unit.GetCreate().Remove(op)
 	case ir.OpKindAdvance:
 		adv := op.(*ir.AdvanceOp)
-		fn := output.NewReadVarExpr("\u0275\u0275advance", nil, nil, nil)
+		fn := output.NewReadVarExpr("ɵɵadvance", nil, nil, nil)
 		var args []output.Expression
 		if adv.Delta != 1 {
 			args = append(args, output.NewLiteralExpr(adv.Delta, nil, nil, nil))
@@ -232,27 +291,122 @@ func reifyCreateOp(unit compilation.CompilationUnit, op ir.Op) {
 		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
 		ir.OpListInsertBefore(unit.GetCreate(), stmt, op)
 		unit.GetCreate().Remove(op)
-	case ir.OpKindElementStart:
-		el := op.(*ir.ElementStartOp)
+	case ir.OpKindPipe:
+		pipe := op.(*ir.PipeOp)
+		fn := output.NewReadVarExpr("ɵɵpipe", nil, nil, nil)
+		var slotVal int = -1
+		if pipe.SlotHandle != nil && pipe.SlotHandle.Slot != nil {
+			slotVal = *pipe.SlotHandle.Slot
+		} else {
+			slotVal = int(pipe.Xref) - 1
+		}
+		args := []output.Expression{
+			output.NewLiteralExpr(slotVal, nil, nil, nil),
+			output.NewLiteralExpr(pipe.Name, nil, nil, nil),
+		}
+		call := output.NewInvokeFunctionExpr(fn, args, nil, nil, false, nil, false)
+		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
+		ir.OpListInsertBefore(unit.GetCreate(), stmt, op)
+		unit.GetCreate().Remove(op)
+	case ir.OpKindElementStart, ir.OpKindElement, ir.OpKindContainerStart, ir.OpKindContainer:
+		var slotVal int = -1
+		var tagVal string
+		var attrs any
+		var localRefs any
+
+		isElementStart := op.Kind() == ir.OpKindElementStart || op.Kind() == ir.OpKindContainerStart
+		isContainerStart := op.Kind() == ir.OpKindContainerStart
+		isContainer := op.Kind() == ir.OpKindContainer
+
+		if el, ok := op.(*ir.ElementStartOp); ok {
+			if el.SlotHandle != nil && el.SlotHandle.Slot != nil {
+				slotVal = *el.SlotHandle.Slot
+			} else {
+				slotVal = int(el.Xref) - 1
+			}
+			if el.Tag != nil {
+				tagVal = *el.Tag
+			}
+			attrs = el.Attributes
+			localRefs = el.LocalRefsField
+		} else if el, ok := op.(*ir.ElementOp); ok {
+			if el.SlotHandle != nil && el.SlotHandle.Slot != nil {
+				slotVal = *el.SlotHandle.Slot
+			} else {
+				slotVal = int(el.Xref) - 1
+			}
+			if el.Tag != nil {
+				tagVal = *el.Tag
+			}
+			attrs = el.Attributes
+			localRefs = el.LocalRefsField
+		} else if el, ok := op.(*ir.ContainerStartOp); ok {
+			if el.SlotHandle != nil && el.SlotHandle.Slot != nil {
+				slotVal = *el.SlotHandle.Slot
+			} else {
+				slotVal = int(el.Xref) - 1
+			}
+			attrs = el.Attributes
+			localRefs = el.LocalRefsField
+		} else if el, ok := op.(*ir.ContainerOp); ok {
+			if el.SlotHandle != nil && el.SlotHandle.Slot != nil {
+				slotVal = *el.SlotHandle.Slot
+			} else {
+				slotVal = int(el.Xref) - 1
+			}
+			attrs = el.Attributes
+			localRefs = el.LocalRefsField
+		} else {
+			panic("Expected ElementStartOp, ElementOp, ContainerStartOp, or ContainerOp")
+		}
+
 		var fn output.Expression
 		if unit.GetJob().GetMode() == compilation.TemplateCompilationMode_DomOnly {
-			fn = output.NewReadVarExpr("\u0275\u0275domElementStart", nil, nil, nil)
+			if isContainerStart {
+				fn = output.NewReadVarExpr("ɵɵdomElementContainerStart", nil, nil, nil)
+			} else if isContainer {
+				fn = output.NewReadVarExpr("ɵɵdomElementContainer", nil, nil, nil)
+			} else if isElementStart {
+				fn = output.NewReadVarExpr("ɵɵdomElementStart", nil, nil, nil)
+			} else {
+				fn = output.NewReadVarExpr("ɵɵdomElement", nil, nil, nil)
+			}
 		} else {
-			fn = output.NewReadVarExpr("\u0275\u0275elementStart", nil, nil, nil)
+			if isContainerStart {
+				fn = output.NewReadVarExpr("ɵɵelementContainerStart", nil, nil, nil)
+			} else if isContainer {
+				fn = output.NewReadVarExpr("ɵɵelementContainer", nil, nil, nil)
+			} else if isElementStart {
+				fn = output.NewReadVarExpr("ɵɵelementStart", nil, nil, nil)
+			} else {
+				fn = output.NewReadVarExpr("ɵɵelement", nil, nil, nil)
+			}
 		}
-		var slotVal int = -1
-		if el.SlotHandle != nil && el.SlotHandle.Slot != nil {
-			slotVal = *el.SlotHandle.Slot
-		} else {
-			slotVal = int(el.Xref) - 1
+
+		args := []output.Expression{output.NewLiteralExpr(slotVal, nil, nil, nil)}
+		if !isContainerStart && !isContainer {
+			args = append(args, output.NewLiteralExpr(tagVal, nil, nil, nil))
 		}
-		var tagVal string
-		if el.Tag != nil {
-			tagVal = *el.Tag
-		}
-		args := []output.Expression{output.NewLiteralExpr(slotVal, nil, nil, nil), output.NewLiteralExpr(tagVal, nil, nil, nil)}
-		if el.Attributes != nil {
-			args = append(args, output.NewLiteralExpr(el.Attributes, nil, nil, nil))
+		if attrs != nil || localRefs != nil {
+			if isContainerStart {
+				if attrs != nil {
+					args = append(args, output.NewLiteralExpr(attrs, nil, nil, nil))
+				} else {
+					args = append(args, output.NewLiteralExpr(nil, nil, nil, nil))
+				}
+				if localRefs != nil {
+					args = append(args, output.NewLiteralExpr(localRefs, nil, nil, nil))
+				}
+			} else {
+				if attrs != nil {
+					args = append(args, output.NewLiteralExpr(attrs, nil, nil, nil))
+				} else {
+					args = append(args, output.NewLiteralExpr(nil, nil, nil, nil))
+				}
+				if localRefs != nil {
+					args = append(args, output.NewLiteralExpr(localRefs, nil, nil, nil))
+				}
+			}
 		}
 		call := output.NewInvokeFunctionExpr(fn, args, nil, nil, false, nil, false)
 		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
@@ -260,12 +414,12 @@ func reifyCreateOp(unit compilation.CompilationUnit, op ir.Op) {
 		unit.GetCreate().Remove(op)
 	case ir.OpKindListener:
 		l := op.(*ir.ListenerOp)
-		
+
 		name := ""
 		if l.HandlerFnName != nil {
 			name = *l.HandlerFnName
 		}
-		
+
 		var handlerOpsList *ir.OpList
 		if l.HandlerOps != nil {
 			handlerOpsList = l.HandlerOps.(*ir.OpList)
@@ -281,6 +435,31 @@ func reifyCreateOp(unit compilation.CompilationUnit, op ir.Op) {
 			fn = output.NewReadVarExpr("\u0275\u0275listener", nil, nil, nil)
 		}
 		args := []output.Expression{
+			output.NewLiteralExpr(listenerName(l), nil, nil, nil),
+			listenerFn,
+		}
+		call := output.NewInvokeFunctionExpr(fn, args, nil, nil, false, nil, false)
+		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
+		ir.OpListInsertBefore(unit.GetCreate(), stmt, op)
+		unit.GetCreate().Remove(op)
+	case ir.OpKindTwoWayListener:
+		l := op.(*ir.TwoWayListenerOp)
+
+		name := ""
+		if l.HandlerFnName != nil {
+			name = *l.HandlerFnName
+		}
+
+		var handlerOpsList *ir.OpList
+		if l.HandlerOps != nil {
+			handlerOpsList = l.HandlerOps
+		} else {
+			handlerOpsList = ir.NewOpList()
+		}
+
+		listenerFn := reifyListenerHandler(unit, name, handlerOpsList, true) // ConsumesDollarEvent=true for two-way
+		fn := output.NewReadVarExpr("ɵɵtwoWayListener", nil, nil, nil)
+		args := []output.Expression{
 			output.NewLiteralExpr(l.Name, nil, nil, nil),
 			listenerFn,
 		}
@@ -288,12 +467,20 @@ func reifyCreateOp(unit compilation.CompilationUnit, op ir.Op) {
 		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
 		ir.OpListInsertBefore(unit.GetCreate(), stmt, op)
 		unit.GetCreate().Remove(op)
-	case ir.OpKindElementEnd:
+	case ir.OpKindElementEnd, ir.OpKindContainerEnd:
 		var fn output.Expression
 		if unit.GetJob().GetMode() == compilation.TemplateCompilationMode_DomOnly {
-			fn = output.NewReadVarExpr("\u0275\u0275domElementEnd", nil, nil, nil)
+			if op.Kind() == ir.OpKindContainerEnd {
+				fn = output.NewReadVarExpr("ɵɵdomElementContainerEnd", nil, nil, nil)
+			} else {
+				fn = output.NewReadVarExpr("ɵɵdomElementEnd", nil, nil, nil)
+			}
 		} else {
-			fn = output.NewReadVarExpr("\u0275\u0275elementEnd", nil, nil, nil)
+			if op.Kind() == ir.OpKindContainerEnd {
+				fn = output.NewReadVarExpr("ɵɵelementContainerEnd", nil, nil, nil)
+			} else {
+				fn = output.NewReadVarExpr("ɵɵelementEnd", nil, nil, nil)
+			}
 		}
 		call := output.NewInvokeFunctionExpr(fn, nil, nil, nil, false, nil, false)
 		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
@@ -308,7 +495,10 @@ func reifyCreateOp(unit compilation.CompilationUnit, op ir.Op) {
 		} else {
 			slotVal = int(txt.Xref) - 1
 		}
-		args := []output.Expression{output.NewLiteralExpr(slotVal, nil, nil, nil), output.NewLiteralExpr(txt.InitialValue, nil, nil, nil)}
+		args := []output.Expression{output.NewLiteralExpr(slotVal, nil, nil, nil)}
+		if txt.InitialValue != "" {
+			args = append(args, output.NewLiteralExpr(txt.InitialValue, nil, nil, nil))
+		}
 		call := output.NewInvokeFunctionExpr(fn, args, nil, nil, false, nil, false)
 		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
 		ir.OpListInsertBefore(unit.GetCreate(), stmt, op)
@@ -336,25 +526,30 @@ func reifyCreateOp(unit compilation.CompilationUnit, op ir.Op) {
 		unit.GetCreate().Remove(op)
 	case ir.OpKindTemplate:
 		tmpl := op.(*ir.TemplateOp)
-		fn := output.NewReadVarExpr("\u0275\u0275template", nil, nil, nil)
-		
+		var fn output.Expression
+		if unit.GetJob().GetMode() == compilation.TemplateCompilationMode_DomOnly {
+			fn = output.NewReadVarExpr("\u0275\u0275domTemplate", nil, nil, nil)
+		} else {
+			fn = output.NewReadVarExpr("\u0275\u0275template", nil, nil, nil)
+		}
+
 		var slotVal int = -1
 		if tmpl.SlotHandle != nil && tmpl.SlotHandle.Slot != nil {
 			slotVal = *tmpl.SlotHandle.Slot
 		}
-		
+
 		tagVal := ""
 		if tmpl.Tag != nil {
 			tagVal = *tmpl.Tag
 		}
-		
+
 		var tmplFn output.Expression = output.NULL_EXPR
 		if job, ok := unit.GetJob().(*compilation.ComponentCompilationJob); ok {
 			if childView, exists := job.Views[tmpl.Xref]; exists && childView.FnName != nil {
 				tmplFn = output.NewReadVarExpr(*childView.FnName, nil, nil, nil)
 			}
 		}
-		
+
 		var decls, vars int
 		if tmpl.Decls != nil {
 			decls = *tmpl.Decls
@@ -362,7 +557,7 @@ func reifyCreateOp(unit compilation.CompilationUnit, op ir.Op) {
 		if tmpl.Vars != nil {
 			vars = *tmpl.Vars
 		}
-		
+
 		args := []output.Expression{
 			output.NewLiteralExpr(slotVal, nil, nil, nil),
 			tmplFn,
@@ -370,8 +565,16 @@ func reifyCreateOp(unit compilation.CompilationUnit, op ir.Op) {
 			output.NewLiteralExpr(vars, nil, nil, nil),
 			output.NewLiteralExpr(tagVal, nil, nil, nil),
 		}
-		if tmpl.Attributes != nil {
-			args = append(args, output.NewLiteralExpr(tmpl.Attributes, nil, nil, nil))
+		if tmpl.Attributes != nil || tmpl.LocalRefsField != nil {
+			if tmpl.Attributes != nil {
+				args = append(args, output.NewLiteralExpr(tmpl.Attributes, nil, nil, nil))
+			} else {
+				args = append(args, output.NULL_EXPR)
+			}
+			if tmpl.LocalRefsField != nil {
+				args = append(args, output.NewLiteralExpr(tmpl.LocalRefsField, nil, nil, nil))
+				args = append(args, output.NewReadVarExpr("\u0275\u0275templateRefExtractor", nil, nil, nil))
+			}
 		}
 		call := output.NewInvokeFunctionExpr(fn, args, nil, nil, false, nil, false)
 		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
@@ -384,7 +587,7 @@ func reifyCreateOp(unit compilation.CompilationUnit, op ir.Op) {
 		if cond.SlotHandle != nil && cond.SlotHandle.Slot != nil {
 			slotVal = *cond.SlotHandle.Slot
 		}
-		
+
 		decls := 0
 		if cond.Decls != nil {
 			decls = *cond.Decls
@@ -393,7 +596,7 @@ func reifyCreateOp(unit compilation.CompilationUnit, op ir.Op) {
 		if cond.Vars != nil {
 			vars = *cond.Vars
 		}
-		
+
 		var tmplFn output.Expression = output.NULL_EXPR
 		if job, ok := unit.GetJob().(*compilation.ComponentCompilationJob); ok {
 			if childView, exists := job.Views[cond.Xref]; exists {
@@ -408,7 +611,7 @@ func reifyCreateOp(unit compilation.CompilationUnit, op ir.Op) {
 				}
 			}
 		}
-		
+
 		args := []output.Expression{
 			output.NewLiteralExpr(slotVal, nil, nil, nil),
 			tmplFn,
@@ -425,7 +628,7 @@ func reifyCreateOp(unit compilation.CompilationUnit, op ir.Op) {
 			args = append(args, output.NewLiteralExpr(cond.Attributes, nil, nil, nil))
 		}
 		var call output.Expression = output.NewInvokeFunctionExpr(fn, args, nil, nil, false, nil, false)
-		
+
 		// Gather ConditionalBranchCreateOps by looking ahead in the actual slice
 		elements := unit.GetCreate().Elements()
 		idx := -1
@@ -435,7 +638,7 @@ func reifyCreateOp(unit compilation.CompilationUnit, op ir.Op) {
 				break
 			}
 		}
-		
+
 		if idx != -1 {
 			for i := idx + 1; i < len(elements); i++ {
 				next := elements[i]
@@ -457,7 +660,7 @@ func reifyCreateOp(unit compilation.CompilationUnit, op ir.Op) {
 					if branch.Vars != nil {
 						branchVars = *branch.Vars
 					}
-					
+
 					var branchTmplFn output.Expression = output.NULL_EXPR
 					if job, ok := unit.GetJob().(*compilation.ComponentCompilationJob); ok {
 						if childView, exists := job.Views[branch.Xref]; exists {
@@ -472,7 +675,7 @@ func reifyCreateOp(unit compilation.CompilationUnit, op ir.Op) {
 							}
 						}
 					}
-					
+
 					branchArgs := []output.Expression{
 						output.NewLiteralExpr(branchSlotVal, nil, nil, nil),
 						branchTmplFn,
@@ -498,7 +701,7 @@ func reifyCreateOp(unit compilation.CompilationUnit, op ir.Op) {
 				}
 			}
 		}
-		
+
 		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
 		ir.OpListInsertBefore(unit.GetCreate(), stmt, op)
 		unit.GetCreate().Remove(op)
@@ -508,12 +711,12 @@ func reifyCreateOp(unit compilation.CompilationUnit, op ir.Op) {
 	case ir.OpKindRepeaterCreate:
 		repeater := op.(*ir.RepeaterCreateOp)
 		fn := output.NewReadVarExpr("\u0275\u0275repeaterCreate", nil, nil, nil)
-		
+
 		var slotVal int = -1
 		if repeater.SlotHandle != nil && repeater.SlotHandle.Slot != nil {
 			slotVal = *repeater.SlotHandle.Slot
 		}
-		
+
 		var tmplFn output.Expression = output.NULL_EXPR
 		if job, ok := unit.GetJob().(*compilation.ComponentCompilationJob); ok {
 			if childView, exists := job.Views[repeater.Xref]; exists && childView.FnName != nil {
@@ -537,35 +740,32 @@ func reifyCreateOp(unit compilation.CompilationUnit, op ir.Op) {
 		if repeater.Vars != nil {
 			vars = *repeater.Vars
 		}
-		
+
 		args := []output.Expression{
 			output.NewLiteralExpr(slotVal, nil, nil, nil),
 			tmplFn,
 			output.NewLiteralExpr(decls, nil, nil, nil),
 			output.NewLiteralExpr(vars, nil, nil, nil),
 		}
-		
+
 		var tagVal string
 		if repeater.Tag != nil {
 			tagVal = *repeater.Tag
 		}
 		args = append(args, output.NewLiteralExpr(tagVal, nil, nil, nil))
-		
+
 		if repeater.Attributes != nil {
-			println(fmt.Sprintf("reify: RepeaterCreate attributes is %T: %v", repeater.Attributes, repeater.Attributes))
 			args = append(args, output.NewLiteralExpr(repeater.Attributes, nil, nil, nil))
 		} else {
 			args = append(args, output.NULL_EXPR)
 		}
-		
+
 		if repeater.TrackByFn != nil {
 			args = append(args, repeater.TrackByFn)
 		} else {
 			args = append(args, output.NULL_EXPR)
 		}
-		
-		args = append(args, output.NewLiteralExpr(repeater.UsesComponentInstance, nil, nil, nil))
-		
+
 		var emptyTmplFn output.Expression = output.NULL_EXPR
 		var emptyDecls, emptyVars int
 		if repeater.EmptyView != 0 {
@@ -583,8 +783,13 @@ func reifyCreateOp(unit compilation.CompilationUnit, op ir.Op) {
 				}
 			}
 		}
-		
-		if emptyTmplFn != output.NULL_EXPR || emptyDecls != 0 || emptyVars != 0 || repeater.EmptyTag != nil || repeater.EmptyAttributes != nil {
+
+		hasEmptyBlock := emptyTmplFn != output.NULL_EXPR || emptyDecls != 0 || emptyVars != 0 || repeater.EmptyTag != nil || repeater.EmptyAttributes != nil
+		if repeater.UsesComponentInstance || hasEmptyBlock {
+			args = append(args, output.NewLiteralExpr(repeater.UsesComponentInstance, nil, nil, nil))
+		}
+
+		if hasEmptyBlock {
 			args = append(args, emptyTmplFn)
 			args = append(args, output.NewLiteralExpr(emptyDecls, nil, nil, nil))
 			args = append(args, output.NewLiteralExpr(emptyVars, nil, nil, nil))
@@ -597,6 +802,43 @@ func reifyCreateOp(unit compilation.CompilationUnit, op ir.Op) {
 				args = append(args, output.NewLiteralExpr(repeater.EmptyAttributes, nil, nil, nil))
 			}
 		}
+		call := output.NewInvokeFunctionExpr(fn, args, nil, nil, false, nil, false)
+		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
+		ir.OpListInsertBefore(unit.GetCreate(), stmt, op)
+		unit.GetCreate().Remove(op)
+	case ir.OpKindProjectionDef:
+		projDef := op.(*ir.ProjectionDefOp)
+		fn := output.NewReadVarExpr("\u0275\u0275projectionDef", nil, nil, nil)
+		var args []output.Expression
+		if projDef.Def != nil {
+			args = append(args, projDef.Def)
+		}
+		call := output.NewInvokeFunctionExpr(fn, args, nil, nil, false, nil, false)
+		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
+		ir.OpListInsertBefore(unit.GetCreate(), stmt, op)
+		unit.GetCreate().Remove(op)
+	case ir.OpKindProjection:
+		proj := op.(*ir.ProjectionOp)
+		fn := output.NewReadVarExpr("\u0275\u0275projection", nil, nil, nil)
+		var slotVal int = -1
+		if proj.SlotHandle != nil && proj.SlotHandle.Slot != nil {
+			slotVal = *proj.SlotHandle.Slot
+		} else {
+			slotVal = int(proj.Xref) - 1
+		}
+		args := []output.Expression{output.NewLiteralExpr(slotVal, nil, nil, nil)}
+
+		projIndex := 0
+		if proj.ProjectionSlotIndex != nil {
+			projIndex = *proj.ProjectionSlotIndex
+		}
+		if projIndex != 0 || proj.Attributes != nil {
+			args = append(args, output.NewLiteralExpr(projIndex, nil, nil, nil))
+			if proj.Attributes != nil {
+				args = append(args, output.NewLiteralExpr(proj.Attributes, nil, nil, nil))
+			}
+		}
+
 		call := output.NewInvokeFunctionExpr(fn, args, nil, nil, false, nil, false)
 		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
 		ir.OpListInsertBefore(unit.GetCreate(), stmt, op)
@@ -653,13 +895,13 @@ func reifyUpdateOp(unit compilation.CompilationUnit, opList *ir.OpList, op ir.Op
 		} else {
 			// fallback
 		}
-		
+
 		var fn output.Expression
 		var args []output.Expression
-		
+
 		if interp != nil {
 			numExprs := len(interp.Expressions)
-			
+
 			if numExprs == 1 && len(interp.Strings) == 2 && interp.Strings[0] == "" && interp.Strings[1] == "" {
 				fn = output.NewReadVarExpr("\u0275\u0275textInterpolate", nil, nil, nil)
 				args = []output.Expression{interp.Expressions[0]}
@@ -669,7 +911,7 @@ func reifyUpdateOp(unit compilation.CompilationUnit, opList *ir.OpList, op ir.Op
 					args = append(args, output.NewLiteralExpr(interp.Strings[i], nil, nil, nil))
 					args = append(args, interp.Expressions[i])
 				}
-				if numExprs < len(interp.Strings) {
+				if numExprs < len(interp.Strings) && interp.Strings[numExprs] != "" {
 					args = append(args, output.NewLiteralExpr(interp.Strings[numExprs], nil, nil, nil))
 				}
 			} else {
@@ -679,13 +921,13 @@ func reifyUpdateOp(unit compilation.CompilationUnit, opList *ir.OpList, op ir.Op
 					vArgs = append(vArgs, output.NewLiteralExpr(interp.Strings[i], nil, nil, nil))
 					vArgs = append(vArgs, interp.Expressions[i])
 				}
-				if numExprs < len(interp.Strings) {
+				if numExprs < len(interp.Strings) && interp.Strings[numExprs] != "" {
 					vArgs = append(vArgs, output.NewLiteralExpr(interp.Strings[numExprs], nil, nil, nil))
 				}
 				args = []output.Expression{output.NewLiteralArrayExpr(vArgs, nil, nil, nil)}
 			}
 		}
-		
+
 		call := output.NewInvokeFunctionExpr(fn, args, nil, nil, false, nil, false)
 		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
 		ir.OpListInsertBefore(opList, stmt, op)
@@ -706,10 +948,28 @@ func reifyUpdateOp(unit compilation.CompilationUnit, opList *ir.OpList, op ir.Op
 			}
 		} else {
 			fn = output.NewReadVarExpr("\u0275\u0275property", nil, nil, nil)
+			name := prop.Name
+			if prop.BindingKind == ir.BindingKindLegacyAnimation {
+				name = legacyAnimationName(name)
+			}
 			args = []output.Expression{
-				output.NewLiteralExpr(prop.Name, nil, nil, nil),
+				output.NewLiteralExpr(name, nil, nil, nil),
 				prop.Expression,
 			}
+		}
+		if prop.Sanitizer != nil {
+			args = append(args, prop.Sanitizer)
+		}
+		call := output.NewInvokeFunctionExpr(fn, args, nil, nil, false, nil, false)
+		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
+		ir.OpListInsertBefore(opList, stmt, op)
+		opList.Remove(op)
+	case ir.OpKindTwoWayProperty:
+		prop := op.(*ir.TwoWayPropertyOp)
+		fn := output.NewReadVarExpr("ɵɵtwoWayProperty", nil, nil, nil)
+		args := []output.Expression{
+			output.NewLiteralExpr(prop.Name, nil, nil, nil),
+			prop.Expression,
 		}
 		if prop.Sanitizer != nil {
 			args = append(args, prop.Sanitizer)
@@ -736,6 +996,42 @@ func reifyUpdateOp(unit compilation.CompilationUnit, opList *ir.OpList, op ir.Op
 			output.NewLiteralExpr(styleProp.Name, nil, nil, nil),
 			styleProp.Expression,
 		}
+		if styleProp.Unit != nil {
+			args = append(args, output.NewLiteralExpr(*styleProp.Unit, nil, nil, nil))
+		}
+		call := output.NewInvokeFunctionExpr(fn, args, nil, nil, false, nil, false)
+		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
+		ir.OpListInsertBefore(opList, stmt, op)
+		opList.Remove(op)
+	case ir.OpKindAttribute:
+		attr := op.(*ir.AttributeOp)
+		fn := output.NewReadVarExpr("\u0275\u0275attribute", nil, nil, nil)
+		args := []output.Expression{
+			output.NewLiteralExpr(attr.Name, nil, nil, nil),
+			attr.Expression,
+		}
+		if attr.Sanitizer != nil {
+			args = append(args, attr.Sanitizer)
+		}
+		call := output.NewInvokeFunctionExpr(fn, args, nil, nil, false, nil, false)
+		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
+		ir.OpListInsertBefore(opList, stmt, op)
+		opList.Remove(op)
+	case ir.OpKindDomProperty:
+		domProp := op.(*ir.DomPropertyOp)
+
+		name := domProp.Name
+		if mapped, ok := domPropertyRemapping[name]; ok {
+			name = mapped
+		}
+		fn := output.NewReadVarExpr("\u0275\u0275property", nil, nil, nil)
+		args := []output.Expression{
+			output.NewLiteralExpr(name, nil, nil, nil),
+			domProp.Expression.(output.Expression),
+		}
+		if domProp.Sanitizer != nil {
+			args = append(args, domProp.Sanitizer)
+		}
 		call := output.NewInvokeFunctionExpr(fn, args, nil, nil, false, nil, false)
 		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
 		ir.OpListInsertBefore(opList, stmt, op)
@@ -743,7 +1039,7 @@ func reifyUpdateOp(unit compilation.CompilationUnit, opList *ir.OpList, op ir.Op
 	case ir.OpKindConditional:
 		cond := op.(*ir.ConditionalOp)
 		fn := output.NewReadVarExpr("\u0275\u0275conditional", nil, nil, nil)
-		
+
 		args := []output.Expression{
 			cond.Processed,
 		}
@@ -785,8 +1081,6 @@ func reifyUpdateOp(unit compilation.CompilationUnit, opList *ir.OpList, op ir.Op
 		ir.OpListInsertBefore(opList, stmt, op)
 		opList.Remove(op)
 	default:
-		// For unhandled ops, log or remove them to prevent panics in emit, or leave them for debugging.
-		// For now, let's remove them so emit doesn't panic on unimplemented ops.
-		opList.Remove(op)
+		panic(fmt.Sprintf("Unhandled update op in reifyUpdateOp: %T", op))
 	}
 }

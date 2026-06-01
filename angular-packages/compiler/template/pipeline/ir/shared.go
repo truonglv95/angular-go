@@ -18,6 +18,14 @@ func (o *StatementOp) GetKind() OpKind {
 	return o.Kind()
 }
 
+func (o *StatementOp) GetStatement() output.Statement {
+	return o.Statement
+}
+
+func (o *StatementOp) SetStatement(stmt output.Statement) {
+	o.Statement = stmt
+}
+
 // CreateStatementOp is a genuine implementation of a create statement operation.
 type CreateStatementOp struct {
 	OpBase
@@ -70,4 +78,33 @@ func NewCreateVariableOp(xref XrefId, variable SemanticVariable, initializer any
 		Initializer: initExpr,
 		Flags:       flags,
 	}
+}
+
+func (o *CreateStatementOp) GetStatement() output.Statement {
+	return o.Statement
+}
+
+func (o *CreateStatementOp) SetStatement(stmt output.Statement) {
+	o.Statement = stmt
+}
+
+type UpdateStatementOp struct {
+	OpBase
+	Statement output.Statement
+}
+
+func (o *UpdateStatementOp) Kind() OpKind {
+	return OpKindStatement
+}
+
+func (o *UpdateStatementOp) GetKind() OpKind {
+	return o.Kind()
+}
+
+func (o *UpdateStatementOp) GetStatement() output.Statement {
+	return o.Statement
+}
+
+func (o *UpdateStatementOp) SetStatement(stmt output.Statement) {
+	o.Statement = stmt
 }

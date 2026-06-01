@@ -274,8 +274,12 @@ func (tx *classFieldsTransformer) visitForSubstitution(node *ast.Node) *ast.Node
 
 // visit is the main visitor.
 func (tx *classFieldsTransformer) visit(node *ast.Node) *ast.Node {
+	if node == nil {
+		return nil
+	}
 	grandparentNode := tx.pushNode(node)
 	defer tx.popNode(grandparentNode)
+
 
 	if node.SubtreeFacts()&(ast.SubtreeContainsClassFields|ast.SubtreeContainsLexicalThisOrSuper) == 0 {
 		if tx.currentClassContainer != nil && len(tx.classAliases) > 0 {

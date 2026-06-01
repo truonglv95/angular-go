@@ -25,6 +25,7 @@ const animatePrefix = "animate."
 
 func init() {
 	render3.IngestComponent = IngestComponent
+	render3.IngestHostBinding = IngestHostBinding
 }
 
 func IsI18nRootNode(meta i18n.I18nMeta) bool {
@@ -82,20 +83,12 @@ func IngestComponent(
 	return job
 }
 
-type HostBindingInput struct {
-	ComponentName          string
-	ComponentSelector      string
-	Properties             []template_parser.ParsedProperty
-	Attributes             map[string]output.Expression
-	Events                 []template_parser.ParsedEvent
-	LegacyOptionalChaining bool
-}
-
 func IngestHostBinding(
-	input *HostBindingInput,
-	bindingParser *template_parser.BindingParser,
-	constantPool any,
+	input *render3.HostBindingInput,
+	bindingParserAny render3.BindingParser,
+	constantPool render3.ConstantPool,
 ) *compilation.HostBindingCompilationJob {
+	bindingParser := bindingParserAny.(*template_parser.BindingParser)
 	job := compilation.NewHostBindingCompilationJob(
 		input.ComponentName,
 		constantPool,
@@ -108,6 +101,12 @@ func IngestHostBinding(
 		if strings.HasPrefix(name, "attr.") {
 			name = name[len("attr."):]
 			bindingKind = ir.BindingKindAttribute
+		} else if strings.HasPrefix(name, "class.") {
+			name = name[len("class."):]
+			bindingKind = ir.BindingKindClassName
+		} else if strings.HasPrefix(name, "style.") {
+			name = name[len("style."):]
+			bindingKind = ir.BindingKindStyleProperty
 		}
 		if property.IsLegacyAnimation() {
 			bindingKind = ir.BindingKindLegacyAnimation
@@ -126,7 +125,7 @@ func IngestHostBinding(
 				securityContexts = append(securityContexts, ctx)
 			}
 		}
-		ingestDomProperty(job, &property, bindingKind, securityContexts)
+		ingestDomProperty(job, &property, name, bindingKind, securityContexts)
 	}
 	for name, expr := range input.Attributes {
 		contexts := bindingParser.CalcPossibleSecurityContexts(
@@ -151,6 +150,7 @@ func IngestHostBinding(
 func ingestDomProperty(
 	job *compilation.HostBindingCompilationJob,
 	property *template_parser.ParsedProperty,
+	name string,
 	bindingKind ir.BindingKind,
 	securityContexts []core.SecurityContext,
 ) {
@@ -170,7 +170,7 @@ func ingestDomProperty(
 		ir.CreateBindingOp(
 			job.Root.Xref,
 			bindingKind,
-			property.Name,
+			name,
 			expression.(output.Expression),
 			nil,
 			securityContexts,
@@ -402,7 +402,7 @@ func ingestTemplate(unit *compilation.ViewCompilationUnit, tmpl *render3.Templat
 		if val == "" {
 			val = "$implicit"
 		}
-		childView.ContextVariables[variable.Name] = val
+		childView.SetContextVariable(variable.Name, val)
 	}
 
 	if templateKind == ir.TemplateKindNgTemplate {
@@ -553,7 +553,7 @@ func ingestIfBlock(unit *compilation.ViewCompilationUnit, ifBlock *render3.IfBlo
 		tagName := ingestControlFlowInsertionPoint(unit, cView.Xref, ifCase)
 
 		if ifCase.ExpressionAlias != nil {
-			cView.ContextVariables[ifCase.ExpressionAlias.Name] = ir.CTX_REF
+			cView.SetContextVariable(ifCase.ExpressionAlias.Name, ir.CTX_REF)
 		}
 
 		var ifCaseI18nMeta any
@@ -611,11 +611,16 @@ func ingestIfBlock(unit *compilation.ViewCompilationUnit, ifBlock *render3.IfBlo
 			cOpHandle = cbc.Handle()
 		}
 
+		var alias any
+		if ifCase.ExpressionAlias != nil {
+			alias = ifCase.ExpressionAlias
+		}
+
 		conditionalCaseExpr := ir.NewConditionalCaseExpr(
 			caseExpr,
 			cOpXref,
 			cOpHandle,
-			ifCase.ExpressionAlias,
+			alias,
 		)
 		conditions = append(conditions, conditionalCaseExpr)
 		ingestNodes(cView, ifCase.Children)
@@ -1052,20 +1057,21 @@ func ingestForBlock(unit *compilation.ViewCompilationUnit, forBlock *render3.For
 	countName := fmt.Sprintf("ɵ$count_%d", repeaterView.Xref)
 	indexVarNames := make(map[string]bool)
 
-	repeaterView.ContextVariables[forBlock.Item.Name] = forBlock.Item.Value
+	repeaterView.SetContextVariable(forBlock.Item.Name, forBlock.Item.Value)
 
 	for _, variable := range forBlock.ContextVariables {
 		if variable.Value == "$index" {
 			indexVarNames[variable.Name] = true
 		}
 		if variable.Name == "$index" {
-			repeaterView.ContextVariables["$index"] = variable.Value
-			repeaterView.ContextVariables[indexName] = variable.Value
+			repeaterView.SetContextVariable("$index", variable.Value)
+			repeaterView.SetContextVariable(indexName, variable.Value)
 		} else if variable.Name == "$count" {
-			repeaterView.ContextVariables["$count"] = variable.Value
-			repeaterView.ContextVariables[countName] = variable.Value
+			repeaterView.SetContextVariable("$count", variable.Value)
+			repeaterView.SetContextVariable(countName, variable.Value)
 		} else {
 			repeaterView.Aliases = append(repeaterView.Aliases, &ir.AliasVariable{
+				Kind:       ir.SemanticVariableKindAlias,
 				Name:       nil,
 				Identifier: variable.Name,
 				Expression: getComputedForLoopVariableExpression(variable, indexName, countName),
@@ -1204,6 +1210,32 @@ func convertAst(
 	}
 
 	switch a := ast.(type) {
+	case *expression_parser.PropertyWrite:
+		var receiverExpr output.Expression
+		if _, ok := a.Receiver.(*expression_parser.ImplicitReceiver); ok {
+			receiverExpr = ir.NewContextExpr(job.GetRoot().GetXref())
+		} else {
+			receiverExpr = convertAst(a.Receiver, job, baseSourceSpan)
+		}
+		return output.NewBinaryOperatorExpr(
+			output.BinaryOperatorAssign,
+			output.NewReadPropExpr(receiverExpr, a.Name, nil, nil, nil, false),
+			convertAst(a.Value, job, baseSourceSpan),
+			nil,
+			nil,
+			nil,
+		)
+	case *expression_parser.KeyedWrite:
+		return output.NewBinaryOperatorExpr(
+			output.BinaryOperatorAssign,
+			output.NewReadKeyExpr(
+				convertAst(a.Receiver, job, baseSourceSpan),
+				convertAst(a.Key, job, baseSourceSpan),
+				nil, nil, nil, false,
+			),
+			convertAst(a.Value, job, baseSourceSpan),
+			nil, nil, nil,
+		)
 	case *expression_parser.PropertyRead:
 		if _, ok := a.Receiver.(*expression_parser.ImplicitReceiver); ok {
 			return ir.NewLexicalReadExpr(a.Name)
@@ -1234,6 +1266,9 @@ func convertAst(
 			false,
 		)
 	case *expression_parser.LiteralPrimitive:
+		if value, ok := a.Value.(string); ok && value == "undefined" && isUndefinedKeywordLiteral(a) {
+			return output.NewReadVarExpr("undefined", nil, nil, nil)
+		}
 		return output.NewLiteralExpr(a.Value, nil, nil, nil)
 	case *expression_parser.Unary:
 		var op output.UnaryOperator
@@ -1400,6 +1435,11 @@ func convertAst(
 	}
 }
 
+func isUndefinedKeywordLiteral(ast *expression_parser.LiteralPrimitive) bool {
+	span := ast.GetSourceSpan()
+	return span.End-span.Start == len("undefined")
+}
+
 func convertTemplateLiteral(
 	ast *expression_parser.TemplateLiteral,
 	job compilation.CompilationJob,
@@ -1479,9 +1519,16 @@ func asMessage(i18nMeta i18n.I18nMeta) *i18n.Message {
 	}
 	msg, ok := i18nMeta.(*i18n.Message)
 	if !ok {
-		panic(fmt.Sprintf("Expected i18n meta to be a Message, but got: %T", i18nMeta))
+		panic("expected i18nMeta to be of type *i18n.Message")
 	}
 	return msg
+}
+
+func asMessageAny(i18nMeta i18n.I18nMeta) any {
+	if msg := asMessage(i18nMeta); msg != nil {
+		return msg
+	}
+	return nil
 }
 
 func ingestElementBindings(
@@ -1525,7 +1572,7 @@ func ingestElementBindings(
 			true,
 			false,
 			nil,
-			asMessage(attr.I18n),
+			asMessageAny(attr.I18n),
 			&attr.SourceSpan,
 		))
 		if attr.I18n != nil {
@@ -1534,13 +1581,6 @@ func ingestElementBindings(
 	}
 
 	for _, input := range element.Inputs {
-		if i18nAttributeBindingNames[input.Name] {
-			fmt.Printf(
-				"On component %s, the binding %s is both an i18n attribute and a property. You may want to remove the property binding. This will become a compilation error in future versions of Angular.\n",
-				unit.Job.GetComponentName(),
-				input.Name,
-			)
-		}
 		bindings = append(bindings, ir.CreateBindingOp(
 			op.Xref,
 			bindingKinds[template_parser.BindingType(input.Type)],
@@ -1565,7 +1605,7 @@ func ingestElementBindings(
 	}
 
 	for _, output := range element.Outputs {
-		if output.Type == template_parser.ParsedEventTypeLegacyAnimation && (output.Target == nil || *output.Target == "") {
+		if output.Type == template_parser.ParsedEventTypeLegacyAnimation && (output.Phase == nil || *output.Phase == "") {
 			panic("Animation listener should have a phase")
 		}
 
@@ -1607,7 +1647,7 @@ func ingestElementBindings(
 					output.Name,
 					op.Tag,
 					makeListenerHandlerOps(unit, output.Handler, &output.SourceSpan),
-					output.Target, // phase
+					output.Phase,
 					output.Target, // target
 					false,
 					&output.SourceSpan,
@@ -1616,18 +1656,13 @@ func ingestElementBindings(
 		}
 	}
 
-	hasI18nMsg := false
-	for _, b := range bindings {
-		if bo, ok := b.(*ir.BindingOp); ok && bo.I18nMessage != nil {
-			hasI18nMsg = true
-			break
-		}
-	}
-	if hasI18nMsg {
-		unit.Create.Push(
-			ir.CreateI18nAttributesOp(unit.Job.AllocateXrefId(), ir.NewSlotHandle(), op.Xref),
-		)
-	}
+	// Always allocate an i18nAttributesOp xref, matching ngtsc behavior.
+	// In ngtsc, the condition `bindings.some((b) => b?.i18nMessage) !== null` is always
+	// true (JS quirk: .some() returns boolean, never null), so this op is always created.
+	// Unused ops (no actual i18n messages) are removed later by RemoveUnusedI18nAttributesOps.
+	unit.Create.Push(
+		ir.CreateI18nAttributesOp(unit.Job.AllocateXrefId(), ir.NewSlotHandle(), op.Xref),
+	)
 }
 
 func ingestTemplateBindings(
@@ -1715,7 +1750,7 @@ func ingestTemplateBindings(
 	}
 
 	for _, output := range template.Outputs {
-		if output.Type == template_parser.ParsedEventTypeLegacyAnimation && (output.Target == nil || *output.Target == "") {
+		if output.Type == template_parser.ParsedEventTypeLegacyAnimation && (output.Phase == nil || *output.Phase == "") {
 			panic("Animation listener should have a phase")
 		}
 
@@ -1764,20 +1799,13 @@ func ingestTemplateBindings(
 		}
 	}
 
-	hasI18nMsg := false
-	for _, b := range bindings {
-		if b != nil {
-			if bo, ok := b.(*ir.BindingOp); ok && bo.I18nMessage != nil {
-				hasI18nMsg = true
-				break
-			}
-		}
-	}
-	if hasI18nMsg {
-		unit.Create.Push(
-			ir.CreateI18nAttributesOp(unit.Job.AllocateXrefId(), ir.NewSlotHandle(), op.Xref),
-		)
-	}
+	// Always allocate an i18nAttributesOp xref, matching ngtsc behavior.
+	// In ngtsc, the condition `bindings.some((b) => b?.i18nMessage) !== null` is always
+	// true (JS quirk: .some() returns boolean, never null), so this op is always created.
+	// Unused ops (no actual i18n messages) are removed later by RemoveUnusedI18nAttributesOps.
+	unit.Create.Push(
+		ir.CreateI18nAttributesOp(unit.Job.AllocateXrefId(), ir.NewSlotHandle(), op.Xref),
+	)
 }
 
 func createTemplateBinding(
@@ -1852,9 +1880,9 @@ func makeListenerHandlerOps(
 	unit compilation.CompilationUnit,
 	handler expression_parser.AST,
 	handlerSpan *parse_util.ParseSourceSpan,
-) []ir.Op {
+) *ir.OpList {
 	handler = astOf(handler)
-	var handlerOps []ir.Op
+	handlerOps := ir.NewOpList()
 	var handlerExprs []expression_parser.AST
 	if chain, ok := handler.(*expression_parser.Chain); ok {
 		handlerExprs = chain.Expressions
@@ -1872,9 +1900,9 @@ func makeListenerHandlerOps(
 	expressions = expressions[:len(expressions)-1]
 
 	for _, e := range expressions {
-		handlerOps = append(handlerOps, &ir.StatementOp{Statement: output.NewExpressionStatement(e, nil, nil)})
+		handlerOps.Push(&ir.StatementOp{Statement: output.NewExpressionStatement(e, nil, nil)})
 	}
-	handlerOps = append(handlerOps, &ir.StatementOp{Statement: output.NewReturnStatement(returnExpr, nil, nil)})
+	handlerOps.Push(&ir.StatementOp{Statement: output.NewReturnStatement(returnExpr, nil, nil)})
 	return handlerOps
 }
 
@@ -1882,9 +1910,9 @@ func makeTwoWayListenerHandlerOps(
 	unit compilation.CompilationUnit,
 	handler expression_parser.AST,
 	handlerSpan *parse_util.ParseSourceSpan,
-) []ir.Op {
+) *ir.OpList {
 	handler = astOf(handler)
-	var handlerOps []ir.Op
+	handlerOps := ir.NewOpList()
 
 	if chain, ok := handler.(*expression_parser.Chain); ok {
 		if len(chain.Expressions) == 1 {
@@ -1898,8 +1926,8 @@ func makeTwoWayListenerHandlerOps(
 	eventReference := ir.NewLexicalReadExpr("$event")
 	twoWaySetExpr := ir.NewTwoWayBindingSetExpr(handlerExpr, eventReference)
 
-	handlerOps = append(handlerOps, &ir.StatementOp{Statement: output.NewExpressionStatement(twoWaySetExpr, nil, nil)})
-	handlerOps = append(handlerOps, &ir.StatementOp{Statement: output.NewReturnStatement(eventReference, nil, nil)})
+	handlerOps.Push(&ir.StatementOp{Statement: output.NewExpressionStatement(twoWaySetExpr, nil, nil)})
+	handlerOps.Push(&ir.StatementOp{Statement: output.NewReturnStatement(eventReference, nil, nil)})
 	return handlerOps
 }
 

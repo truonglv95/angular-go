@@ -5,7 +5,6 @@ import (
 	"github.com/microsoft/typescript-go/angular-packages/compiler/output"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/parse_util"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/render3"
-	"github.com/microsoft/typescript-go/angular-packages/compiler/template_parser"
 )
 
 type DeclareComponentTemplateInfo struct {
@@ -18,7 +17,7 @@ type DeclareComponentTemplateInfo struct {
 // CompileDeclareComponentFromMetadata Compiles a component declaration defined by the R3ComponentMetadata.
 func CompileDeclareComponentFromMetadata(
 	meta render3.R3ComponentMetadata[render3.R3TemplateDependencyMetadata],
-	template template_parser.ParsedTemplate,
+	template render3.ParsedTemplate,
 	additionalTemplateInfo DeclareComponentTemplateInfo,
 ) render3.R3CompiledExpression {
 	definitionMap := CreateComponentDefinitionMap(meta, template, additionalTemplateInfo)
@@ -35,14 +34,13 @@ func CompileDeclareComponentFromMetadata(
 
 func CreateComponentDefinitionMap(
 	meta render3.R3ComponentMetadata[render3.R3TemplateDependencyMetadata],
-	template template_parser.ParsedTemplate,
+	template render3.ParsedTemplate,
 	templateInfo DeclareComponentTemplateInfo,
 ) *render3.DefinitionMap {
 	definitionMap := CreateDirectiveDefinitionMap(meta.R3DirectiveMetadata)
 	blockVisitor := &BlockPresenceVisitor{}
 	blockVisitor.Impl = blockVisitor
 
-	// Assuming render3.VisitAll exists
 	var r3nodes []render3.Node
 	for _, n := range template.Nodes {
 		if r3node, ok := n.(render3.Node); ok {
@@ -129,7 +127,7 @@ func CreateComponentDefinitionMap(
 }
 
 func getTemplateExpression(
-	template template_parser.ParsedTemplate,
+	template render3.ParsedTemplate,
 	templateInfo DeclareComponentTemplateInfo,
 ) output.Expression {
 	if templateInfo.InlineTemplateLiteralExpression != nil {

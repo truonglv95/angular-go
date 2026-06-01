@@ -533,12 +533,15 @@ func (e *PureFunctionParameterExpr) Clone() output.Expression {
 // PipeBindingExpr calls a pipe with a fixed number of arguments.
 type PipeBindingExpr struct {
 	irExpressionBase
-	Target     XrefId
+	TargetXref XrefId
 	TargetSlot *SlotHandle
 	PipeName   string
 	Args       []output.Expression
 	VarOffset  *int
 }
+
+func (e *PipeBindingExpr) Target() XrefId { return e.TargetXref } // Named Target() to match trait
+func (e *PipeBindingExpr) SourceSpan() *parse_util.ParseSourceSpan { return nil }
 
 func (e *PipeBindingExpr) ExprKind() ExpressionKind { return ExpressionKindPipeBinding }
 func (e *PipeBindingExpr) TransformInternalExpressions(transform ExpressionTransform, flags VisitorContextFlag) {
@@ -555,7 +558,7 @@ func (e *PipeBindingExpr) Clone() output.Expression {
 		}
 	}
 	res := &PipeBindingExpr{
-		Target:     e.Target,
+		TargetXref: e.TargetXref,
 		TargetSlot: e.TargetSlot,
 		PipeName:   e.PipeName,
 		Args:       args,
@@ -576,7 +579,7 @@ func (e *PipeBindingExpr) SetVarOffset(n int) { e.VarOffset = &n }
 // NewPipeBindingExpr creates a PipeBindingExpr.
 func NewPipeBindingExpr(target XrefId, targetSlot *SlotHandle, name string, args []output.Expression) *PipeBindingExpr {
 	e := &PipeBindingExpr{
-		Target:     target,
+		TargetXref: target,
 		TargetSlot: targetSlot,
 		PipeName:   name,
 		Args:       args,
@@ -592,7 +595,7 @@ func NewPipeBindingExpr(target XrefId, targetSlot *SlotHandle, name string, args
 // PipeBindingVariadicExpr calls a pipe with a variadic number of arguments.
 type PipeBindingVariadicExpr struct {
 	irExpressionBase
-	Target     XrefId
+	TargetXref XrefId
 	TargetSlot *SlotHandle
 	PipeName   string
 	Args       output.Expression
@@ -600,15 +603,16 @@ type PipeBindingVariadicExpr struct {
 	VarOffset  *int
 }
 
-func (e *PipeBindingVariadicExpr) ExprKind() ExpressionKind {
-	return ExpressionKindPipeBindingVariadic
-}
+func (e *PipeBindingVariadicExpr) Target() XrefId { return e.TargetXref }
+func (e *PipeBindingVariadicExpr) SourceSpan() *parse_util.ParseSourceSpan { return nil }
+
+func (e *PipeBindingVariadicExpr) ExprKind() ExpressionKind { return ExpressionKindPipeBindingVariadic }
 func (e *PipeBindingVariadicExpr) TransformInternalExpressions(transform ExpressionTransform, flags VisitorContextFlag) {
 	e.Args = TransformExpressionsInExpression(e.Args, transform, flags)
 }
 func (e *PipeBindingVariadicExpr) Clone() output.Expression {
 	res := &PipeBindingVariadicExpr{
-		Target:     e.Target,
+		TargetXref: e.TargetXref,
 		TargetSlot: e.TargetSlot,
 		PipeName:   e.PipeName,
 		Args:       e.Args.Clone(),
@@ -626,6 +630,19 @@ func (e *PipeBindingVariadicExpr) GetVarOffset() int {
 	return *e.VarOffset
 }
 func (e *PipeBindingVariadicExpr) SetVarOffset(n int) { e.VarOffset = &n }
+
+// NewPipeBindingVariadicExpr creates a PipeBindingVariadicExpr.
+func NewPipeBindingVariadicExpr(target XrefId, targetSlot *SlotHandle, name string, args output.Expression, numArgs int) *PipeBindingVariadicExpr {
+	e := &PipeBindingVariadicExpr{
+		TargetXref: target,
+		TargetSlot: targetSlot,
+		PipeName:   name,
+		Args:       args,
+		NumArgs:    numArgs,
+	}
+	e.Self = e
+	return e
+}
 
 // --------
 // SafePropertyReadExpr
@@ -1030,6 +1047,77 @@ func TransformExpressionsInExpression(expr output.Expression, transform Expressi
 	} else if interp, ok := expr.(*Interpolation); ok {
 		for i, e := range interp.Expressions {
 			interp.Expressions[i] = TransformExpressionsInExpression(e, transform, flags)
+		}
+	} else {
+		// Traverse standard output.Expression nodes.
+		switch e := expr.(type) {
+		case *output.InvokeFunctionExpr:
+			e.Fn = TransformExpressionsInExpression(e.Fn, transform, flags)
+			for i, arg := range e.Args {
+				e.Args[i] = TransformExpressionsInExpression(arg, transform, flags)
+			}
+		case *output.ReadPropExpr:
+			e.Receiver = TransformExpressionsInExpression(e.Receiver, transform, flags)
+		case *output.ReadKeyExpr:
+			e.Receiver = TransformExpressionsInExpression(e.Receiver, transform, flags)
+			e.Index = TransformExpressionsInExpression(e.Index, transform, flags)
+		case *output.BinaryOperatorExpr:
+			e.Lhs = TransformExpressionsInExpression(e.Lhs, transform, flags)
+			e.Rhs = TransformExpressionsInExpression(e.Rhs, transform, flags)
+		case *output.UnaryOperatorExpr:
+			e.Expr = TransformExpressionsInExpression(e.Expr, transform, flags)
+		case *output.ParenthesizedExpr:
+			e.Expr = TransformExpressionsInExpression(e.Expr, transform, flags)
+		case *output.ConditionalExpr:
+			e.Condition = TransformExpressionsInExpression(e.Condition, transform, flags)
+			e.TrueCase = TransformExpressionsInExpression(e.TrueCase, transform, flags)
+			if e.FalseCase != nil {
+				e.FalseCase = TransformExpressionsInExpression(e.FalseCase, transform, flags)
+			}
+		case *output.NotExpr:
+			e.Condition = TransformExpressionsInExpression(e.Condition, transform, flags)
+		case *output.SpreadElementExpr:
+			e.Expression = TransformExpressionsInExpression(e.Expression, transform, flags)
+		case *output.TypeofExpr:
+			e.Expr = TransformExpressionsInExpression(e.Expr, transform, flags)
+		case *output.VoidExpr:
+			e.Expr = TransformExpressionsInExpression(e.Expr, transform, flags)
+		case *output.LiteralArrayExpr:
+			for i, entry := range e.Entries {
+				e.Entries[i] = TransformExpressionsInExpression(entry, transform, flags)
+			}
+		case *output.LiteralMapExpr:
+			for _, entry := range e.Entries {
+				switch assign := entry.(type) {
+				case *output.LiteralMapPropertyAssignment:
+					assign.Value = TransformExpressionsInExpression(assign.Value, transform, flags)
+				case *output.LiteralMapSpreadAssignment:
+					assign.Expression = TransformExpressionsInExpression(assign.Expression, transform, flags)
+				}
+			}
+		case *output.CommaExpr:
+			for i, part := range e.Parts {
+				e.Parts[i] = TransformExpressionsInExpression(part, transform, flags)
+			}
+		case *output.InstantiateExpr:
+			e.ClassExpr = TransformExpressionsInExpression(e.ClassExpr, transform, flags)
+			for i, arg := range e.Args {
+				e.Args[i] = TransformExpressionsInExpression(arg, transform, flags)
+			}
+		case *output.TaggedTemplateLiteralExpr:
+			e.Tag = TransformExpressionsInExpression(e.Tag, transform, flags)
+		case *output.FunctionExpr:
+			for _, stmt := range e.Statements {
+				TransformExpressionsInStatement(stmt, transform, flags)
+			}
+		case *output.ArrowFunctionExpr:
+			if stmts, ok := e.Body.([]output.Statement); ok {
+				for _, stmt := range stmts {
+					TransformExpressionsInStatement(stmt, transform, flags)
+				}
+			} else if expr, ok := e.Body.(output.Expression); ok {
+				e.Body = TransformExpressionsInExpression(expr, transform, flags)
+			}
 		}
 	}
 	return transform(expr, flags)

@@ -78,6 +78,11 @@ func TransformTwoWayBindingSet(job compilation.CompilationJob) {
 				target := twbs.TargetExpr
 				value := twbs.Value
 
+				// If the target is an assignment (BinaryOperatorAssign), extract its LHS as the read expression.
+				if binOp, ok := target.(*output.BinaryOperatorExpr); ok && binOp.Operator == output.BinaryOperatorAssign {
+					target = binOp.Lhs
+				}
+
 				switch t := target.(type) {
 				case *output.ReadPropExpr:
 					// twoWayBindingSet(target, value) || (target = value)

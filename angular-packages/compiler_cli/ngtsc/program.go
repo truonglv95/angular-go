@@ -1,87 +1,51 @@
 package ngtsc
 
 import (
-	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/core/src"
+	"context"
+
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/core"
+	"github.com/microsoft/typescript-go/internal/compiler"
+	"github.com/microsoft/typescript-go/internal/tsoptions"
 )
 
 type NgtscProgram struct {
-	compiler               *src.NgCompiler
-	host                   *src.NgCompilerHost
-	options                any // NgCompilerOptions
-	tsProgram              any
-	reuseTsProgram         any
-	closureCompilerEnabled bool
+	compiler  *core.NgCompiler
+	tsProgram *compiler.Program
 }
 
 func NewNgtscProgram(
 	rootNames []string,
-	options any, // NgCompilerOptions
-	delegateHost any,
-	oldProgram *NgtscProgram,
-) *NgtscProgram {
-	// 1:1 structural setup
-	return &NgtscProgram{}
+	tsConfig *tsoptions.ParsedCommandLine,
+	delegateHost compiler.CompilerHost,
+) (*NgtscProgram, error) {
+	// Create the TypeScript program inside NgtscProgram
+	tsProgram := compiler.NewProgram(compiler.ProgramOptions{
+		Config: tsConfig,
+		Host:   delegateHost,
+	})
+
+	ngCompiler, err := core.NewNgCompiler(tsProgram)
+	if err != nil {
+		return nil, err
+	}
+
+	return &NgtscProgram{
+		compiler:  ngCompiler,
+		tsProgram: tsProgram,
+	}, nil
 }
 
-func (p *NgtscProgram) GetTsProgram() any {
+func (p *NgtscProgram) GetTsProgram() *compiler.Program {
 	return p.tsProgram
 }
 
-func (p *NgtscProgram) GetReuseTsProgram() any {
-	return p.reuseTsProgram
-}
-
-func (p *NgtscProgram) GetTsOptionDiagnostics(cancellationToken any) []any {
+func (p *NgtscProgram) LoadNgStructureAsync(ctx context.Context) error {
+	p.compiler.AnalyzeSync()
+	p.compiler.Resolve()
 	return nil
 }
 
-func (p *NgtscProgram) GetTsSyntacticDiagnostics(sourceFile any, cancellationToken any) []any {
-	// ...
-	return nil
-}
-
-func (p *NgtscProgram) GetTsSemanticDiagnostics(sourceFile any, cancellationToken any) []any {
-	// ...
-	return nil
-}
-
-func (p *NgtscProgram) GetNgOptionDiagnostics(cancellationToken any) []any {
-	return nil
-}
-
-func (p *NgtscProgram) GetNgStructuralDiagnostics(cancellationToken any) []any {
-	return nil
-}
-
-func (p *NgtscProgram) GetNgSemanticDiagnostics(fileName string, cancellationToken any) []any {
-	return nil
-}
-
-func (p *NgtscProgram) LoadNgStructureAsync() error {
-	return p.compiler.AnalyzeAsync()
-}
-
-func (p *NgtscProgram) ListLazyRoutes(entryRoute string) []any {
-	return nil
-}
-
-func (p *NgtscProgram) EmitXi18n() {
-	// p.compiler.xi18n(ctx)
-}
-
-func (p *NgtscProgram) Emit(opts any) any {
-	// p.compiler.perfRecorder.inPhase(...)
-	return nil
-}
-
-func (p *NgtscProgram) GetIndexedComponents() map[any]any {
-	return nil // p.compiler.getIndexedComponents()
-}
-
-func (p *NgtscProgram) GetApiDocumentation(entryPoint string, privateModules map[string]struct{}) any {
-	return nil // p.compiler.getApiDocumentation(...)
-}
-
-func (p *NgtscProgram) GetEmittedSourceFiles() map[string]any {
-	panic("Method not implemented.")
+func (p *NgtscProgram) Emit(ctx context.Context, opts compiler.EmitOptions) *compiler.EmitResult {
+	p.compiler.PrepareEmit()
+	return p.tsProgram.Emit(ctx, opts)
 }

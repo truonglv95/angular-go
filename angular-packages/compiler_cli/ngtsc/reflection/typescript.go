@@ -1,6 +1,7 @@
 package reflection
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/microsoft/typescript-go/internal/ast"
@@ -469,7 +470,11 @@ func (h *TypeScriptReflectionHost) GetDeclarationOfIdentifier(id *ast.Node) *Dec
 	if symbol == nil {
 		return nil
 	}
-	return h.getDeclarationOfSymbol(symbol, id)
+	decl := h.getDeclarationOfSymbol(symbol, id)
+	if decl != nil && decl.Node != nil {
+		fmt.Printf("GetDeclarationOfIdentifier %s -> %d\n", id.AsIdentifier().Text, decl.Node.Kind)
+	}
+	return decl
 }
 
 // GetDefinitionOfFunction returns the definition of a function-like node.
@@ -686,6 +691,7 @@ func (h *TypeScriptReflectionHost) getDeclarationOfSymbol(symbol *ast.Symbol, or
 			targetName = spec.Name()
 		}
 		targetSymbol := h.checker.GetSymbolAtLocation(targetName)
+		fmt.Printf("getDeclarationOfSymbol: ExportSpecifier targetName=%s, targetSymbol=%v\n", targetName.AsIdentifier().Text, targetSymbol)
 		if targetSymbol == nil {
 			return nil
 		}

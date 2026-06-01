@@ -6,12 +6,6 @@ import (
 	"github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline/ir"
 )
 
-// repeaterVarNamesData holds the variable names for a repeater's track expression.
-type repeaterVarNamesData struct {
-	IndexNames map[string]bool // $index and aliases
-	Implicit   string          // $item name
-}
-
 // GenerateTrackVariables replaces LexicalReadExprs in track expressions with $index/$item reads.
 func GenerateTrackVariables(job compilation.CompilationJob) {
 	for _, unit := range job.GetUnits() {
@@ -24,18 +18,21 @@ func GenerateTrackVariables(job compilation.CompilationJob) {
 				continue
 			}
 
-			// Get varNames if it's a repeaterVarNamesData.
-			varNames, _ := repeater.VarNames.(*repeaterVarNamesData)
+			// Get varNames.
+			varNames, ok := repeater.VarNames.(struct {
+				Index    map[string]bool
+				Implicit string
+			})
 
 			repeater.Track = ir.TransformExpressionsInExpression(repeater.Track, func(expr output.Expression, flags ir.VisitorContextFlag) output.Expression {
-				lex, ok := expr.(*ir.LexicalReadExpr)
-				if !ok {
+				lex, isLex := expr.(*ir.LexicalReadExpr)
+				if !isLex {
 					return expr
 				}
-				if varNames != nil && varNames.IndexNames[lex.Name] {
+				if ok && varNames.Index[lex.Name] {
 					return output.NewReadVarExpr("$index", nil, nil, nil)
 				}
-				if varNames != nil && lex.Name == varNames.Implicit {
+				if ok && lex.Name == varNames.Implicit {
 					return output.NewReadVarExpr("$item", nil, nil, nil)
 				}
 				return expr

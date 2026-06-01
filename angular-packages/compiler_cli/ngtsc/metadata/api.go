@@ -16,11 +16,14 @@ const (
 
 // Reference represents a reference to a declaration node.
 type Reference struct {
+	Name string
 	Node *ast.Node
+	OwningModule string
 }
 
 // DirectiveMeta represents metadata collected for a directive or component.
 type DirectiveMeta struct {
+	Name         string
 	Kind         MetaKind
 	Ref          Reference
 	Selector     string
@@ -35,6 +38,7 @@ type DirectiveMeta struct {
 
 // NgModuleMeta represents metadata collected for an NgModule.
 type NgModuleMeta struct {
+	Name         string
 	Ref          Reference
 	Declarations []Reference
 	Imports      []Reference

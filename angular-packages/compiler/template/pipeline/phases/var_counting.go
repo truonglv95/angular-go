@@ -90,10 +90,9 @@ func CountVariables(job compilation.CompilationJob) {
 				}
 			})
 		}
-		
+
 		varCountCopy := varCount
 		unit.SetVars(&varCountCopy)
-		println("var_counting: unit xref", unit.GetXref(), "varCount =", varCountCopy)
 	}
 
 	if cj, ok := job.(*compilation.ComponentCompilationJob); ok {
@@ -102,7 +101,6 @@ func CountVariables(job compilation.CompilationJob) {
 				switch op.Kind() {
 				case ir.OpKindTemplate, ir.OpKindRepeaterCreate, ir.OpKindConditionalCreate, ir.OpKindConditionalBranchCreate:
 					if xg, ok2 := op.(interface{ GetXref() ir.XrefId }); ok2 {
-						println("var_counting: op", op.Kind(), "xref", xg.GetXref())
 						if childView, exists := cj.Views[xg.GetXref()]; exists && childView.GetVars() != nil {
 							if setter, ok3 := op.(interface{ SetVars(int) }); ok3 {
 								setter.SetVars(*childView.GetVars())
@@ -119,12 +117,14 @@ func varsUsedByOp(op ir.Op) int {
 	switch op.Kind() {
 	case ir.OpKindI18nExpression, ir.OpKindConditional, ir.OpKindDeferWhen, ir.OpKindStoreLet:
 		return 1
-	case ir.OpKindProperty, ir.OpKindDomProperty, ir.OpKindAttribute:
+	case ir.OpKindProperty, ir.OpKindDomProperty, ir.OpKindAttribute, ir.OpKindTwoWayProperty:
 		var expr any
 		if propOp, ok := op.(*ir.PropertyOp); ok {
 			expr = propOp.Expression
 		} else if attrOp, ok := op.(*ir.AttributeOp); ok {
 			expr = attrOp.Expression
+		} else if twoWayOp, ok := op.(*ir.TwoWayPropertyOp); ok {
+			expr = twoWayOp.Expression
 		}
 		if interp, ok := expr.(*ir.Interpolation); ok {
 			return 1 + len(interp.Expressions)
@@ -133,10 +133,18 @@ func varsUsedByOp(op ir.Op) int {
 	case ir.OpKindStyleProp, ir.OpKindClassProp, ir.OpKindStyleMap, ir.OpKindClassMap:
 		slots := 2
 		var expr any
-		if sp, ok := op.(*ir.StylePropOp); ok { expr = sp.Expression }
-		if cp, ok := op.(*ir.ClassPropOp); ok { expr = cp.Expression }
-		if sm, ok := op.(*ir.StyleMapOp); ok { expr = sm.Expression }
-		if cm, ok := op.(*ir.ClassMapOp); ok { expr = cm.Expression }
+		if sp, ok := op.(*ir.StylePropOp); ok {
+			expr = sp.Expression
+		}
+		if cp, ok := op.(*ir.ClassPropOp); ok {
+			expr = cp.Expression
+		}
+		if sm, ok := op.(*ir.StyleMapOp); ok {
+			expr = sm.Expression
+		}
+		if cm, ok := op.(*ir.ClassMapOp); ok {
+			expr = cm.Expression
+		}
 		if interp, ok := expr.(*ir.Interpolation); ok {
 			slots += len(interp.Expressions)
 		}

@@ -210,8 +210,8 @@ func TransformExpressionsInOp(op Op, transform func(expr output.Expression, flag
 			}
 		}
 	case *TwoWayListenerOp:
-		if ops, ok := o.HandlerOps.(*OpList); ok && ops != nil {
-			for _, innerOp := range ops.Ops {
+		if o.HandlerOps != nil {
+			for _, innerOp := range o.HandlerOps.Ops {
 				TransformExpressionsInOp(innerOp, transform, flags|VisitorContextFlagInChildOperation)
 			}
 		}

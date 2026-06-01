@@ -155,27 +155,34 @@ func CompileNgModule(meta R3NgModuleMetadata) R3CompiledExpression {
 // Used in JIT mode.
 func CompileNgModuleDeclarationExpression(meta R3NgModuleDeclarationFacade) output.Expression {
 	definitionMap := NewDefinitionMap()
-	definitionMap.Set("type", output.NewLiteralExpr(meta.Type, nil, nil, nil))
+	definitionMap.Set("type", ngModuleDeclarationExpression(meta.Type))
 	if meta.Bootstrap != nil {
-		definitionMap.Set("bootstrap", output.NewLiteralExpr(meta.Bootstrap, nil, nil, nil))
+		definitionMap.Set("bootstrap", ngModuleDeclarationExpression(meta.Bootstrap))
 	}
 	if meta.Declarations != nil {
-		definitionMap.Set("declarations", output.NewLiteralExpr(meta.Declarations, nil, nil, nil))
+		definitionMap.Set("declarations", ngModuleDeclarationExpression(meta.Declarations))
 	}
 	if meta.Imports != nil {
-		definitionMap.Set("imports", output.NewLiteralExpr(meta.Imports, nil, nil, nil))
+		definitionMap.Set("imports", ngModuleDeclarationExpression(meta.Imports))
 	}
 	if meta.Exports != nil {
-		definitionMap.Set("exports", output.NewLiteralExpr(meta.Exports, nil, nil, nil))
+		definitionMap.Set("exports", ngModuleDeclarationExpression(meta.Exports))
 	}
 	if meta.Schemas != nil {
-		definitionMap.Set("schemas", output.NewLiteralExpr(meta.Schemas, nil, nil, nil))
+		definitionMap.Set("schemas", ngModuleDeclarationExpression(meta.Schemas))
 	}
 	if meta.Id != nil {
-		definitionMap.Set("id", output.NewLiteralExpr(meta.Id, nil, nil, nil))
+		definitionMap.Set("id", ngModuleDeclarationExpression(meta.Id))
 	}
 	return ImportExpr(*Identifiers.DefineNgModule).
 		CallFn([]output.Expression{definitionMap.ToLiteralMap()}, nil, false, nil)
+}
+
+func ngModuleDeclarationExpression(value interface{}) output.Expression {
+	if expr, ok := value.(output.Expression); ok {
+		return expr
+	}
+	return output.NewLiteralExpr(value, nil, nil, nil)
 }
 
 // R3NgModuleDeclarationFacade corresponds to R3DeclareNgModuleFacade from compiler_facade_interface.ts.

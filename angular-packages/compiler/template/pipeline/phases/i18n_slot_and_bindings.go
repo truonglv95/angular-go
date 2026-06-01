@@ -47,7 +47,7 @@ func AssignI18nSlotDependencies(job compilation.CompilationJob) {
 				continue
 			}
 			if state != nil {
-				state.lastSlotConsumer = trait.Xref()
+				state.lastSlotConsumer = trait.GetXref()
 			}
 
 			for {
@@ -69,14 +69,14 @@ func AssignI18nSlotDependencies(job compilation.CompilationJob) {
 
 				hasDifferentTarget := false
 				if depOp, ok := updateOp.(ir.DependsOnSlotContextOpTrait); ok {
-					if depOp.GetTarget() != trait.Xref() {
+					if depOp.GetTarget() != trait.GetXref() {
 						hasDifferentTarget = true
 					}
 				} else if updateOp.Kind() == ir.OpKindStatement || updateOp.Kind() == ir.OpKindVariable {
 					ir.VisitExpressionsInOp(updateOp, func(expr ir.Expression) {
 						if !hasDifferentTarget {
 							if depExpr, ok2 := expr.(ir.DependsOnSlotContextOpTrait); ok2 {
-								if depExpr.GetTarget() != trait.Xref() {
+								if depExpr.GetTarget() != trait.GetXref() {
 									hasDifferentTarget = true
 								}
 							}
