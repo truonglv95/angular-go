@@ -35,7 +35,9 @@ var EmitTemplateFn func(job *compilation.ComponentCompilationJob, pool ConstantP
 
 type Type any
 type Statement any
-type ConstantPool any
+type ConstantPool interface {
+	GetConstLiteral(literal output.Expression, forceShared bool) output.Expression
+}
 type BindingParser any
 
 type HostBindingInput struct {
@@ -137,7 +139,6 @@ func baseDirectiveFields(
 				flags |= 4 // InputFlags.IsRequired
 			}
 
-			
 			if classPropName == inputMeta.BindingPropertyName && flags == 0 {
 				valueExpr = LiteralExpr(classPropName)
 			} else {
@@ -147,7 +148,7 @@ func baseDirectiveFields(
 					LiteralExpr(classPropName),
 				})
 			}
-			inputProps = append(inputProps, output.NewLiteralMapPropertyAssignment(classPropName, valueExpr, true))
+			inputProps = append(inputProps, output.NewLiteralMapPropertyAssignment(classPropName, valueExpr, false))
 		}
 		definitionMap.Set("inputs", output.NewLiteralMapExpr(inputProps, nil, nil, nil))
 	} else {
@@ -157,7 +158,7 @@ func baseDirectiveFields(
 	if len(meta.Outputs) > 0 {
 		var outputProps []output.LiteralMapEntry
 		for classPropName, bindingPropName := range meta.Outputs {
-			outputProps = append(outputProps, output.NewLiteralMapPropertyAssignment(classPropName, LiteralExpr(bindingPropName), true))
+			outputProps = append(outputProps, output.NewLiteralMapPropertyAssignment(classPropName, LiteralExpr(bindingPropName), false))
 		}
 		definitionMap.Set("outputs", output.NewLiteralMapExpr(outputProps, nil, nil, nil))
 	} else {
@@ -583,7 +584,7 @@ func createHostBindingsFunction(
 	}
 
 	var hostAttrsArray []output.Expression
-	
+
 	if hostBindingsMetadata.SpecialAttributes.StyleAttr != nil {
 		hostAttrsArray = append(hostAttrsArray, output.NewLiteralExpr("style", nil, nil, nil))
 		hostAttrsArray = append(hostAttrsArray, output.NewLiteralExpr(*hostBindingsMetadata.SpecialAttributes.StyleAttr, nil, nil, nil))
@@ -603,7 +604,7 @@ func createHostBindingsFunction(
 			hostAttrsArray = append(hostAttrsArray, hostBindingsMetadata.Attributes[k].(output.Expression))
 		}
 	}
-	
+
 	if len(hostAttrsArray) > 0 {
 		definitionMap.Set("hostAttrs", output.NewLiteralArrayExpr(hostAttrsArray, nil, nil, nil))
 	}
@@ -812,7 +813,36 @@ func CreateHostDirectivesMappingArray(mapping map[string]string) output.Expressi
 }
 
 func CompileDeferResolverFunction(meta R3DeferResolverFunctionMetadata) output.Expression {
-	return nil
+	var depExprs []output.Expression
+
+	if deps, ok := meta.Dependencies.([]R3DeferPerBlockDependency); ok {
+		for _, dep := range deps {
+			if dep.IsDeferrable && dep.ImportPath != nil {
+				// import("importPath").then(m => m.SymbolName)
+				dynamicImport := output.NewDynamicImportExpr(*dep.ImportPath, nil, nil, nil)
+
+				mVar := output.NewReadVarExpr("m", nil, nil, nil)
+				var returnExpr output.Expression = mVar.Prop(dep.SymbolName, nil)
+				if dep.IsDefaultImport {
+					returnExpr = mVar.Prop("default", nil)
+				}
+
+				fnParam := &output.FnParam{Name: "m", Type: nil}
+				thenFn := output.NewArrowFunctionExpr([]*output.FnParam{fnParam}, returnExpr, nil, nil, nil)
+
+				promise := dynamicImport.Prop("then", nil).CallFn([]output.Expression{thenFn}, nil, false, nil)
+				depExprs = append(depExprs, promise)
+			} else {
+				// fallback for eager
+				typeRef := dep.TypeReference.(output.Expression)
+				promiseResolve := output.NewReadVarExpr("Promise", nil, nil, nil).Prop("resolve", nil).CallFn([]output.Expression{typeRef}, nil, false, nil)
+				depExprs = append(depExprs, promiseResolve)
+			}
+		}
+	}
+
+	arrLiteral := output.NewLiteralArrayExpr(depExprs, nil, nil, nil)
+	return output.NewArrowFunctionExpr(nil, arrLiteral, nil, nil, nil)
 }
 
 func arrayToLiteral(val any) output.Expression {

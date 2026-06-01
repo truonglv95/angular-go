@@ -281,6 +281,10 @@ func (h *PipeDecoratorHandler) CompileFull(node *ast.ClassDeclaration, analysisD
 func extractDependenciesPipe(refHost reflection.ReflectionHost, classDecl *ast.Node) interface{} {
 	ctorParams := refHost.GetConstructorParameters(classDecl)
 	if ctorParams == nil {
+		if refHost.HasBaseClass(classDecl) {
+			return nil
+		}
+		return []render3.R3DependencyMetadata{}
 		return nil
 	}
 

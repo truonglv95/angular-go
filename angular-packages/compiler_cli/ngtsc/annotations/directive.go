@@ -177,8 +177,9 @@ func (h *DirectiveDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 											PropertyName: propName,
 											First: isFirst,
 											Predicate: []string{predicate},
-											Descendants: !isView,
+											Descendants: isView || id.Text == "ContentChildren", // ViewChild/Children and ContentChildren are descendants: true by default
 											Static: isStatic,
+											EmitDistinctChangesOnly: true,
 										}
 										
 										if isView {
@@ -598,6 +599,10 @@ func (h *DirectiveDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 func extractDependenciesDir(refHost reflection.ReflectionHost, classDecl *ast.Node) interface{} {
 	ctorParams := refHost.GetConstructorParameters(classDecl)
 	if ctorParams == nil {
+		if refHost.HasBaseClass(classDecl) {
+			return nil
+		}
+		return []render3.R3DependencyMetadata{}
 		return nil
 	}
 

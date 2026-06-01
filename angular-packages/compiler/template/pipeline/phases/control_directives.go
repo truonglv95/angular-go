@@ -170,12 +170,6 @@ func isEligibleControlProperty(name string, kind ir.OpKind) bool {
 	switch name {
 	case "formField":
 		return kind == ir.OpKindProperty
-	case "formControl":
-		return kind == ir.OpKindProperty
-	case "formControlName":
-		return kind == ir.OpKindProperty || kind == ir.OpKindAttribute
-	case "ngModel":
-		return kind == ir.OpKindAttribute || kind == ir.OpKindProperty || kind == ir.OpKindTwoWayProperty
 	}
 	return false
 }

@@ -36,7 +36,7 @@ func transformDollarEventInList(ops *ir.OpList) {
 // RemoveIllegalLetReferences detects illegal @let forward references and replaces them with undefined.
 func RemoveIllegalLetReferences(job compilation.CompilationJob) {
 	for _, unit := range job.GetUnits() {
-		for _, op := range unit.GetUpdate().Elements() {
+		for i, op := range unit.GetUpdate().Elements() {
 			varOp, ok := op.(*ir.VariableOp)
 			if !ok {
 				continue
@@ -49,15 +49,14 @@ func RemoveIllegalLetReferences(job compilation.CompilationJob) {
 			}
 			name := varOp.Variable.Identifier
 			// Walk backwards through ops before this one.
-			current := op.Prev()
-			for current != nil && current.Kind() != ir.OpKindListEnd {
+			for j := i - 1; j >= 0; j-- {
+				current := unit.GetUpdate().Elements()[j]
 				ir.TransformExpressionsInOp(current, func(expr output.Expression, flags ir.VisitorContextFlag) output.Expression {
 					if lex, ok3 := expr.(*ir.LexicalReadExpr); ok3 && lex.Name == name {
 						return output.NewLiteralExpr(nil, nil, nil, nil) // undefined
 					}
 					return expr
 				}, ir.VisitorContextFlagNone)
-				current = current.Prev()
 			}
 		}
 	}

@@ -178,6 +178,7 @@ type R3DeferPerBlockDependency struct {
 type R3DeferPerComponentDependency struct {
 	SymbolName      string
 	ImportPath      string
+	LocalName       string
 	IsDefaultImport bool
 }
 

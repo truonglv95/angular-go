@@ -1,9 +1,8 @@
 package metadata
 
 import (
-	"fmt"
-	"github.com/microsoft/typescript-go/internal/checker"
 	"github.com/microsoft/typescript-go/internal/ast"
+	"github.com/microsoft/typescript-go/internal/checker"
 	"github.com/microsoft/typescript-go/internal/core"
 )
 
@@ -86,11 +85,6 @@ func (r *DtsMetadataReader) GetDirectiveMetadata(classNode *ast.Node) *Directive
 }
 
 func (r *DtsMetadataReader) GetNgModuleMetadata(classNode *ast.Node) *NgModuleMeta {
-	kind := -1
-	if classNode != nil {
-		kind = int(classNode.Kind)
-	}
-	fmt.Printf("GetNgModuleMetadata checking node %p, kind=%d\n", classNode, kind)
 	if classNode == nil || classNode.Kind != ast.KindClassDeclaration {
 		return nil
 	}
@@ -101,7 +95,6 @@ func (r *DtsMetadataReader) GetNgModuleMetadata(classNode *ast.Node) *NgModuleMe
 		}
 		prop := member.AsPropertyDeclaration()
 		propName := prop.Name().AsIdentifier().Text
-		fmt.Printf("GetNgModuleMetadata found prop %s\n", propName)
 		if propName == "ɵmod" {
 			typeNode := prop.Type
 			if typeNode == nil || typeNode.Kind != ast.KindTypeReference {
@@ -217,7 +210,7 @@ func (r *DtsMetadataReader) resolveOwningModule(exprName *ast.Node) string {
 	if sourceFile == nil {
 		return ""
 	}
-	
+
 	// Scan top level statements for import declaration matching the namespace
 	for _, stmt := range sourceFile.Statements.Nodes {
 		if stmt.Kind == ast.KindImportDeclaration {
@@ -257,23 +250,25 @@ func (r *DtsMetadataReader) parseReferencesList(node *ast.Node) []Reference {
 			if elem.Kind == ast.KindTypeQuery {
 				exprName := elem.AsTypeQueryNode().ExprName
 				owningModule := r.resolveOwningModule(exprName)
-				
+
 				var targetNode *ast.Node = exprName
-				sym := r.checker.GetSymbolAtLocation(exprName)
-				if sym != nil {
-					for sym.Flags&ast.SymbolFlagsAlias != 0 {
-						sym = r.checker.GetAliasedSymbol(sym)
-					}
-					if sym.ValueDeclaration != nil {
-						targetNode = sym.ValueDeclaration
-					} else if len(sym.Declarations) > 0 {
-						targetNode = sym.Declarations[0]
+				if r.checker != nil {
+					sym := r.checker.GetSymbolAtLocation(exprName)
+					if sym != nil {
+						for sym.Flags&ast.SymbolFlagsAlias != 0 {
+							sym = r.checker.GetAliasedSymbol(sym)
+						}
+						if sym.ValueDeclaration != nil {
+							targetNode = sym.ValueDeclaration
+						} else if len(sym.Declarations) > 0 {
+							targetNode = sym.Declarations[0]
+						}
 					}
 				}
-				
+
 				refs = append(refs, Reference{
-					Node: targetNode, 
-					Name: r.extractName(exprName),
+					Node:         targetNode,
+					Name:         r.extractName(exprName),
 					OwningModule: owningModule,
 				})
 			} else {
@@ -286,8 +281,8 @@ func (r *DtsMetadataReader) parseReferencesList(node *ast.Node) []Reference {
 		exprName := node.AsTypeQueryNode().ExprName
 		owningModule := r.resolveOwningModule(exprName)
 		refs = append(refs, Reference{
-			Node: exprName,
-			Name: r.extractName(exprName),
+			Node:         exprName,
+			Name:         r.extractName(exprName),
 			OwningModule: owningModule,
 		})
 	}

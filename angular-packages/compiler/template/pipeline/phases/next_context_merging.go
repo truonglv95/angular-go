@@ -46,33 +46,46 @@ func mergeNextContextsInOps(ops *ir.OpList) {
 		mergeSteps := nextCtx.Steps
 
 		tryToMerge := true
-		candidate := op.Next()
-		for candidate != nil && candidate.Kind() != ir.OpKindListEnd && tryToMerge {
-			// Visit expressions in the candidate op (without flags - simplified).
-			// We check the expressions manually to avoid in-child operation visits.
-			ir.VisitExpressionsInOp(candidate, func(expr ir.Expression) {
-				if !tryToMerge {
-					return
+		candidates := ops.Elements()
+		start := -1
+		for i, candidate := range candidates {
+			if candidate == op {
+				start = i + 1
+				break
+			}
+		}
+		if start < 0 {
+			continue
+		}
+		for _, candidate := range candidates[start:] {
+			if !tryToMerge {
+				break
+			}
+			ir.TransformExpressionsInOp(candidate, func(expr output.Expression, flags ir.VisitorContextFlag) output.Expression {
+				irExpr, ok := expr.(ir.Expression)
+				if !ok {
+					return expr
 				}
-				switch e := expr.(type) {
+				if !tryToMerge {
+					return expr
+				}
+				if flags&ir.VisitorContextFlagInChildOperation != 0 {
+					return expr
+				}
+				switch e := irExpr.(type) {
 				case *ir.NextContextExpr:
 					e.Steps += mergeSteps
 					ops.Remove(op)
 					tryToMerge = false
 				case *ir.GetCurrentViewExpr:
-					_ = e
 					tryToMerge = false
 				case *ir.ReferenceExpr:
-					_ = e
 					tryToMerge = false
 				case *ir.ContextLetReferenceExpr:
-					_ = e
 					tryToMerge = false
 				}
-			})
-			if tryToMerge {
-				candidate = candidate.Next()
-			}
+				return expr
+			}, ir.VisitorContextFlagNone)
 		}
 	}
 }

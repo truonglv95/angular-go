@@ -2,6 +2,7 @@ package compiler_cli
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -138,7 +139,9 @@ func PerformCompilation(config *ParsedConfiguration) *PerformCompilationResult {
 	if err != nil {
 		return &PerformCompilationResult{Diagnostics: nil}
 	}
+	var diags []*ast.Diagnostic
 	ngProgram.LoadNgStructureAsync(ctx)
+	diags = append(diags, ngProgram.GetNgDiagnostics()...)
 
 	// Perform compiler emission with the modified AST directly
 	emitResult := ngProgram.Emit(ctx, compiler.EmitOptions{
@@ -196,12 +199,13 @@ func PerformCompilation(config *ParsedConfiguration) *PerformCompilationResult {
 		},
 	})
 
-	var diags []*ast.Diagnostic
 	diags = append(diags, ngProgram.GetTsProgram().GetConfigFileParsingDiagnostics()...)
+	diags = append(diags, ngProgram.GetTsProgram().GetSyntacticDiagnostics(nil, nil)...)
+	fmt.Printf("Syntactic diagnostics count: %d\n", len(diags))
 	diags = append(diags, emitResult.Diagnostics...)
 
 	status := tsc.ExitStatusSuccess
-	if emitResult.EmitSkipped {
+	if emitResult.EmitSkipped || len(diags) > 0 {
 		status = tsc.ExitStatusDiagnosticsPresent_OutputsSkipped
 	}
 

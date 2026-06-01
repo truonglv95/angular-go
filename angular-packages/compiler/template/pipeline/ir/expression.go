@@ -980,8 +980,6 @@ func (e *ArrowFunctionExpr) Clone() output.Expression {
 	if e.Ops != nil {
 		clonedOps = &OpList{
 			DebugListId: NewOpListId(),
-			HeadNode:    e.Ops.HeadNode,
-			TailNode:    e.Ops.TailNode,
 		}
 		if e.Ops.Ops != nil {
 			clonedOps.Ops = make([]Op, len(e.Ops.Ops))

@@ -96,7 +96,7 @@ func (l *PartialComponentLinkerVersion1) ToR3ComponentMeta(metaObj *AstObject, v
 		R3DirectiveMetadata:      baseMeta,
 		Template:                 render3.Template{Children: parsed.Nodes},
 		Declarations:             declarations,
-		DeclarationListEmitMode:  render3.DeclarationListEmitMode_Direct,
+		DeclarationListEmitMode:  render3.DeclarationListEmitMode_ClosureResolved,
 		Styles:                   styles,
 		Encapsulation:            encapsulation,
 		Animations:               animations,

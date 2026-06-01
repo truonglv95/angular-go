@@ -19,33 +19,44 @@ func ApplyI18nExpressions(job compilation.CompilationJob) {
 	}
 
 	for _, unit := range job.GetUnits() {
-		for _, op := range unit.GetUpdate().Elements() {
+		oldOps := unit.GetUpdate().Elements()
+		var newOps []ir.Op
+		for i, op := range oldOps {
+			newOps = append(newOps, op)
 			if op.Kind() != ir.OpKindI18nExpression {
 				continue
 			}
-			if i18nNeedsApplication(i18nContexts, op) {
+			if i18nNeedsApplication(i18nContexts, oldOps, i) {
 				if exprOp, ok := op.(*ir.I18nExpressionOp); ok {
 					applyOp := &ir.I18nApplyOp{
 						Owner:  exprOp.I18nOwner,
 						Handle: exprOp.Handle,
 					}
-					ir.InsertAfter(applyOp, op)
+					newOps = append(newOps, applyOp)
 				}
 			}
 		}
+		unit.GetUpdate().Ops = newOps
 	}
 }
 
-func i18nNeedsApplication(i18nContexts map[ir.XrefId]ir.Op, op ir.Op) bool {
-	nextOp := op.Next()
-	if nextOp == nil || nextOp.Kind() != ir.OpKindI18nExpression {
+func i18nNeedsApplication(i18nContexts map[ir.XrefId]ir.Op, ops []ir.Op, idx int) bool {
+	if idx+1 >= len(ops) {
+		return true
+	}
+	nextOp := ops[idx+1]
+	if nextOp.Kind() != ir.OpKindI18nExpression {
 		return true
 	}
 
-	// i18nContexts is keyed by I18nContextOp xref
+	op := ops[idx]
 	opI18n, ok1 := op.(*ir.I18nExpressionOp)
 	nextI18n, ok2 := nextOp.(*ir.I18nExpressionOp)
 	if !ok1 || !ok2 {
+		return true
+	}
+
+	if opI18n.I18nOwner != nextI18n.I18nOwner {
 		return true
 	}
 

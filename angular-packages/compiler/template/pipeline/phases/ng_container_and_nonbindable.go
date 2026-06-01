@@ -62,26 +62,31 @@ func DisableBindings(job compilation.CompilationJob) {
 	}
 
 	for _, unit := range job.GetUnits() {
+		var newOps []ir.Op
 		for _, op := range unit.GetCreate().Elements() {
 			nonBindable := false
 			if nb, ok := op.(interface{ GetNonBindable() bool }); ok {
 				nonBindable = nb.GetNonBindable()
 			}
 
-			if (op.Kind() == ir.OpKindElementStart || op.Kind() == ir.OpKindContainerStart) && nonBindable {
-				if xg, ok := op.(interface{ GetXref() ir.XrefId }); ok {
-					ir.InsertAfter(ir.CreateDisableBindingsOp(xg.GetXref()), op)
-				}
-			}
 			if op.Kind() == ir.OpKindElementEnd || op.Kind() == ir.OpKindContainerEnd {
 				if xg, ok := op.(interface{ GetXref() ir.XrefId }); ok {
 					if elem, exists := elements[xg.GetXref()]; exists {
 						if nb, ok2 := elem.(interface{ GetNonBindable() bool }); ok2 && nb.GetNonBindable() {
-							ir.InsertBefore(ir.CreateEnableBindingsOp(xg.GetXref()), op)
+							newOps = append(newOps, ir.CreateEnableBindingsOp(xg.GetXref()))
 						}
 					}
 				}
 			}
+
+			newOps = append(newOps, op)
+
+			if (op.Kind() == ir.OpKindElementStart || op.Kind() == ir.OpKindContainerStart) && nonBindable {
+				if xg, ok := op.(interface{ GetXref() ir.XrefId }); ok {
+					newOps = append(newOps, ir.CreateDisableBindingsOp(xg.GetXref()))
+				}
+			}
 		}
+		unit.GetCreate().Ops = newOps
 	}
 }
