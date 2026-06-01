@@ -1,0 +1,356 @@
+<div class="layout-wrapper">
+    <div class="layout-sidebar">
+        <h2>Go-NGC Demo</h2>
+        <p-menu [model]="items" styleClass="w-full"></p-menu>
+    </div>
+    
+    <div class="layout-main">
+        <h1>PrimeNG Components via Native Go Compiler</h1>
+        
+        <div *ngIf="activeView === 'button'" class="card flex justify-center flex-wrap gap-4 mt-5">
+            <p-button label="Primary" />
+            <p-button label="Secondary" severity="secondary" />
+            <p-button label="Success" severity="success" />
+            <p-button label="Info" severity="info" />
+            <p-button label="Warning" severity="warn" />
+            <p-button label="Help" severity="help" />
+            <p-button label="Danger" severity="danger" />
+            <p-button label="Contrast" severity="contrast" />
+        </div>
+
+        <div *ngIf="activeView === 'button'" class="card flex justify-center flex-wrap gap-4 mt-5">
+            <p-button label="Primary" variant="outlined" />
+            <p-button label="Secondary" severity="secondary" variant="outlined" />
+            <p-button label="Success" severity="success" variant="outlined" />
+            <p-button label="Info" severity="info" variant="outlined" />
+            <p-button label="Warning" severity="warn" variant="outlined" />
+            <p-button label="Help" severity="help" variant="outlined" />
+            <p-button label="Danger" severity="danger" variant="outlined" />
+            <p-button label="Contrast" severity="contrast" variant="outlined" />
+        </div>
+
+        <div *ngIf="activeView === 'button'" class="card flex justify-center flex-wrap gap-4 mt-5">
+            <p-button label="Primary" variant="text" />
+            <p-button label="Secondary" severity="secondary" variant="text" />
+            <p-button label="Success" severity="success" variant="text" />
+            <p-button label="Info" severity="info" variant="text" />
+            <p-button label="Warning" severity="warn" variant="text" />
+            <p-button label="Help" severity="help" variant="text" />
+            <p-button label="Danger" severity="danger" variant="text" />
+            <p-button label="Contrast" severity="contrast" variant="text" />
+        </div>
+
+        <div *ngIf="activeView === 'input'" class="card mt-5 demo-stack">
+            <label for="customerName">Customer name</label>
+            <input id="customerName" pInputText [(ngModel)]="customerName" />
+            <p>Value: {{ customerName }}</p>
+        </div>
+
+        <div *ngIf="activeView === 'form'" class="card mt-5 flex flex-col gap-6">
+            <div class="flex items-center gap-4">
+                <p-checkbox [(ngModel)]="checked" [binary]="true" inputId="binary" />
+                <label for="binary">{{ checked ? 'Checked' : 'Unchecked' }}</label>
+            </div>
+
+            <div class="flex gap-4">
+                <div class="flex items-center gap-2">
+                    <p-radiobutton name="pizza" value="Cheese" [(ngModel)]="ingredient" inputId="ingredient1" />
+                    <label for="ingredient1">Cheese</label>
+                </div>
+                <div class="flex items-center gap-2">
+                    <p-radiobutton name="pizza" value="Mushroom" [(ngModel)]="ingredient" inputId="ingredient2" />
+                    <label for="ingredient2">Mushroom</label>
+                </div>
+            </div>
+
+            <div class="flex flex-col gap-2">
+                <label>Select a City</label>
+                <p-select [options]="cities" [(ngModel)]="selectedCity" optionLabel="name" placeholder="Select a City" styleClass="w-64" />
+                <p>Selected: {{ selectedCity?.name }}</p>
+            </div>
+
+            <div class="flex flex-col gap-2">
+                <p-togglebutton [(ngModel)]="toggleValue" onLabel="On" offLabel="Off" />
+            </div>
+        </div>
+
+        <div *ngIf="activeView === 'table'" class="card mt-5">
+            <p-table [value]="products" [tableStyle]="{ 'min-width': '42rem' }">
+                <ng-template pTemplate="header">
+                    <tr>
+                        <th>Code</th>
+                        <th>Name</th>
+                        <th>Category</th>
+                        <th>Quantity</th>
+                    </tr>
+                </ng-template>
+                <ng-template pTemplate="body" let-product>
+                    <tr>
+                        <td>{{ product.code }}</td>
+                        <td>{{ product.name }}</td>
+                        <td>{{ product.category }}</td>
+                        <td>{{ product.quantity }}</td>
+                    </tr>
+                </ng-template>
+            </p-table>
+        </div>
+
+        <div *ngIf="activeView === 'accordion'" class="card mt-5">
+            <p-accordion value="0">
+                <p-accordion-panel value="0">
+                    <p-accordion-header>Header I</p-accordion-header>
+                    <p-accordion-content>
+                        <p>
+                            Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. 
+                            Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
+                        </p>
+                    </p-accordion-content>
+                </p-accordion-panel>
+                <p-accordion-panel value="1">
+                    <p-accordion-header>Header II</p-accordion-header>
+                    <p-accordion-content>
+                        <p>
+                            Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium, totam rem aperiam, 
+                            eaque ipsa quae ab illo inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo.
+                        </p>
+                    </p-accordion-content>
+                </p-accordion-panel>
+                <p-accordion-panel value="2">
+                    <p-accordion-header>Header III</p-accordion-header>
+                    <p-accordion-content>
+                        <p>
+                            At vero eos et accusamus et iusto odio dignissimos ducimus qui blanditiis praesentium voluptatum deleniti atque corrupti 
+                            quos dolores et quas molestias excepturi sint occaecati cupiditate non provident, similique sunt in culpa qui officia deserunt mollitia animi.
+                        </p>
+                    </p-accordion-content>
+                </p-accordion-panel>
+            </p-accordion>
+        </div>
+        
+        <div *ngIf="activeView === 'dialog'" class="card mt-5">
+            <p-button (onClick)="displayDialog = true" label="Show Dialog" />
+            
+            <p-dialog header="Go-NGC Dialog" [(visible)]="displayDialog" [modal]="true" [style]="{ width: '25rem' }">
+                <span class="p-text-secondary block mb-8">Update your information.</span>
+                <div class="flex items-center gap-4 mb-4">
+                    <label for="username" class="font-semibold w-24">Username</label>
+                    <input pInputText id="username" class="flex-auto" autocomplete="off" />
+                </div>
+                <div class="flex items-center gap-4 mb-8">
+                    <label for="email" class="font-semibold w-24">Email</label>
+                    <input pInputText id="email" class="flex-auto" autocomplete="off" />
+                </div>
+                <div class="flex justify-end gap-2">
+                    <p-button label="Cancel" severity="secondary" (onClick)="displayDialog = false" />
+                    <p-button label="Save" (onClick)="displayDialog = false" />
+                </div>
+            </p-dialog>
+        </div>
+
+        <div *ngIf="activeView === 'tabs'" class="card mt-5">
+            <p-tabs value="0">
+                <p-tablist>
+                    <p-tab value="0">Header I</p-tab>
+                    <p-tab value="1">Header II</p-tab>
+                    <p-tab value="2">Header III</p-tab>
+                </p-tablist>
+                <p-tabpanels>
+                    <p-tabpanel value="0">
+                        <p class="m-0">
+                            Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. 
+                            Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. 
+                        </p>
+                    </p-tabpanel>
+                    <p-tabpanel value="1">
+                        <p class="m-0">
+                            Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium, totam rem aperiam, 
+                            eaque ipsa quae ab illo inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo. 
+                        </p>
+                    </p-tabpanel>
+                    <p-tabpanel value="2">
+                        <p class="m-0">
+                            At vero eos et accusamus et iusto odio dignissimos ducimus qui blanditiis praesentium voluptatum deleniti atque corrupti 
+                            quos dolores et quas molestias excepturi sint occaecati cupiditate non provident, similique sunt in culpa qui officia deserunt mollitia animi.
+                        </p>
+                    </p-tabpanel>
+                </p-tabpanels>
+            </p-tabs>
+        </div>
+
+        <div *ngIf="activeView === 'misc'" class="card mt-5 flex flex-col gap-6">
+            <div class="flex flex-col gap-2">
+                <label>Slider ({{ sliderValue }})</label>
+                <p-slider [(ngModel)]="sliderValue" />
+            </div>
+
+            <div class="flex flex-col gap-2">
+                <label>Progress Bar</label>
+                <p-progressbar [value]="sliderValue" />
+            </div>
+        </div>
+
+        <div *ngIf="activeView === 'tree'" class="card mt-5">
+            <p-tree [value]="treeData" class="w-full md:w-30rem" />
+        </div>
+
+        <div *ngIf="activeView === 'extra'" class="card mt-5 flex flex-col gap-6">
+            <div class="flex flex-col gap-2">
+                <label>Rating</label>
+                <p-rating [(ngModel)]="ratingValue" />
+            </div>
+
+            <div class="flex flex-col gap-2">
+                <label>ToggleSwitch</label>
+                <p-toggleswitch [(ngModel)]="switchValue" />
+            </div>
+
+            <div class="flex flex-col gap-2">
+                <label>DatePicker</label>
+                <p-datepicker [(ngModel)]="dateValue" [showIcon]="true" placeholder="Select a Date" />
+            </div>
+
+            <div class="flex flex-col gap-2">
+                <label>Badge & Avatar</label>
+                <div class="flex gap-4 items-center">
+                    <p-avatar label="P" class="mr-2" size="xlarge" />
+                    <p-badge value="4" severity="info" />
+                </div>
+            </div>
+
+            <div class="flex flex-col gap-2">
+                <label>Tags</label>
+                <div class="flex gap-2">
+                    <p-tag value="Primary" />
+                    <p-tag severity="success" value="Success" />
+                    <p-tag severity="warn" value="Warning" />
+                    <p-tag severity="danger" value="Danger" />
+                </div>
+            </div>
+            
+            <div class="flex flex-col gap-2 mt-4">
+                <p-card header="Advanced Card" subheader="Card Subtitle" [style]="{ width: '360px' }">
+                    <ng-template pTemplate="header">
+                        <img alt="Card" src="https://primefaces.org/cdn/primeng/images/usercard.png" />
+                    </ng-template>
+                    <p>
+                        Lorem ipsum dolor sit amet, consectetur adipisicing elit. Inventore sed consequuntur error repudiandae 
+                        numquam deserunt quisquam repellat libero asperiores earum nam nobis, culpa ratione quam perferendis esse, cupiditate neque quas!
+                    </p>
+                    <ng-template pTemplate="footer">
+                        <div class="flex gap-3 mt-1">
+                            <p-button label="Save" class="w-full" styleClass="w-full" pTooltip="Save changes" tooltipPosition="bottom" />
+                            <p-button label="Cancel" severity="secondary" class="w-full" styleClass="w-full" />
+                        </div>
+                    </ng-template>
+                </p-card>
+            </div>
+        </div>
+
+        <div *ngIf="activeView === 'advanced'" class="card mt-5 flex flex-col gap-6">
+            <p-panel header="Header" [toggleable]="true">
+                <p>
+                    Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
+                    Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
+                </p>
+            </p-panel>
+
+            <p-fieldset legend="Header" [toggleable]="true">
+                <p>
+                    Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
+                    Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
+                </p>
+            </p-fieldset>
+
+            <div class="card flex justify-center">
+                <p-carousel [value]="products" [numVisible]="3" [numScroll]="1" [circular]="true">
+                    <ng-template let-product pTemplate="item">
+                        <div class="border border-surface-200 dark:border-surface-700 rounded m-2 p-4">
+                            <div class="mb-4 font-medium">{{ product.name }}</div>
+                            <div class="flex justify-between items-center">
+                                <div class="mt-0 font-semibold text-xl">${{ product.quantity }}</div>
+                                <span>
+                                    <p-button icon="pi pi-heart" severity="secondary" [outlined]="true" />
+                                    <p-button icon="pi pi-shopping-cart" class="ml-2" />
+                                </span>
+                            </div>
+                        </div>
+                    </ng-template>
+                </p-carousel>
+            </div>
+
+            <div class="card flex justify-center">
+                <p-picklist [source]="sourceCities" [target]="targetCities" sourceHeader="Available" targetHeader="Selected" [dragdrop]="true" [responsive]="true" [sourceStyle]="{ height: '200px' }" [targetStyle]="{ height: '200px' }">
+                    <ng-template let-city pTemplate="item">
+                        <div>{{ city.name }}</div>
+                    </ng-template>
+                </p-picklist>
+            </div>
+
+            <div class="card flex justify-center">
+                <p-orderlist [value]="products" header="Products" [listStyle]="{ height: '250px' }" [dragdrop]="true">
+                    <ng-template let-product pTemplate="item">
+                        <div class="flex items-center p-2 w-full">
+                            <div class="flex-1 flex flex-col gap-2">
+                                <span class="font-bold">{{ product.name }}</span>
+                                <div class="flex items-center gap-2">
+                                    <i class="pi pi-tag text-sm"></i>
+                                    <span>{{ product.category }}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </ng-template>
+                </p-orderlist>
+            </div>
+
+            <div class="card">
+                <p-treetable [value]="treeTableData">
+                    <ng-template pTemplate="header">
+                        <tr>
+                            <th>Name</th>
+                            <th>Size</th>
+                            <th>Type</th>
+                        </tr>
+                    </ng-template>
+                    <ng-template pTemplate="body" let-rowNode let-rowData="rowData">
+                        <tr [ttRow]="rowNode">
+                            <td>
+                                <p-treeTableToggler [rowNode]="rowNode" />
+                                {{ rowData.name }}
+                            </td>
+                            <td>{{ rowData.size }}</td>
+                            <td>{{ rowData.type }}</td>
+                        </tr>
+                    </ng-template>
+                </p-treetable>
+            </div>
+
+            <div class="card">
+                <p-splitter [style]="{ height: '300px' }" styleClass="mb-5">
+                    <ng-template pTemplate>
+                        <div class="flex items-center justify-center p-4 w-full">Panel 1</div>
+                    </ng-template>
+                    <ng-template pTemplate>
+                        <div class="flex items-center justify-center p-4 w-full">Panel 2</div>
+                    </ng-template>
+                </p-splitter>
+            </div>
+        </div>
+
+        <div *ngIf="activeView === 'defer'" class="card mt-5 flex flex-col gap-6">
+            <h3>Defer Test</h3>
+            <p-button label="Load Deferred" (onClick)="loadDeferred = true" />
+            @defer (when loadDeferred) {
+                <div class="deferred-content">
+                    Deferred Component Loaded!
+                </div>
+            } @placeholder {
+                <div>Placeholder...</div>
+            } @loading {
+                <div>Loading...</div>
+            }
+        </div>
+
+        <router-outlet></router-outlet>
+    </div>
+</div>
+<div>
