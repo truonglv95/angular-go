@@ -1,7 +1,7 @@
 import { Component, signal } from '@angular/core';
 import { NgIf, NgFor } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { RouterOutlet } from '@angular/router';
+import { RouterOutlet, RouterLink } from '@angular/router';
 import { Menu } from 'primeng/menu';
 import { Button } from 'primeng/button';
 import { Ripple } from 'primeng/ripple';
@@ -45,7 +45,7 @@ type DemoView = 'button' | 'input' | 'table' | 'form' | 'accordion' | 'dialog' |
 @Component({
   selector: 'app-root',
   imports: [
-    RouterOutlet, NgIf, FormsModule, Menu, Button, Ripple, InputText, TableModule, 
+    RouterOutlet, RouterLink, NgIf, FormsModule, Menu, Button, Ripple, InputText, TableModule, 
     Checkbox, RadioButton, Select, ToggleButton, AccordionModule, Dialog, TabsModule, 
     Slider, ProgressBar, TreeModule, Rating, ToggleSwitch, DatePicker, Badge, Avatar,
     Tag, Card, Tooltip, Carousel, PickList, OrderList, TreeTableModule, Panel, Fieldset, Splitter

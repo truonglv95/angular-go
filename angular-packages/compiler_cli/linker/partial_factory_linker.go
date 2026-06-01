@@ -1,6 +1,7 @@
 package linker
 
 import (
+	"github.com/microsoft/typescript-go/angular-packages/compiler/output"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/render3"
 )
 
@@ -81,13 +82,19 @@ func (l *PartialFactoryLinkerVersion1) ToR3FactoryMeta(metaObj *AstObject, versi
 						optional := depObj.Has("optional")
 						self := depObj.Has("self")
 						skipSelf := depObj.Has("skipSelf")
+						
+						var attributeNameType output.Expression
+						if depObj.Has("attribute") {
+							attributeNameType = token // just needs to be non-nil for injectAttribute
+						}
 
 						parsedDeps = append(parsedDeps, render3.R3DependencyMetadata{
-							Token:    token,
-							Host:     host,
-							Optional: optional,
-							Self:     self,
-							SkipSelf: skipSelf,
+							Token:             token,
+							AttributeNameType: attributeNameType,
+							Host:              host,
+							Optional:          optional,
+							Self:              self,
+							SkipSelf:          skipSelf,
 						})
 					}
 				}
