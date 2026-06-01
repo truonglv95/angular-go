@@ -1,9 +1,6 @@
 package annotations
 
 import (
-	"path/filepath"
-	"strings"
-
 	"github.com/microsoft/typescript-go/angular-packages/compiler"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/output"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/render3"
@@ -208,61 +205,9 @@ func (h *PipeDecoratorHandler) CompileFull(node *ast.ClassDeclaration, analysisD
 	}
 
 	// Class Debug Info
-	var classDebugInfoNode *ast.Node
-
-	filePath := ""
-	lineNum := 0
-	if node.AsNode().Parent != nil && node.AsNode().Parent.Kind == ast.KindSourceFile {
-		sf := node.AsNode().Parent.AsSourceFile()
-		rawPath := sf.FileName()
-
-		if rel, err := filepath.Rel(".", rawPath); err == nil && !strings.HasPrefix(rel, "..") {
-			filePath = rel
-		} else {
-			if idx := strings.Index(rawPath, "src/"); idx != -1 {
-				filePath = rawPath[idx:]
-			} else {
-				filePath = rawPath
-			}
-		}
-
-		var targetPos int
-		if node.Name() != nil {
-			targetPos = node.Name().Pos()
-		} else {
-			targetPos = node.AsNode().Pos()
-		}
-		if targetPos > 0 {
-			text := sf.Text()
-			if targetPos <= len(text) {
-				lineNum = strings.Count(text[:targetPos], "\n")
-			}
-		}
-	}
-
-	classDebugExpr := render3.CompileClassDebugInfo(render3.R3ClassDebugInfo{
-		Type:       output.NewReadVarExpr(className, nil, nil, nil),
-		ClassName:  output.NewLiteralExpr(className, nil, nil, nil),
-		FilePath:   output.NewLiteralExpr(filePath, nil, nil, nil),
-		LineNumber: output.NewLiteralExpr(lineNum, nil, nil, nil),
-	})
-
-	if classDebugExpr != nil {
-		stmt := classDebugExpr.ToStmt(nil)
-		astStmt := stmt.VisitStatement(visitor, translator.Context{IsStatementMode: true})
-		if astStmt != nil {
-			if n, ok := astStmt.(*ast.Node); ok {
-				classDebugInfoNode = n
-			}
-		}
-	}
-
 	var extraStatements []*ast.Node
 	if classMetadataNode != nil {
 		extraStatements = append(extraStatements, classMetadataNode)
-	}
-	if classDebugInfoNode != nil {
-		extraStatements = append(extraStatements, classDebugInfoNode)
 	}
 
 	return []transform.CompileResult{

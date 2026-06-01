@@ -19,8 +19,9 @@ func TestRender3IRGolden(t *testing.T) {
 	}
 
 	tests := []struct {
-		name  string
-		files []string
+		name           string
+		files          []string
+		failNormalized bool
 	}{
 		{
 			name: "basic_projection",
@@ -28,6 +29,7 @@ func TestRender3IRGolden(t *testing.T) {
 				"out/card.component.js",
 				"out/app.component.js",
 			},
+			failNormalized: true,
 		},
 		{
 			name: "host_directive",
@@ -35,6 +37,7 @@ func TestRender3IRGolden(t *testing.T) {
 				"out/track.directive.js",
 				"out/host.component.js",
 			},
+			failNormalized: true,
 		},
 		{
 			name: "pipe_interpolation",
@@ -42,74 +45,89 @@ func TestRender3IRGolden(t *testing.T) {
 				"out/shout.pipe.js",
 				"out/pipe.component.js",
 			},
+			failNormalized: true,
 		},
 		{
 			name:  "parity_ng_if",
 			files: []string{"out/app/app.component.js"},
+			failNormalized: true,
 		},
 		{
 			name:  "parity_ng_for",
 			files: []string{"out/app/app.component.js"},
+			failNormalized: true,
 		},
 		{
 			name:  "parity_ng_template_outlet",
 			files: []string{"out/app/app.component.js"},
+			failNormalized: true,
 		},
 		{
 			name:  "parity_template_refs",
 			files: []string{"out/app/app.component.js"},
+			failNormalized: true,
 		},
 		{
 			name: "parity_nested_templates",
 			files: []string{
 				"out/app/app.component.js",
 			},
+			failNormalized: true,
 		},
 		{
 			name: "parity_template_outlet_structural_refs",
 			files: []string{
 				"out/app/app.component.js",
 			},
+			failNormalized: true,
 		},
 		{
 			name:  "parity_nested_views",
 			files: []string{"out/app/app.component.js"},
+			failNormalized: true,
 		},
 		{
 			name:  "parity_listeners",
 			files: []string{"out/app/app.component.js"},
+			failNormalized: true,
 		},
 		{
 			name: "parity_forms",
 			files: []string{
 				"out/app/app.component.js",
 			},
+			failNormalized: true,
 		},
 		{
 			name: "parity_forms_form_control",
 			files: []string{
 				"out/app/app.component.js",
 			},
+			failNormalized: true,
 		},
 		{
 			name: "parity_forms_form_control_name",
 			files: []string{
 				"out/app/app.component.js",
 			},
+			failNormalized: true,
 		},
 		{
 			name: "parity_forms_form_field",
 			files: []string{
 				"out/app/app.component.js",
 			},
+			failNormalized: true,
 		},
 		{
 			name:  "parity_pipes",
 			files: []string{"out/app/app.component.js"},
+			failNormalized: true,
 		},
 		{
 			name:  "parity_animations",
 			files: []string{"out/app/app.component.js"},
+			failNormalized: true,
 		},
 		{
 			name: "parity_defer",
@@ -117,6 +135,7 @@ func TestRender3IRGolden(t *testing.T) {
 				"out/app/heavy.component.js",
 				"out/app/app.component.js",
 			},
+			failNormalized: true,
 		},
 		{
 			name: "parity_defer_triggers",
@@ -124,6 +143,7 @@ func TestRender3IRGolden(t *testing.T) {
 				"out/app/heavy.component.js",
 				"out/app/app.component.js",
 			},
+			failNormalized: true,
 		},
 		{
 			name: "parity_defer_blocks",
@@ -131,6 +151,7 @@ func TestRender3IRGolden(t *testing.T) {
 				"out/app/heavy.component.js",
 				"out/app/app.component.js",
 			},
+			failNormalized: true,
 		},
 		{
 			name: "parity_defer_nested",
@@ -138,6 +159,7 @@ func TestRender3IRGolden(t *testing.T) {
 				"out/app/heavy.component.js",
 				"out/app/app.component.js",
 			},
+			failNormalized: true,
 		},
 		{
 			name: "parity_defer_alias_barrel",
@@ -146,6 +168,7 @@ func TestRender3IRGolden(t *testing.T) {
 				"out/app/heavy.component.js",
 				"out/app/app.component.js",
 			},
+			failNormalized: true,
 		},
 	}
 
@@ -168,7 +191,7 @@ func TestRender3IRGolden(t *testing.T) {
 			}
 
 			for _, file := range tt.files {
-				assertGoldenFile(t, projectRoot, fixtureRoot, file)
+				assertGoldenFile(t, projectRoot, fixtureRoot, file, tt.failNormalized)
 			}
 		})
 	}
@@ -221,7 +244,7 @@ func copyFixtureProject(t *testing.T, src string) string {
 	return dst
 }
 
-func assertGoldenFile(t *testing.T, projectRoot string, fixtureRoot string, rel string) {
+func assertGoldenFile(t *testing.T, projectRoot string, fixtureRoot string, rel string, failNormalized bool) {
 	t.Helper()
 
 	actualPath := filepath.Join(projectRoot, filepath.FromSlash(rel))
@@ -236,10 +259,19 @@ func assertGoldenFile(t *testing.T, projectRoot string, fixtureRoot string, rel 
 		t.Fatalf("read golden %s: %v", expectedPath, err)
 	}
 
+
 	actualText := parity.NormalizeGoldenJS(string(actual))
 	expectedText := parity.NormalizeGoldenJS(string(expected))
 	if actualText != expectedText {
 		t.Fatalf("%s golden mismatch\nactual:\n%s\nexpected:\n%s", rel, actualText, expectedText)
+	}
+
+	if failNormalized {
+		strictActual := parity.NormalizeGoldenJSStrict(string(actual))
+		strictExpected := parity.NormalizeGoldenJSStrict(string(expected))
+		if strictActual != strictExpected {
+			t.Fatalf("%s strict parity mismatch (temporary rules were required)\nactual:\n%s\nexpected:\n%s", rel, strictActual, strictExpected)
+		}
 	}
 }
 

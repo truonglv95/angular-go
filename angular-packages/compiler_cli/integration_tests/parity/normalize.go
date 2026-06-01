@@ -20,45 +20,64 @@ var (
 	listenerNamePattern         = regexp.MustCompile(`function [A-Za-z0-9_$]+_listener\(`)
 	classMetadataPattern        = regexp.MustCompile(`(?s)\n?\(\(\) => \{ \(typeof ngDevMode === "undefined" \|\| ngDevMode\) && i0\.ɵsetClassMetadata\(.*?\); \}\)\(\);\n?`)
 	classMetadataAsyncPattern   = regexp.MustCompile(`(?s)\n?\(\(\) => \{ \(typeof ngDevMode === "undefined" \|\| ngDevMode\) && i0\.ɵsetClassMetadataAsync\(.*?\); \}\)\(\);\n?`)
+	classMetadataSpacingPattern = regexp.MustCompile(`(?s)(i0\.ɵsetClassMetadata(?:Async)?\(.*?)(}\)\(\);)`)
 	classDebugInfoPattern       = regexp.MustCompile(`(?s)\n?\(\(\) => \{ \(typeof ngDevMode === "undefined" \|\| ngDevMode\) && i0\.ɵsetClassDebugInfo\(.*?\); \}\)\(\);\n?`)
 	render3JSNormalizationRules = []jsNormalizationRule{
 		{
+			// Permanent: Line endings differ by OS environment, not by semantic output.
 			name: "line-endings",
 			apply: func(text string) string {
 				return strings.ReplaceAll(text, "\r\n", "\n")
 			},
 		},
 		{
+			// Permanent: File paths in debug info depend on the checkout/workspace path.
 			name: "class-debug-file-path",
 			apply: func(text string) string {
 				return filePathPattern.ReplaceAllString(text, `filePath: "$1"`)
 			},
 		},
-		{
-			name: "listener-function-names",
-			apply: func(text string) string {
-				return listenerNamePattern.ReplaceAllString(text, `function (`)
-			},
-		},
+		// {
+		// 	// Temporary: We should eventually emit the exact same listener function names.
+		// 	name: "listener-function-names",
+		// 	apply: func(text string) string {
+		// 		return listenerNamePattern.ReplaceAllString(text, `function (`)
+		// 	},
+		// },
 		{
 			name: "class-metadata",
-			apply: func(text string) string {
-				return classMetadataPattern.ReplaceAllString(text, "\n")
+			apply: func(s string) string {
+				// Temporary rule: completely removes class metadata (waiting for parity).
+				return classMetadataPattern.ReplaceAllString(s, "\n")
 			},
 		},
 		{
 			name: "class-metadata-async",
-			apply: func(text string) string {
-				return classMetadataAsyncPattern.ReplaceAllString(text, "\n")
+			apply: func(s string) string {
+				// Temporary rule: completely removes class metadata async (waiting for parity).
+				return classMetadataAsyncPattern.ReplaceAllString(s, "\n")
 			},
 		},
 		{
+			name: "class-metadata-spacing",
+			apply: func(s string) string {
+				// Permanent rule: ignore spacing differences in setClassMetadata arrays.
+				return classMetadataSpacingPattern.ReplaceAllStringFunc(s, func(match string) string {
+					// We simply strip newlines and collapse spaces
+					noNewlines := strings.ReplaceAll(match, "\n", "")
+					return regexp.MustCompile(`\s+`).ReplaceAllString(noNewlines, " ")
+				})
+			},
+		},
+		{
+			// Temporary: debug info should be emitted.
 			name: "class-debug-info",
 			apply: func(text string) string {
 				return classDebugInfoPattern.ReplaceAllString(text, "\n")
 			},
 		},
 		{
+			// Permanent: EOF newlines are a formatting choice and not semantically meaningful.
 			name: "trim-final-newline",
 			apply: func(text string) string {
 				return strings.TrimSpace(text) + "\n"
@@ -72,6 +91,17 @@ var (
 // by callers for inspection.
 func NormalizeGoldenJS(text string) string {
 	return NormalizeGoldenJSWithRules(text).Text
+}
+
+// NormalizeGoldenJSStrict applies only permanent non-semantic normalizations.
+// It skips temporary rules like class-metadata removal.
+func NormalizeGoldenJSStrict(text string) string {
+	for _, rule := range render3JSNormalizationRules {
+		if rule.name == "line-endings" || rule.name == "class-debug-file-path" || rule.name == "trim-final-newline" || rule.name == "class-metadata-spacing" {
+			text = rule.apply(text)
+		}
+	}
+	return text
 }
 
 // NormalizeGoldenJSWithRules returns normalized JS plus the accepted rules that

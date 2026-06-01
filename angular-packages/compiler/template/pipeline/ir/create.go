@@ -602,6 +602,32 @@ func (o *TwoWayListenerOp) GetHandlerOps() *OpList {
 	return o.HandlerOps
 }
 
+func (o *TwoWayListenerOp) GetHandlerFnName() *string {
+	return o.HandlerFnName
+}
+
+func (o *TwoWayListenerOp) SetHandlerFnName(name string) {
+	o.HandlerFnName = &name
+}
+
+func (o *TwoWayListenerOp) GetTag() *string {
+	return o.Tag
+}
+
+func (o *TwoWayListenerOp) GetName() string {
+	return o.Name
+}
+
+func (o *TwoWayListenerOp) GetTargetSlot() SlotHandle {
+	if slot, ok := o.TargetSlot.(*SlotHandle); ok {
+		return *slot
+	}
+	if slot, ok := o.TargetSlot.(SlotHandle); ok {
+		return slot
+	}
+	return SlotHandle{}
+}
+
 func CreateTwoWayListenerOp(
 	target XrefId,
 	targetSlot *SlotHandle,
