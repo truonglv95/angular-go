@@ -74,14 +74,16 @@ func generateTemporaries(ops *ir.OpList) []ir.Op {
 				generatedStatements = append(generatedStatements, stmtOp)
 			}
 		}
-		opCount++
+		if countsForTemporaryName(op) {
+			opCount++
+		}
 
 		// Handle nested ops (listeners, track).
 		switch op.Kind() {
 		case ir.OpKindListener, ir.OpKindAnimation, ir.OpKindAnimationListener, ir.OpKindTwoWayListener:
 			if lOp, ok := op.(ir.ListenerTrait); ok {
-				nested := generateTemporaries(lOp.HandlerOps())
-				lOp.HandlerOps().Prepend(nested)
+				nested := generateTemporaries(lOp.GetHandlerOps())
+				lOp.GetHandlerOps().Prepend(nested)
 			}
 		case ir.OpKindRepeaterCreate:
 			if r, ok := op.(*ir.RepeaterCreateOp); ok {
@@ -94,4 +96,13 @@ func generateTemporaries(ops *ir.OpList) []ir.Op {
 	}
 
 	return generatedStatements
+}
+
+func countsForTemporaryName(op ir.Op) bool {
+	switch op.Kind() {
+	case ir.OpKindAdvance:
+		return false
+	default:
+		return true
+	}
 }

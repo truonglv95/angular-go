@@ -187,7 +187,7 @@ func (v *HtmlAstToIvyAst) VisitElement(element *ml_parser.Element, context any) 
 
 	var parsedElement Node
 	if preparsedElement.Type == template_parser.PreparsedElementTypeNgContent {
-		selector := ""
+		selector := preparsedElement.SelectAttr
 		var elementAttrs []*TextAttribute
 		for _, attr := range element.Attrs {
 			elementAttrs = append(elementAttrs, v.VisitAttribute(attr, nil).(*TextAttribute))
@@ -291,9 +291,6 @@ func (v *HtmlAstToIvyAst) VisitAttribute(attribute *ml_parser.Attribute, context
 func (v *HtmlAstToIvyAst) VisitText(text *ml_parser.Text, context any) any {
 	if v.processedNodes[text] {
 		return nil
-	}
-	if strings.Contains(text.Value, "foo") {
-		println("DEBUG VisitText Value=", text.Value, "SpanStart=", text.SourceSpan.Start.Offset, "SpanEnd=", text.SourceSpan.End.Offset)
 	}
 	return v._visitTextWithInterpolation(text.Value, *text.SourceSpan, text.Tokens, text.I18n)
 }
@@ -1160,7 +1157,7 @@ func (v *HtmlAstToIvyAst) _visitTextWithInterpolation(
 		}
 	}
 	expr := v.bindingParser.ParseInterpolation(value, toExpressionParserParseSourceSpan(sourceSpan), tokens)
-	if true {
+	if expr.Ast != nil {
 		return &BoundText{Value: &expr, SourceSpan: sourceSpan, I18n: i18nMeta}
 	}
 	return &Text{Value: valueNoNgsp, SourceSpan: sourceSpan}
@@ -1484,14 +1481,15 @@ func toExpressionParserParseSourceSpanPtr(span *parse_util.ParseSourceSpan) *exp
 		FullStart: fullStart,
 	}
 }
+
 // toParseUtilParseSourceSpan converts an expression_parser.ParseSourceSpan (integers only)
 // to a parse_util.ParseSourceSpan, using the provided reference span's source file for location info.
 func toParseUtilParseSourceSpan(exprSpan expression_parser.ParseSourceSpan) parse_util.ParseSourceSpan {
 	startLoc := &parse_util.ParseLocation{Offset: exprSpan.Start}
 	endLoc := &parse_util.ParseLocation{Offset: exprSpan.End}
 	return parse_util.ParseSourceSpan{
-		Start: startLoc,
-		End:   endLoc,
+		Start:     startLoc,
+		End:       endLoc,
 		FullStart: startLoc,
 	}
 }

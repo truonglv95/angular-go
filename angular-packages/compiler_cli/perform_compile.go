@@ -4,15 +4,19 @@ import (
 	"context"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"time"
 
-	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/transform"
-	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/reflection"
+	_ "github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline"
+	_ "github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline/emit"
+	_ "github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline/ingest"
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc"
+
 	"github.com/microsoft/typescript-go/internal/ast"
+	"github.com/microsoft/typescript-go/internal/astnav"
 	"github.com/microsoft/typescript-go/internal/bundled"
 	"github.com/microsoft/typescript-go/internal/compiler"
-	"github.com/microsoft/typescript-go/internal/astnav"
 	"github.com/microsoft/typescript-go/internal/core"
 	"github.com/microsoft/typescript-go/internal/execute/tsc"
 	"github.com/microsoft/typescript-go/internal/locale"
@@ -39,15 +43,15 @@ type osSys struct {
 	start              time.Time
 }
 
-func (s *osSys) FS() vfs.FS                                 { return s.fs }
-func (s *osSys) DefaultLibraryPath() string                 { return s.defaultLibraryPath }
-func (s *osSys) GetCurrentDirectory() string                 { return s.cwd }
-func (s *osSys) Writer() io.Writer                          { return s.writer }
-func (s *osSys) WriteOutputIsTTY() bool                     { return false }
-func (s *osSys) GetWidthOfTerminal() int                    { return 80 }
+func (s *osSys) FS() vfs.FS                                { return s.fs }
+func (s *osSys) DefaultLibraryPath() string                { return s.defaultLibraryPath }
+func (s *osSys) GetCurrentDirectory() string               { return s.cwd }
+func (s *osSys) Writer() io.Writer                         { return s.writer }
+func (s *osSys) WriteOutputIsTTY() bool                    { return false }
+func (s *osSys) GetWidthOfTerminal() int                   { return 80 }
 func (s *osSys) GetEnvironmentVariable(name string) string { return os.Getenv(name) }
 func (s *osSys) Now() time.Time                            { return time.Now() }
-func (s *osSys) SinceStart() time.Duration                  { return time.Since(s.start) }
+func (s *osSys) SinceStart() time.Duration                 { return time.Since(s.start) }
 
 func newSystem() *osSys {
 	cwd, _ := os.Getwd()
@@ -123,26 +127,30 @@ func PerformCompilation(config *ParsedConfiguration) *PerformCompilationResult {
 		ParsedConfig: parsedConfig,
 	}
 
-	program := compiler.NewProgram(compiler.ProgramOptions{
-		Config: parsedCommandLine,
-		Host:   host,
-	})
-
 	// Run Custom Angular AST transformations on all source files before emission
 	ctx := context.Background()
-	chk, release := program.GetTypeChecker(ctx)
-	refHost := reflection.NewTypeScriptReflectionHost(chk)
 
-	for _, sf := range program.SourceFiles() {
-		transform.TransformSourceFile(sf, refHost)
+	ngProgram, err := ngtsc.NewNgtscProgram(
+		config.RootNames,
+		parsedCommandLine,
+		host,
+	)
+	if err != nil {
+		return &PerformCompilationResult{Diagnostics: nil}
 	}
-
-	// Release the type checker back to the pool
-	release()
+	ngProgram.LoadNgStructureAsync(ctx)
 
 	// Perform compiler emission with the modified AST directly
-	emitResult := program.Emit(ctx, compiler.EmitOptions{
+	emitResult := ngProgram.Emit(ctx, compiler.EmitOptions{
 		WriteFile: func(fileName string, text string, data *compiler.WriteFileData) error {
+			linkedText, changed, err := linkPartialDeclarationsInEmittedJavaScript(fileName, text)
+			if err != nil {
+				return err
+			}
+			if changed {
+				text = linkedText
+			}
+
 			// Parse the emitted JS into a temporary AST using the typescript-go parser
 			sf := parser.ParseSourceFile(ast.SourceFileParseOptions{
 				FileName: fileName,
@@ -189,7 +197,7 @@ func PerformCompilation(config *ParsedConfiguration) *PerformCompilationResult {
 	})
 
 	var diags []*ast.Diagnostic
-	diags = append(diags, program.GetConfigFileParsingDiagnostics()...)
+	diags = append(diags, ngProgram.GetTsProgram().GetConfigFileParsingDiagnostics()...)
 	diags = append(diags, emitResult.Diagnostics...)
 
 	status := tsc.ExitStatusSuccess
@@ -200,5 +208,26 @@ func PerformCompilation(config *ParsedConfiguration) *PerformCompilationResult {
 	return &PerformCompilationResult{
 		Diagnostics: diags,
 		Status:      status,
+	}
+}
+
+func linkPartialDeclarationsInEmittedJavaScript(fileName string, text string) (string, bool, error) {
+	if !isJavaScriptOutput(fileName) {
+		return text, false, nil
+	}
+
+	absFileName, err := filepath.Abs(fileName)
+	if err != nil {
+		absFileName = fileName
+	}
+	return LinkJavaScriptText(absFileName, text, core.ScriptKindJS)
+}
+
+func isJavaScriptOutput(fileName string) bool {
+	switch filepath.Ext(fileName) {
+	case ".js", ".mjs", ".cjs":
+		return true
+	default:
+		return false
 	}
 }

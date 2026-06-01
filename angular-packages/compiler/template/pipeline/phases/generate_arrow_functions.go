@@ -2,6 +2,7 @@ package phases
 
 import (
 	"errors"
+	"strconv"
 
 	"github.com/microsoft/typescript-go/angular-packages/compiler/output"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline/compilation"
@@ -9,8 +10,42 @@ import (
 )
 
 func GenerateArrowFunctions(job compilation.CompilationJob) {
+	nextFnId := 0
 	for _, unit := range job.GetUnits() {
 		for _, op := range unit.GetCreate().Ops {
+			if repeater, ok := op.(*ir.RepeaterCreateOp); ok && repeater.TrackByOps != nil {
+				if cj, ok := job.(*compilation.ComponentCompilationJob); ok {
+					params := []*output.FnParam{
+						{Name: "$index", Type: nil},
+						{Name: "$item", Type: nil},
+					}
+					trackByOps, _ := repeater.TrackByOps.(*ir.OpList)
+					var stmts []output.Statement
+					for _, trackOp := range trackByOps.Ops {
+						if stmtOp, ok := trackOp.(*ir.StatementOp); ok {
+							stmts = append(stmts, stmtOp.Statement)
+						}
+					}
+					
+					var body any = stmts
+					if len(stmts) == 1 {
+						if retStmt, ok := stmts[0].(*output.ReturnStatement); ok {
+							body = retStmt.Value
+						}
+					}
+					
+					trackByFn := output.NewArrowFunctionExpr(params, body, nil, nil, nil)
+					name := "_forTrack" + strconv.Itoa(nextFnId)
+					nextFnId++
+					
+					if pool, ok := cj.Pool.(interface {
+						GetSharedFunctionReference(fn output.Expression, name string, unique bool) output.Expression
+					}); ok {
+						repeater.TrackByFn = pool.GetSharedFunctionReference(trackByFn, name, false)
+					}
+				}
+			}
+
 			if op.Kind() != ir.OpKindAnimation &&
 				op.Kind() != ir.OpKindAnimationListener &&
 				op.Kind() != ir.OpKindListener &&

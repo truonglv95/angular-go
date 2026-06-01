@@ -2,11 +2,16 @@ package render3
 
 import (
 	"fmt"
+	"reflect"
+	"sort"
 	"strings"
 
+	"github.com/microsoft/typescript-go/angular-packages/compiler/expression_parser"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/output"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/parse_util"
+	"github.com/microsoft/typescript-go/angular-packages/compiler/shadow_css"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline/compilation"
+	"github.com/microsoft/typescript-go/angular-packages/compiler/template_parser"
 )
 
 var IngestComponent func(
@@ -30,13 +35,34 @@ var EmitTemplateFn func(job *compilation.ComponentCompilationJob, pool ConstantP
 
 type Type any
 type Statement any
-type ConstantPool *any
+type ConstantPool any
 type BindingParser any
+
+type HostBindingInput struct {
+	ComponentName          string
+	ComponentSelector      string
+	Properties             []template_parser.ParsedProperty
+	Attributes             map[string]output.Expression
+	Events                 []template_parser.ParsedEvent
+	LegacyOptionalChaining bool
+}
+
+var IngestHostBinding func(
+	input *HostBindingInput,
+	bindingParser BindingParser,
+	constantPool ConstantPool,
+) *compilation.HostBindingCompilationJob
+
+var TransformHostBinding func(job *compilation.HostBindingCompilationJob)
+
+var EmitHostBindingFunction func(job *compilation.HostBindingCompilationJob) *output.FunctionExpr
 
 const COMPONENT_VARIABLE = "%COMP%"
 
 var HOST_ATTR = fmt.Sprintf("_nghost-%s", COMPONENT_VARIABLE)
 var CONTENT_ATTR = fmt.Sprintf("_ngcontent-%s", COMPONENT_VARIABLE)
+
+var ParseSelectorToR3Selector func(selector *string) []any
 
 func baseDirectiveFields(
 	meta R3DirectiveMetadata,
@@ -45,10 +71,11 @@ func baseDirectiveFields(
 ) *DefinitionMap {
 	definitionMap := NewDefinitionMap()
 	var selectors []any
-	if meta.Selector != nil {
-		selectors = []any{} // core.ParseSelectorToR3Selector(*meta.Selector)
-	} else {
-		selectors = []any{} // core.ParseSelectorToR3Selector("")
+	if meta.Selector != nil && ParseSelectorToR3Selector != nil {
+		selectors = ParseSelectorToR3Selector(meta.Selector)
+	} else if ParseSelectorToR3Selector != nil {
+		emptyStr := ""
+		selectors = ParseSelectorToR3Selector(&emptyStr)
 	}
 
 	// e.g. `type: MyDirective`
@@ -56,7 +83,7 @@ func baseDirectiveFields(
 
 	// e.g. `selectors: [['', 'someDir', '']]`
 	if len(selectors) > 0 {
-		definitionMap.Set("selectors", output.NewLiteralExpr(selectors, nil, nil, nil))
+		definitionMap.Set("selectors", arrayToLiteral(selectors))
 	}
 
 	if len(meta.Queries) > 0 {
@@ -94,11 +121,48 @@ func baseDirectiveFields(
 		),
 	)
 
-	// e.g 'inputs: {a: 'a'}'
-	definitionMap.Set("inputs", LiteralExpr(nil))
+	if len(meta.Inputs) > 0 {
+		var inputProps []output.LiteralMapEntry
+		for classPropName, inputMeta := range meta.Inputs {
+			var valueExpr output.Expression
 
-	// e.g 'outputs: {a: 'a'}'
-	definitionMap.Set("outputs", LiteralExpr(nil))
+			flags := 0 // Default InputFlags.None for standard @Input
+			if inputMeta.IsSignal {
+				flags |= 1 // InputFlags.SignalBased
+			}
+			if inputMeta.TransformFunction != nil {
+				flags |= 2 // InputFlags.HasTransform
+			}
+			if inputMeta.Required {
+				flags |= 4 // InputFlags.IsRequired
+			}
+
+			
+			if classPropName == inputMeta.BindingPropertyName && flags == 0 {
+				valueExpr = LiteralExpr(classPropName)
+			} else {
+				valueExpr = LiteralArr([]output.Expression{
+					LiteralExpr(flags),
+					LiteralExpr(inputMeta.BindingPropertyName),
+					LiteralExpr(classPropName),
+				})
+			}
+			inputProps = append(inputProps, output.NewLiteralMapPropertyAssignment(classPropName, valueExpr, true))
+		}
+		definitionMap.Set("inputs", output.NewLiteralMapExpr(inputProps, nil, nil, nil))
+	} else {
+		// definitionMap.Set("inputs", LiteralExpr(nil)) // Can be omitted if empty
+	}
+
+	if len(meta.Outputs) > 0 {
+		var outputProps []output.LiteralMapEntry
+		for classPropName, bindingPropName := range meta.Outputs {
+			outputProps = append(outputProps, output.NewLiteralMapPropertyAssignment(classPropName, LiteralExpr(bindingPropName), true))
+		}
+		definitionMap.Set("outputs", output.NewLiteralMapExpr(outputProps, nil, nil, nil))
+	} else {
+		// definitionMap.Set("outputs", LiteralExpr(nil)) // Can be omitted if empty
+	}
 
 	if meta.ExportAs != nil {
 		var exportAs []output.Expression
@@ -130,12 +194,14 @@ func addFeatures(
 	var controlCreate *struct{ PassThroughInput *string }
 	var externalStyles []string
 
+	var isStandalone bool
 	if dirMeta, ok := meta.(R3DirectiveMetadata); ok {
 		providers = dirMeta.Providers
 		hostDirectives = dirMeta.HostDirectives
 		usesInheritance = dirMeta.UsesInheritance
 		usesOnChanges = dirMeta.Lifecycle.UsesOnChanges
 		controlCreate = dirMeta.ControlCreate
+		isStandalone = dirMeta.IsStandalone
 	} else if compMeta, ok := meta.(R3ComponentMetadata[R3TemplateDependency]); ok {
 		providers = compMeta.Providers
 		viewProviders = compMeta.ViewProviders // Wait, ViewProviders isn't in R3ComponentMetadata? I will assume it is.
@@ -144,6 +210,11 @@ func addFeatures(
 		usesOnChanges = compMeta.Lifecycle.UsesOnChanges
 		controlCreate = compMeta.ControlCreate
 		externalStyles = compMeta.ExternalStyles
+		isStandalone = compMeta.IsStandalone
+	}
+
+	if isStandalone {
+		// Angular 19+ does not use StandaloneFeature anymore.
 	}
 
 	if providers != nil || viewProviders != nil {
@@ -329,11 +400,11 @@ func CompileComponentFromMetadata(
 	}
 
 	if !hasStyles && meta.Encapsulation == 0 {
-		meta.Encapsulation = 0
+		meta.Encapsulation = 2 // ViewEncapsulation.None
 	}
 
 	if meta.Encapsulation != 0 {
-		definitionMap.Set("encapsulation", LiteralExpr(meta.Encapsulation))
+		definitionMap.Set("encapsulation", output.NewLiteralExpr(meta.Encapsulation, nil, nil, nil))
 	}
 
 	if meta.Animations != nil {
@@ -480,14 +551,92 @@ func createDirectiveType(meta R3DirectiveMetadata) output.Type {
 func createHostBindingsFunction(
 	hostBindingsMetadata R3HostMetadata,
 	typeSourceSpan parse_util.ParseSourceSpan,
-	bindingParser BindingParser,
+	bindingParserAny BindingParser,
 	constantPool ConstantPool,
 	selector string,
 	name string,
 	definitionMap *DefinitionMap,
 	legacyOptionalChaining bool,
 ) output.Expression {
-	return nil
+	var bindingParser *template_parser.BindingParser
+	if bindingParserAny != nil {
+		bindingParser = bindingParserAny.(*template_parser.BindingParser)
+	}
+
+	var sourceSpan expression_parser.ParseSourceSpan
+	if typeSourceSpan.Start != nil {
+		sourceSpan.Start = typeSourceSpan.Start.Offset
+		sourceSpan.FullStart = typeSourceSpan.Start.Offset
+	}
+	if typeSourceSpan.End != nil {
+		sourceSpan.End = typeSourceSpan.End.Offset
+	}
+
+	var parsedProperties []template_parser.ParsedProperty
+	if bindingParser != nil && hostBindingsMetadata.Properties != nil {
+		parsedProperties = bindingParser.CreateBoundHostProperties(hostBindingsMetadata.Properties, sourceSpan)
+	}
+
+	var parsedEvents []template_parser.ParsedEvent
+	if bindingParser != nil && hostBindingsMetadata.Listeners != nil {
+		parsedEvents = bindingParser.CreateDirectiveHostEventAsts(hostBindingsMetadata.Listeners, sourceSpan)
+	}
+
+	var hostAttrsArray []output.Expression
+	
+	if hostBindingsMetadata.SpecialAttributes.StyleAttr != nil {
+		hostAttrsArray = append(hostAttrsArray, output.NewLiteralExpr("style", nil, nil, nil))
+		hostAttrsArray = append(hostAttrsArray, output.NewLiteralExpr(*hostBindingsMetadata.SpecialAttributes.StyleAttr, nil, nil, nil))
+	}
+	if hostBindingsMetadata.SpecialAttributes.ClassAttr != nil {
+		hostAttrsArray = append(hostAttrsArray, output.NewLiteralExpr("class", nil, nil, nil))
+		hostAttrsArray = append(hostAttrsArray, output.NewLiteralExpr(*hostBindingsMetadata.SpecialAttributes.ClassAttr, nil, nil, nil))
+	}
+	if hostBindingsMetadata.Attributes != nil {
+		var keys []string
+		for k := range hostBindingsMetadata.Attributes {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			hostAttrsArray = append(hostAttrsArray, output.NewLiteralExpr(k, nil, nil, nil))
+			hostAttrsArray = append(hostAttrsArray, hostBindingsMetadata.Attributes[k].(output.Expression))
+		}
+	}
+	
+	if len(hostAttrsArray) > 0 {
+		definitionMap.Set("hostAttrs", output.NewLiteralArrayExpr(hostAttrsArray, nil, nil, nil))
+	}
+
+	if IngestHostBinding == nil {
+		panic("render3.IngestHostBinding is not initialized")
+	}
+	hostJob := IngestHostBinding(&HostBindingInput{
+		ComponentName:          name,
+		ComponentSelector:      selector,
+		Properties:             parsedProperties,
+		Attributes:             nil,
+		Events:                 parsedEvents,
+		LegacyOptionalChaining: legacyOptionalChaining,
+	}, bindingParser, constantPool)
+
+	if TransformHostBinding == nil {
+		panic("render3.TransformHostBinding is not initialized")
+	}
+	TransformHostBinding(hostJob)
+
+	if hostJob.Root.Vars != nil && *hostJob.Root.Vars > 0 {
+		definitionMap.Set("hostVars", output.NewLiteralExpr(*hostJob.Root.Vars, nil, nil, nil))
+	}
+
+	if EmitHostBindingFunction == nil {
+		panic("render3.EmitHostBindingFunction is not initialized")
+	}
+	fn := EmitHostBindingFunction(hostJob)
+	if fn == nil {
+		return nil
+	}
+	return fn
 }
 
 type ParsedHostBindings struct {
@@ -495,8 +644,8 @@ type ParsedHostBindings struct {
 	Listeners         map[string]string
 	Properties        map[string]string
 	SpecialAttributes struct {
-		StyleAttr string
-		ClassAttr string
+		StyleAttr *string
+		ClassAttr *string
 	}
 }
 
@@ -505,8 +654,8 @@ func ParseHostBindings(host map[string]interface{}) ParsedHostBindings {
 	listeners := make(map[string]string)
 	properties := make(map[string]string)
 	var specialAttributes struct {
-		StyleAttr string
-		ClassAttr string
+		StyleAttr *string
+		ClassAttr *string
 	}
 
 	for key, value := range host {
@@ -526,13 +675,13 @@ func ParseHostBindings(host map[string]interface{}) ParsedHostBindings {
 			switch key {
 			case "class":
 				if vStr, ok := value.(string); ok {
-					specialAttributes.ClassAttr = vStr
+					specialAttributes.ClassAttr = &vStr
 				} else {
 					panic("Class binding must be string")
 				}
 			case "style":
 				if vStr, ok := value.(string); ok {
-					specialAttributes.StyleAttr = vStr
+					specialAttributes.StyleAttr = &vStr
 				} else {
 					panic("Style binding must be string")
 				}
@@ -569,7 +718,12 @@ func validateNoEventBindings(
 }
 
 func compileStyles(styles []string, selector string, hostSelector string) []string {
-	return nil
+	var compiled []string
+	shadowCss := shadow_css.NewShadowCss()
+	for _, style := range styles {
+		compiled = append(compiled, shadowCss.ShimCssText(style, selector, hostSelector))
+	}
+	return compiled
 }
 
 func EncapsulateStyle(style string, componentIdentifier *string) string {
@@ -659,4 +813,35 @@ func CreateHostDirectivesMappingArray(mapping map[string]string) output.Expressi
 
 func CompileDeferResolverFunction(meta R3DeferResolverFunctionMetadata) output.Expression {
 	return nil
+}
+
+func arrayToLiteral(val any) output.Expression {
+	if val == nil {
+		return output.NewLiteralExpr(nil, nil, nil, nil)
+	}
+
+	switch v := val.(type) {
+	case string:
+		return output.NewLiteralExpr(v, nil, nil, nil)
+	case int:
+		return output.NewLiteralExpr(v, nil, nil, nil)
+	case float64:
+		return output.NewLiteralExpr(v, nil, nil, nil)
+	case bool:
+		return output.NewLiteralExpr(v, nil, nil, nil)
+	case output.Expression:
+		return v
+	}
+
+	rt := reflect.TypeOf(val)
+	if rt != nil && rt.Kind() == reflect.Slice {
+		rv := reflect.ValueOf(val)
+		var entries []output.Expression
+		for i := 0; i < rv.Len(); i++ {
+			entries = append(entries, arrayToLiteral(rv.Index(i).Interface()))
+		}
+		return output.NewLiteralArrayExpr(entries, nil, nil, nil)
+	}
+
+	return output.NewLiteralExpr(val, nil, nil, nil)
 }

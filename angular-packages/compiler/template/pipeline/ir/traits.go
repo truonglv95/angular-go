@@ -14,11 +14,12 @@ import (
 // This is used by the slot allocation phase.
 type ConsumesSlotTrait interface {
 	// Xref returns the XrefId of the op.
-	Xref() XrefId
+	GetXref() XrefId
 	// Handle returns the SlotHandle that will be assigned a slot index.
 	Handle() *SlotHandle
 	// AddNumSlotsUsed adds to the number of slots used by this op.
 	AddNumSlotsUsed(n int)
+	GetNumSlotsUsed() int
 }
 
 // ConsumesSlotOpTrait is implemented by ops that consume a slot and provide
@@ -100,7 +101,7 @@ type CreateOpTrait interface {
 
 // ListenerTrait is implemented by listener ops (Listener, TwoWayListener, Animation, AnimationListener).
 type ListenerTrait interface {
-	HandlerOps() *OpList
+	GetHandlerOps() *OpList
 }
 
 // ElementOpTrait is implemented by element ops (ElementStart, Element).
@@ -131,9 +132,9 @@ type OpWithKindTrait interface {
 // IsElementOrContainerOp returns true if the op is an element or container op.
 func IsElementOrContainerOp(op Op) bool {
 	switch op.Kind() {
-	case OpKindElement, OpKindElementStart, OpKindElementEnd,
-		OpKindContainer, OpKindContainerStart, OpKindContainerEnd,
-		OpKindTemplate, OpKindConditionalCreate, OpKindConditionalBranchCreate:
+	case OpKindElement, OpKindElementStart,
+		OpKindContainer, OpKindContainerStart,
+		OpKindTemplate, OpKindRepeaterCreate, OpKindConditionalCreate, OpKindConditionalBranchCreate:
 		return true
 	}
 	return false

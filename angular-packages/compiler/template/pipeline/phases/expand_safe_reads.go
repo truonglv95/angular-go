@@ -23,7 +23,7 @@ func ExpandSafeReads(job compilation.CompilationJob) {
 			switch op.Kind() {
 			case ir.OpKindListener, ir.OpKindAnimation, ir.OpKindAnimationListener, ir.OpKindTwoWayListener:
 				if lOp, ok := op.(ir.ListenerTrait); ok {
-					processOpList(lOp.HandlerOps(), job, legacyOptional)
+					processOpList(lOp.GetHandlerOps(), job, legacyOptional)
 				}
 			}
 		}

@@ -74,7 +74,11 @@ func DevOnlyGuardedExpression(expr output.Expression) output.Expression {
 
 // GuardedExpression wraps an expression in a guard: (typeof guard === 'undefined' || guard) && expr
 func GuardedExpression(guard string, expr output.Expression) output.Expression {
-	return expr
+	guardVar := output.NewReadVarExpr(guard, nil, nil, nil)
+	typeofGuard := output.NewTypeofExpr(guardVar, nil, nil, nil)
+	guardUndefined := output.NewBinaryOperatorExpr(output.BinaryOperatorIdentical, typeofGuard, output.NewLiteralExpr("undefined", nil, nil, nil), nil, nil, nil)
+	guardCond := output.NewBinaryOperatorExpr(output.BinaryOperatorOr, guardUndefined, guardVar, nil, nil, nil)
+	return output.NewBinaryOperatorExpr(output.BinaryOperatorAnd, guardCond, expr, nil, nil, nil)
 }
 
 // RefsToArray converts a slice of R3References to a literal array (or arrow function wrapping it).
@@ -83,9 +87,9 @@ func RefsToArray(refs []R3Reference, shouldForwardDeclare bool) output.Expressio
 	for i, ref := range refs {
 		values[i] = ref.Value
 	}
-	arr := output.NewLiteralArrayExpr(nil, nil, nil, nil)
+	arr := output.NewLiteralArrayExpr(values, nil, nil, nil)
 	if shouldForwardDeclare {
-		return output.NewArrowFunctionExpr(nil, nil, nil, nil, nil)
+		return output.NewArrowFunctionExpr(nil, arr, nil, nil, nil)
 	}
 	return arr
 }

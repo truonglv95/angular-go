@@ -327,3 +327,11 @@ func isLongStringLiteral(expr output.Expression) bool {
 	}
 	return false
 }
+
+func (cp *ConstantPool) AddStatement(stmt output.Statement) {
+	cp.Statements = append(cp.Statements, stmt)
+}
+
+func (cp *ConstantPool) GetStatements() []output.Statement {
+	return cp.Statements
+}

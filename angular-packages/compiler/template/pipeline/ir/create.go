@@ -23,6 +23,10 @@ type ElementOrContainerOpBase struct {
 	WholeSourceSpan *parse_util.ParseSourceSpan
 }
 
+func (o *ElementOrContainerOpBase) SetAttributes(attrs any) {
+	o.Attributes = attrs
+}
+
 func (o *ElementOrContainerOpBase) Handle() *SlotHandle {
 	if o.SlotHandle == nil {
 		o.SlotHandle = NewSlotHandle()
@@ -71,10 +75,18 @@ type ElementOpBase struct {
 type ElementStartOp struct {
 	ElementOpBase
 	I18nPlaceholder any
+	kind            OpKind
 }
 
 func (o *ElementStartOp) Kind() OpKind {
+	if o.kind != 0 {
+		return o.kind
+	}
 	return OpKindElementStart
+}
+
+func (o *ElementStartOp) SetKind(kind OpKind) {
+	o.kind = kind
 }
 
 func CreateElementStartOp(
@@ -322,6 +334,7 @@ func CreateRepeaterCreateOp(
 		EmptyView:            ev,
 		Track:                track,
 		VarNames:             varNames,
+		FunctionNameSuffix:   "For",
 		EmptyTag:             emptyTag,
 		I18nPlaceholder:      i18nPlaceholder,
 		EmptyI18nPlaceholder: emptyI18nPlaceholder,
@@ -353,10 +366,18 @@ func CreateElementEndOp(
 
 type ContainerStartOp struct {
 	ElementOrContainerOpBase
+	kind OpKind
 }
 
 func (o *ContainerStartOp) Kind() OpKind {
+	if o.kind != 0 {
+		return o.kind
+	}
 	return OpKindContainerStart
+}
+
+func (o *ContainerStartOp) SetKind(kind OpKind) {
+	o.kind = kind
 }
 
 type ContainerOp struct {
@@ -568,7 +589,7 @@ type TwoWayListenerOp struct {
 	TargetSlot    any
 	Name          string
 	Tag           *string
-	HandlerOps    any
+	HandlerOps    *OpList
 	HandlerFnName *string
 	SourceSpan    *parse_util.ParseSourceSpan
 }
@@ -577,12 +598,16 @@ func (o *TwoWayListenerOp) Kind() OpKind {
 	return OpKindTwoWayListener
 }
 
+func (o *TwoWayListenerOp) GetHandlerOps() *OpList {
+	return o.HandlerOps
+}
+
 func CreateTwoWayListenerOp(
 	target XrefId,
 	targetSlot *SlotHandle,
 	name string,
 	tag *string,
-	handlerOps any,
+	handlerOps *OpList,
 	sourceSpan *parse_util.ParseSourceSpan,
 ) *TwoWayListenerOp {
 	return &TwoWayListenerOp{
@@ -597,13 +622,26 @@ func CreateTwoWayListenerOp(
 
 type PipeOp struct {
 	OpBase
-	ConsumesSlotOpTrait
-	Xref XrefId
-	Name string
+	Xref         XrefId
+	Name         string
+	SlotHandle   *SlotHandle
+	NumSlotsUsed int
 }
 
 func (o *PipeOp) Kind() OpKind {
 	return OpKindPipe
+}
+
+func (o *PipeOp) Handle() *SlotHandle {
+	return o.SlotHandle
+}
+
+func (o *PipeOp) AddNumSlotsUsed(n int) {
+	o.NumSlotsUsed += n
+}
+
+func (o *PipeOp) GetNumSlotsUsed() int {
+	return o.NumSlotsUsed
 }
 
 type NamespaceOp struct {
@@ -923,6 +961,7 @@ func (o *I18nMessageOp) Kind() OpKind {
 	return OpKindI18nMessage
 }
 
+
 type I18nOpBase struct {
 	OpBase
 	ConsumesSlotOpTrait
@@ -949,10 +988,18 @@ func (o *I18nOp) Kind() OpKind {
 
 type I18nStartOp struct {
 	I18nOpBase
+	kind OpKind
 }
 
 func (o *I18nStartOp) Kind() OpKind {
+	if o.kind != 0 {
+		return o.kind
+	}
 	return OpKindI18nStart
+}
+
+func (o *I18nStartOp) SetKind(kind OpKind) {
+	o.kind = kind
 }
 
 func CreateI18nStartOp(
@@ -1117,14 +1164,17 @@ func (o *ListenerOp) GetHandlerOps() *OpList {
 	return nil
 }
 
-func (o *ListenerOp) GetHandlerFnName() *string { return o.HandlerFnName }
-func (o *ListenerOp) SetHandlerFnName(st string) { o.HandlerFnName = &st }
-func (o *ListenerOp) GetHostListener() bool { return o.HostListener }
-func (o *ListenerOp) GetName() string { return o.Name }
-func (o *ListenerOp) SetName(st string) { o.Name = st }
+func (o *ListenerOp) GetHandlerFnName() *string          { return o.HandlerFnName }
+func (o *ListenerOp) SetHandlerFnName(st string)         { o.HandlerFnName = &st }
+func (o *ListenerOp) SetConsumesDollarEvent(v bool)      { o.ConsumesDollarEvent = v }
+func (o *ListenerOp) GetHostListener() bool              { return o.HostListener }
+func (o *ListenerOp) GetName() string                    { return o.Name }
+func (o *ListenerOp) SetName(st string)                  { o.Name = st }
 func (o *ListenerOp) GetIsLegacyAnimationListener() bool { return o.IsLegacyAnimationListener }
-func (o *ListenerOp) GetLegacyAnimationPhase() string { 
-	if o.LegacyAnimationPhase != nil { return *o.LegacyAnimationPhase }
+func (o *ListenerOp) GetLegacyAnimationPhase() string {
+	if o.LegacyAnimationPhase != nil {
+		return *o.LegacyAnimationPhase
+	}
 	return ""
 }
 func (o *ListenerOp) GetTag() *string { return o.Tag }
@@ -1169,4 +1219,36 @@ func (o *I18nOpBase) GetXref() XrefId {
 
 func (o *I18nAttributesOp) GetXref() XrefId {
 	return o.Target
+}
+
+func (o *TemplateOp) SetDecls(decls int) {
+	o.Decls = &decls
+}
+
+func (o *TemplateOp) SetVars(vars int) {
+	o.Vars = &vars
+}
+
+func (o *RepeaterCreateOp) SetDecls(decls int) {
+	o.Decls = &decls
+}
+
+func (o *RepeaterCreateOp) SetVars(vars int) {
+	o.Vars = &vars
+}
+
+func (o *ConditionalCreateOp) SetDecls(decls int) {
+	o.Decls = &decls
+}
+
+func (o *ConditionalCreateOp) SetVars(vars int) {
+	o.Vars = &vars
+}
+
+func (o *ConditionalBranchCreateOp) SetDecls(decls int) {
+	o.Decls = &decls
+}
+
+func (o *ConditionalBranchCreateOp) SetVars(vars int) {
+	o.Vars = &vars
 }

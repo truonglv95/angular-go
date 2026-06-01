@@ -1,6 +1,8 @@
 package imports
 
 import (
+	"fmt"
+	"strconv"
 	"github.com/microsoft/typescript-go/internal/ast"
 )
 
@@ -161,18 +163,34 @@ func (m *ImportManager) generateNewImport(request ImportRequest) *ast.Node {
 	namedImports := tracker.NamedImports
 	namespaceImports := tracker.NamespaceImports
 
+	fmt.Printf("generateNewImport: %v, force=%v\n", request.ExportModuleSpecifier, m.config.ForceGenerateNamespacesForNewImports)
 	if request.ExportSymbolName == nil || m.config.ForceGenerateNamespacesForNewImports {
-		namespaceImportName := "TODO_namespace_import"
+		var namespaceImportName string
+		if existingImport, ok := namespaceImports[ModuleName(request.ExportModuleSpecifier)]; ok {
+			namespaceImportName = existingImport.AsNamespaceImport().Name().AsIdentifier().Text
+		} else {
+			importStr := "i"
+			if m.config.NamespaceImportPrefix != "" {
+				importStr = m.config.NamespaceImportPrefix
+			}
+			importStr += strconv.Itoa(m.nextUniqueIndex)
+			m.nextUniqueIndex++
+			namespaceImportName = importStr
 
-		namespaceImport := m.factory.NewNamespaceImport(m.factory.NewIdentifier(namespaceImportName))
-
-		namespaceImports[ModuleName(request.ExportModuleSpecifier)] = namespaceImport
+			namespaceImport := m.factory.NewNamespaceImport(m.factory.NewIdentifier(namespaceImportName))
+			namespaceImports[ModuleName(request.ExportModuleSpecifier)] = namespaceImport
+		}
 
 		if request.ExportSymbolName != nil {
-			// [namespaceImport.Name, factory.NewIdentifier(*request.ExportSymbolName)] handled simplistically
-			return namespaceImport
+			// Returns i0.symbolName
+			return m.factory.NewPropertyAccessExpression(
+				(*ast.Expression)(m.factory.NewIdentifier(namespaceImportName)),
+				nil,
+				(*ast.MemberName)(m.factory.NewIdentifier(*request.ExportSymbolName)),
+				0,
+			)
 		}
-		return namespaceImport
+		return (*ast.Node)(m.factory.NewIdentifier(namespaceImportName))
 	}
 
 	if _, ok := namedImports[ModuleName(request.ExportModuleSpecifier)]; !ok {
@@ -225,4 +243,25 @@ func (m *ImportManager) getNewImportsTrackerForFile(file *ast.Node) *fileImports
 
 func createImportReference(asTypeReference bool, ref *ast.Node, factory *ast.NodeFactory) *ast.Node {
 	return ref
+}
+
+func (m *ImportManager) GetAllImports(file *ast.Node) []*ast.Node {
+	fmt.Printf("GetAllImports: file=%s\n", file.AsSourceFile().FileName)
+	tracker, ok := m.newImports[file]
+	if !ok {
+		return nil
+	}
+	var declarations []*ast.Node
+	for moduleName, namespaceImport := range tracker.NamespaceImports {
+		importClause := m.factory.NewImportClause(ast.KindUnknown, nil, namespaceImport)
+		importClause.Flags |= ast.NodeFlagsSynthesized
+		namespaceImport.AsNode().Flags |= ast.NodeFlagsSynthesized
+		moduleSpecifier := m.factory.NewStringLiteral(string(moduleName), 0)
+		importDecl := m.factory.NewImportDeclaration(nil, importClause, moduleSpecifier, nil)
+		importDecl.Flags |= ast.NodeFlagsSynthesized
+		declarations = append(declarations, importDecl.AsNode())
+		fmt.Printf("GetAllImports -> added module: %s\n", string(moduleName))
+	}
+	// TODO: Handle NamedImports and SideEffectImports if needed
+	return declarations
 }

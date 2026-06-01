@@ -1,6 +1,8 @@
 package phases
 
 import (
+	"strings"
+
 	"github.com/microsoft/typescript-go/angular-packages/compiler/output"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline/compilation"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline/ir"
@@ -20,26 +22,33 @@ func CollapseEmptyInstructions(job compilation.CompilationJob) {
 	}
 
 	for _, unit := range job.GetUnits() {
-		for _, op := range unit.GetCreate().Elements() {
+		for i := 0; i < len(unit.GetCreate().Elements()); {
+			op := unit.GetCreate().Elements()[i]
 			opReplacements, ok := replacements[op.Kind()]
 			if !ok {
+				i++
 				continue
 			}
 			startKind := opReplacements[0]
 			mergedKind := opReplacements[1]
 
-			// Locate the previous (non-ignored) op via linked list.
-			prevOp := op.Prev()
-			for prevOp != nil && ignoredOpKinds[prevOp.Kind()] {
-				prevOp = prevOp.Prev()
+			var prevOp ir.Op
+			for j := i - 1; j >= 0; j-- {
+				candidate := unit.GetCreate().Elements()[j]
+				if !ignoredOpKinds[candidate.Kind()] {
+					prevOp = candidate
+					break
+				}
 			}
 
-			// If the previous op is the corresponding start op, merge.
 			if prevOp != nil && prevOp.Kind() == startKind {
 				if setter, ok2 := prevOp.(interface{ SetKind(ir.OpKind) }); ok2 {
 					setter.SetKind(mergedKind)
 				}
 				unit.GetCreate().Remove(op)
+				// Do not increment i, as the next element shifted into the current index
+			} else {
+				i++
 			}
 		}
 	}
@@ -103,50 +112,61 @@ type chainState struct {
 
 func chainOpsInList(opList *ir.OpList) {
 	var chain *chainState
-	for _, op := range opList.Elements() {
+	for i := 0; i < len(opList.Elements()); {
+		op := opList.Elements()[i]
 		stmtOp, ok := op.(interface{ GetStatement() output.Statement })
 		if !ok {
 			chain = nil
+			i++
 			continue
 		}
 		exprStmt, ok := stmtOp.GetStatement().(*output.ExpressionStatement)
 		if !ok {
 			chain = nil
+			i++
 			continue
 		}
 		invoke, ok := exprStmt.Expr.(*output.InvokeFunctionExpr)
 		if !ok {
 			chain = nil
-			continue
-		}
-		ext, ok := invoke.Fn.(*output.ExternalExpr)
-		if !ok {
-			chain = nil
+			i++
 			continue
 		}
 
-		instructionName := ""
-		if ext.Value.Name != nil {
+		var instructionName string
+		if ext, ok := invoke.Fn.(*output.ExternalExpr); ok && ext.Value.Name != nil {
 			instructionName = *ext.Value.Name
+		} else if read, ok := invoke.Fn.(*output.ReadVarExpr); ok {
+			instructionName = read.Name
 		}
+
+		if !strings.HasPrefix(instructionName, "ɵɵ") {
+			chain = nil
+			i++
+			continue
+		}
+		instructionName = strings.TrimPrefix(instructionName, "ɵɵ")
+
 		successor, chainable := chainCompatibility[instructionName]
 		if !chainable {
 			chain = nil
+			i++
 			continue
 		}
 
 		if chain != nil &&
 			chainCompatibility[chain.instruction] == successor &&
 			chain.length < maxChainLength {
-			// Add to existing chain by calling fn on the chain expression.
-			prevInvoke := chain.expression.(*output.InvokeFunctionExpr)
-			newExpr := prevInvoke.CallFn(invoke.Args, invoke.SourceSpan, invoke.Pure, nil)
-			chain.expression = newExpr
+			// Chain the call by wrapping the old expression in the new invoke's Fn.
+			invoke.Fn = chain.expression
+			chain.expression = invoke
 			if setter, ok2 := chain.op.(interface{ SetStatement(output.Statement) }); ok2 {
-				setter.SetStatement(newExpr.ToStmt(nil))
+				setter.SetStatement(output.NewExpressionStatement(invoke, nil, nil))
 			}
+			chain.instruction = instructionName
 			chain.length++
 			opList.Remove(op)
+			// Do not increment i, as the next element shifted into the current index
 		} else {
 			chain = &chainState{
 				op:          op,
@@ -154,6 +174,7 @@ func chainOpsInList(opList *ir.OpList) {
 				expression:  invoke,
 				length:      1,
 			}
+			i++
 		}
 	}
 }

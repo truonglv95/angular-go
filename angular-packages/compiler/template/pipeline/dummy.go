@@ -1,3 +1,0 @@
-package pipeline
-
-func Dummy() {}

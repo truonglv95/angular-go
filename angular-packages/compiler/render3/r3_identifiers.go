@@ -205,6 +205,7 @@ var Identifiers = struct {
 	InheritDefinitionFeature          *output.ExternalReference
 	ProvidersFeature                  *output.ExternalReference
 	HostDirectivesFeature             *output.ExternalReference
+	StandaloneFeature                 *output.ExternalReference
 	ExternalStylesFeature             *output.ExternalReference
 	Listener                          *output.ExternalReference
 	GetInheritedFactory               *output.ExternalReference
@@ -420,6 +421,7 @@ var Identifiers = struct {
 	InheritDefinitionFeature:          &output.ExternalReference{Name: s("ɵɵInheritDefinitionFeature"), ModuleName: coreStr},
 	ProvidersFeature:                  &output.ExternalReference{Name: s("ɵɵProvidersFeature"), ModuleName: coreStr},
 	HostDirectivesFeature:             &output.ExternalReference{Name: s("ɵɵHostDirectivesFeature"), ModuleName: coreStr},
+	StandaloneFeature:                 &output.ExternalReference{Name: s("ɵɵStandaloneFeature"), ModuleName: coreStr},
 	ExternalStylesFeature:             &output.ExternalReference{Name: s("ɵɵExternalStylesFeature"), ModuleName: coreStr},
 	Listener:                          &output.ExternalReference{Name: s("ɵɵlistener"), ModuleName: coreStr},
 	GetInheritedFactory:               &output.ExternalReference{Name: s("ɵɵgetInheritedFactory"), ModuleName: coreStr},

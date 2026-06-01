@@ -68,7 +68,7 @@ func recursivelyProcessView(view *compilation.ViewCompilationUnit, parentScope *
 			}
 		case ir.OpKindAnimation, ir.OpKindAnimationListener, ir.OpKindListener, ir.OpKindTwoWayListener:
 			if listener, ok := op.(ir.ListenerTrait); ok {
-				if handlerOps := listener.HandlerOps(); handlerOps != nil {
+				if handlerOps := listener.GetHandlerOps(); handlerOps != nil {
 					handlerOps.Prepend(generateVariablesInScopeForView(view, scope, true))
 				}
 			}
@@ -105,7 +105,8 @@ func getScopeForView(view *compilation.ViewCompilationUnit, parent *Scope) *Scop
 		Parent:           parent,
 	}
 
-	for identifier := range view.ContextVariables {
+	// Use ContextVariableOrder for deterministic, insertion-order iteration (matching ngtsc JS Map).
+	for _, identifier := range view.ContextVariableOrder {
 		scope.ContextVariables[identifier] = &ir.SemanticVariable{
 			Kind:       ir.SemanticVariableKindIdentifier,
 			Identifier: identifier,
@@ -180,7 +181,9 @@ func generateVariablesInScopeForView(
 
 	scopeView := view.Job.Views[scope.View]
 	if scopeView != nil {
-		for name, value := range scopeView.ContextVariables {
+		// Use ContextVariableOrder for deterministic, insertion-order iteration (matching ngtsc JS Map).
+		for _, name := range scopeView.ContextVariableOrder {
+			value := scopeView.ContextVariables[name]
 			context := ir.NewContextExpr(scope.View)
 			var variable output.Expression
 			if value == ir.CTX_REF {

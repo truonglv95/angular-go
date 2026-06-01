@@ -61,8 +61,10 @@ func addPipeToCreationBlock(
 		}
 
 		pipeOp := &ir.PipeOp{
-			Xref: binding.Target,
-			Name: binding.PipeName,
+			Xref:         binding.Target(),
+			Name:         binding.PipeName,
+			SlotHandle:   &ir.SlotHandle{},
+			NumSlotsUsed: 2,
 		}
 
 		// Insert pipeOp at insertIdx

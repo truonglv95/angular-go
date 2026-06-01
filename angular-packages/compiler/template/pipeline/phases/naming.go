@@ -166,45 +166,39 @@ func addNamesToView(unit compilation.CompilationUnit, baseName string, state *na
 		case ir.OpKindVariable:
 			if v, ok := op.(*ir.VariableOp); ok {
 				varNames[v.Xref] = getVariableName(v.Variable, state)
+			} else if cv, ok := op.(*ir.CreateVariableOp); ok {
+				varNames[cv.Xref] = getVariableName(cv.Variable, state)
 			}
 		case ir.OpKindRepeaterCreate:
 			if vcu, ok := unit.(*compilation.ViewCompilationUnit); ok {
-				if repeater, ok := op.(interface {
-					GetHandle() ir.SlotHandle
-					GetEmptyView() ir.XrefId
-					GetXref() ir.XrefId
-					GetFunctionNameSuffix() string
-				}); ok {
-					if repeater.GetHandle().Slot == nil {
+				if repeater, ok := op.(*ir.RepeaterCreateOp); ok {
+					if repeater.SlotHandle == nil || repeater.SlotHandle.Slot == nil {
 						panic("Expected slot to be assigned")
 					}
-					slot := *repeater.GetHandle().Slot
-					emptyViewId := repeater.GetEmptyView()
+					slot := *repeater.SlotHandle.Slot
+					emptyViewId := repeater.EmptyView
 					if emptyViewId != 0 {
 						if emptyView, exists := vcu.Job.Views[emptyViewId]; exists {
 							addNamesToView(emptyView,
-								fmt.Sprintf("%s_%sEmpty_%d", baseName, repeater.GetFunctionNameSuffix(), slot+2),
+								fmt.Sprintf("%s_%sEmpty_%d", baseName, repeater.FunctionNameSuffix, slot+2),
 								state)
 						}
 					}
-					if childView, exists := vcu.Job.Views[repeater.GetXref()]; exists {
+					if childView, exists := vcu.Job.Views[repeater.Xref]; exists {
 						addNamesToView(childView,
-							fmt.Sprintf("%s_%s_%d", baseName, repeater.GetFunctionNameSuffix(), slot+1),
+							fmt.Sprintf("%s_%s_%d", baseName, repeater.FunctionNameSuffix, slot+1),
 							state)
 					}
 				}
 			}
 		case ir.OpKindProjection:
 			if vcu, ok := unit.(*compilation.ViewCompilationUnit); ok {
-				if proj, ok := op.(interface {
-					GetHandle() ir.SlotHandle
-					GetFallbackView() ir.XrefId
-				}); ok {
-					if proj.GetHandle().Slot == nil {
+				if proj, ok := op.(*ir.ProjectionOp); ok {
+					if proj.SlotHandle == nil || proj.SlotHandle.Slot == nil {
 						panic("Expected slot to be assigned")
 					}
-					slot := *proj.GetHandle().Slot
-					fallbackViewId := proj.GetFallbackView()
+					slot := *proj.SlotHandle.Slot
+					fallbackViewId := proj.FallbackView
 					if fallbackViewId != 0 {
 						if fallbackView, exists := vcu.Job.Views[fallbackViewId]; exists {
 							addNamesToView(fallbackView, fmt.Sprintf("%s_ProjectionFallback_%d", baseName, slot), state)
@@ -214,19 +208,43 @@ func addNamesToView(unit compilation.CompilationUnit, baseName string, state *na
 			}
 		case ir.OpKindConditionalCreate, ir.OpKindConditionalBranchCreate, ir.OpKindTemplate:
 			if vcu, ok := unit.(*compilation.ViewCompilationUnit); ok {
-				if tmpl, ok := op.(interface {
-					GetXref() ir.XrefId
-					GetHandle() ir.SlotHandle
-					GetFunctionNameSuffix() string
-				}); ok {
-					if childView, exists := vcu.Job.Views[tmpl.GetXref()]; exists {
-						if tmpl.GetHandle().Slot == nil {
+				var xref ir.XrefId
+				var handle *ir.SlotHandle
+				var suffix string
+				valid := false
+
+				switch t := op.(type) {
+				case *ir.TemplateOp:
+					xref = t.Xref
+					handle = t.SlotHandle
+					if t.FunctionNameSuffix != nil {
+						suffix = *t.FunctionNameSuffix
+					}
+					valid = true
+				case *ir.ConditionalCreateOp:
+					xref = t.Xref
+					handle = t.SlotHandle
+					if t.FunctionNameSuffix != nil {
+						suffix = *t.FunctionNameSuffix
+					}
+					valid = true
+				case *ir.ConditionalBranchCreateOp:
+					xref = t.Xref
+					handle = t.SlotHandle
+					if t.FunctionNameSuffix != nil {
+						suffix = *t.FunctionNameSuffix
+					}
+					valid = true
+				}
+
+				if valid {
+					if childView, exists := vcu.Job.Views[xref]; exists {
+						if handle == nil || handle.Slot == nil {
 							panic("Expected slot to be assigned")
 						}
-						slot := *tmpl.GetHandle().Slot
-						suffix := ""
-						if tmpl.GetFunctionNameSuffix() != "" {
-							suffix = "_" + tmpl.GetFunctionNameSuffix()
+						slot := *handle.Slot
+						if suffix != "" {
+							suffix = "_" + suffix
 						}
 						addNamesToView(childView, fmt.Sprintf("%s%s_%d", baseName, suffix, slot), state)
 					}

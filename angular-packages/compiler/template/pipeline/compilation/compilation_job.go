@@ -95,6 +95,7 @@ type ComponentCompilationJob struct {
 
 	Root             *ViewCompilationUnit
 	Views            map[ir.XrefId]*ViewCompilationUnit
+	Units            []*ViewCompilationUnit
 	ContentSelectors output.Expression
 }
 
@@ -128,9 +129,11 @@ func NewComponentCompilationJob(
 		EnableDebugLocations:    enableDebugLocations,
 		ForeignImports:          foreignImports,
 		Views:                   make(map[ir.XrefId]*ViewCompilationUnit),
+		Units:                   make([]*ViewCompilationUnit, 0),
 	}
 	job.Root = NewViewCompilationUnit(job, job.AllocateXrefId(), nil)
 	job.Views[job.Root.GetXref()] = job.Root
+	job.Units = append(job.Units, job.Root)
 	return job
 }
 
@@ -140,8 +143,8 @@ func (j *ComponentCompilationJob) GetForeignComponent(element any) any {
 }
 
 func (j *ComponentCompilationJob) GetUnits() []CompilationUnit {
-	units := make([]CompilationUnit, 0, len(j.Views))
-	for _, view := range j.Views {
+	units := make([]CompilationUnit, 0, len(j.Units))
+	for _, view := range j.Units {
 		units = append(units, view)
 	}
 	return units
@@ -154,6 +157,7 @@ func (j *ComponentCompilationJob) AllocateView(parent ir.XrefId) *ViewCompilatio
 	parentPtr := &parent
 	view := NewViewCompilationUnit(j, j.AllocateXrefId(), parentPtr)
 	j.Views[view.GetXref()] = view
+	j.Units = append(j.Units, view)
 	return view
 }
 
@@ -197,7 +201,9 @@ func (b *BaseCompilationUnit) Ops() []ir.Op {
 	for _, op := range b.Create.Elements() {
 		ops = append(ops, op)
 		if listener, ok := op.(ir.ListenerTrait); ok {
-			ops = append(ops, listener.HandlerOps().Elements()...)
+			if ho := listener.GetHandlerOps(); ho != nil {
+				ops = append(ops, ho.Elements()...)
+			}
 		}
 	}
 	for _, op := range b.Update.Elements() {
@@ -208,11 +214,12 @@ func (b *BaseCompilationUnit) Ops() []ir.Op {
 
 type ViewCompilationUnit struct {
 	BaseCompilationUnit
-	Job              *ComponentCompilationJob
-	Parent           *ir.XrefId
-	ContextVariables map[string]string
-	Aliases          []ir.Expression // Set of ir.AliasVariable
-	Decls            *int
+	Job                  *ComponentCompilationJob
+	Parent               *ir.XrefId
+	ContextVariables     map[string]string
+	ContextVariableOrder []string // insertion-ordered keys of ContextVariables
+	Aliases              []ir.Expression // Set of ir.AliasVariable
+	Decls                *int
 }
 
 func NewViewCompilationUnit(job *ComponentCompilationJob, xref ir.XrefId, parent *ir.XrefId) *ViewCompilationUnit {
@@ -229,6 +236,15 @@ func NewViewCompilationUnit(job *ComponentCompilationJob, xref ir.XrefId, parent
 }
 
 func (v *ViewCompilationUnit) GetJob() CompilationJob { return v.Job }
+
+// SetContextVariable sets a context variable and tracks insertion order.
+// If the key already exists, only the value is updated (order is preserved).
+func (v *ViewCompilationUnit) SetContextVariable(key, value string) {
+	if _, exists := v.ContextVariables[key]; !exists {
+		v.ContextVariableOrder = append(v.ContextVariableOrder, key)
+	}
+	v.ContextVariables[key] = value
+}
 
 type HostBindingCompilationJob struct {
 	BaseCompilationJob

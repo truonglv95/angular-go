@@ -9,7 +9,6 @@ import (
 )
 
 type ConstantPoolExt interface {
-	ConstantPool
 	GetConstLiteral(literal output.Expression, share bool) output.Expression
 }
 
@@ -59,6 +58,7 @@ func GenerateProjectionDefs(job *compilation.ComponentCompilationJob) {
 				}
 			}
 			job.ContentSelectors = pool.GetConstLiteral(literalOrArrayLiteral(selStr), share)
+} else {
 		}
 
 		defOp := &ir.ProjectionDefOp{

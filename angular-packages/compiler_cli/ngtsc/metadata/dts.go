@@ -1,16 +1,19 @@
 package metadata
 
 import (
+	"fmt"
+	"github.com/microsoft/typescript-go/internal/checker"
 	"github.com/microsoft/typescript-go/internal/ast"
 	"github.com/microsoft/typescript-go/internal/core"
 )
 
 // DtsMetadataReader extracts Angular Ivy metadata from compiled declaration files (.d.ts).
 type DtsMetadataReader struct {
+	checker *checker.Checker
 }
 
-func NewDtsMetadataReader() *DtsMetadataReader {
-	return &DtsMetadataReader{}
+func NewDtsMetadataReader(checker *checker.Checker) *DtsMetadataReader {
+	return &DtsMetadataReader{checker: checker}
 }
 
 // Ensure it implements MetadataReader
@@ -64,9 +67,15 @@ func (r *DtsMetadataReader) GetDirectiveMetadata(classNode *ast.Node) *Directive
 				}
 			}
 
+			className := ""
+			if classDecl.Name() != nil {
+				className = classDecl.Name().AsIdentifier().Text
+			}
+
 			return &DirectiveMeta{
+				Name:        className,
 				Kind:        core.IfElse(isComponent, MetaKindComponent, MetaKindDirective),
-				Ref:         Reference{Node: classNode},
+				Ref:         Reference{Node: classNode, Name: className},
 				Selector:    selector,
 				Standalone:  standalone,
 				IsComponent: isComponent,
@@ -77,6 +86,11 @@ func (r *DtsMetadataReader) GetDirectiveMetadata(classNode *ast.Node) *Directive
 }
 
 func (r *DtsMetadataReader) GetNgModuleMetadata(classNode *ast.Node) *NgModuleMeta {
+	kind := -1
+	if classNode != nil {
+		kind = int(classNode.Kind)
+	}
+	fmt.Printf("GetNgModuleMetadata checking node %p, kind=%d\n", classNode, kind)
 	if classNode == nil || classNode.Kind != ast.KindClassDeclaration {
 		return nil
 	}
@@ -87,6 +101,7 @@ func (r *DtsMetadataReader) GetNgModuleMetadata(classNode *ast.Node) *NgModuleMe
 		}
 		prop := member.AsPropertyDeclaration()
 		propName := prop.Name().AsIdentifier().Text
+		fmt.Printf("GetNgModuleMetadata found prop %s\n", propName)
 		if propName == "ɵmod" {
 			typeNode := prop.Type
 			if typeNode == nil || typeNode.Kind != ast.KindTypeReference {
@@ -173,8 +188,13 @@ func (r *DtsMetadataReader) GetPipeMetadata(classNode *ast.Node) *PipeMeta {
 				}
 			}
 
+			className := ""
+			if classDecl.Name() != nil {
+				className = classDecl.Name().AsIdentifier().Text
+			}
+
 			return &PipeMeta{
-				Ref:        Reference{Node: classNode},
+				Ref:        Reference{Node: classNode, Name: className},
 				Name:       name,
 				Pure:       pure,
 				Standalone: standalone,
@@ -182,6 +202,48 @@ func (r *DtsMetadataReader) GetPipeMetadata(classNode *ast.Node) *PipeMeta {
 		}
 	}
 	return nil
+}
+
+func (r *DtsMetadataReader) resolveOwningModule(exprName *ast.Node) string {
+	if exprName.Kind != ast.KindQualifiedName {
+		return ""
+	}
+	left := exprName.AsQualifiedName().Left
+	if left.Kind != ast.KindIdentifier {
+		return ""
+	}
+	namespaceName := left.AsIdentifier().Text
+	sourceFile := ast.GetSourceFileOfNode(exprName)
+	if sourceFile == nil {
+		return ""
+	}
+	
+	// Scan top level statements for import declaration matching the namespace
+	for _, stmt := range sourceFile.Statements.Nodes {
+		if stmt.Kind == ast.KindImportDeclaration {
+			importDecl := stmt.AsImportDeclaration()
+			if importDecl.ImportClause != nil && importDecl.ImportClause.AsImportClause().NamedBindings != nil {
+				if importDecl.ImportClause.AsImportClause().NamedBindings.Kind == ast.KindNamespaceImport {
+					nsImport := importDecl.ImportClause.AsImportClause().NamedBindings.AsNamespaceImport()
+					if nsImport.Name().AsIdentifier().Text == namespaceName {
+						if importDecl.ModuleSpecifier.Kind == ast.KindStringLiteral {
+							return importDecl.ModuleSpecifier.AsStringLiteral().Text
+						}
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func (r *DtsMetadataReader) extractName(exprName *ast.Node) string {
+	if exprName.Kind == ast.KindIdentifier {
+		return exprName.AsIdentifier().Text
+	} else if exprName.Kind == ast.KindQualifiedName {
+		return exprName.AsQualifiedName().Right.AsIdentifier().Text
+	}
+	return ""
 }
 
 func (r *DtsMetadataReader) parseReferencesList(node *ast.Node) []Reference {
@@ -192,16 +254,42 @@ func (r *DtsMetadataReader) parseReferencesList(node *ast.Node) []Reference {
 	if node.Kind == ast.KindTupleType {
 		tuple := node.AsTupleTypeNode()
 		for _, elem := range tuple.Elements.Nodes {
-			refNode := elem
 			if elem.Kind == ast.KindTypeQuery {
-				refNode = elem.AsTypeQueryNode().ExprName
+				exprName := elem.AsTypeQueryNode().ExprName
+				owningModule := r.resolveOwningModule(exprName)
+				
+				var targetNode *ast.Node = exprName
+				sym := r.checker.GetSymbolAtLocation(exprName)
+				if sym != nil {
+					for sym.Flags&ast.SymbolFlagsAlias != 0 {
+						sym = r.checker.GetAliasedSymbol(sym)
+					}
+					if sym.ValueDeclaration != nil {
+						targetNode = sym.ValueDeclaration
+					} else if len(sym.Declarations) > 0 {
+						targetNode = sym.Declarations[0]
+					}
+				}
+				
+				refs = append(refs, Reference{
+					Node: targetNode, 
+					Name: r.extractName(exprName),
+					OwningModule: owningModule,
+				})
+			} else {
+				refs = append(refs, Reference{Node: elem})
 			}
-			refs = append(refs, Reference{Node: refNode})
 		}
 	} else if node.Kind == ast.KindTypeReference {
 		refs = append(refs, Reference{Node: node})
 	} else if node.Kind == ast.KindTypeQuery {
-		refs = append(refs, Reference{Node: node.AsTypeQueryNode().ExprName})
+		exprName := node.AsTypeQueryNode().ExprName
+		owningModule := r.resolveOwningModule(exprName)
+		refs = append(refs, Reference{
+			Node: exprName,
+			Name: r.extractName(exprName),
+			OwningModule: owningModule,
+		})
 	}
 	return refs
 }

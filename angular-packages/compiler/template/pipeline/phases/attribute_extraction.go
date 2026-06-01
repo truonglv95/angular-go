@@ -1,12 +1,26 @@
 package phases
 
 import (
+	"reflect"
+
 	"github.com/microsoft/typescript-go/angular-packages/compiler/core"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline/compilation"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline/ir"
 )
 
 // ExtractAttributes extracts attributes, properties, style and class props into extracted attribute ops.
+func isNilInterface(v any) bool {
+	if v == nil {
+		return true
+	}
+	val := reflect.ValueOf(v)
+	switch val.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Map, reflect.Pointer, reflect.UnsafePointer, reflect.Interface, reflect.Slice:
+		return val.IsNil()
+	}
+	return false
+}
+
 func ExtractAttributes(job compilation.CompilationJob) {
 	for _, unit := range job.GetUnits() {
 		elements := createOpXrefMap(unit)
@@ -63,7 +77,7 @@ func ExtractAttributes(job compilation.CompilationJob) {
 				bKind, _ := propOp.BindingKind.(ir.BindingKind)
 				if bKind != ir.BindingKindLegacyAnimation && bKind != ir.BindingKindAnimation {
 					var bindingKind ir.BindingKind
-					if propOp.I18nMessage != nil && propOp.TemplateKind == nil {
+					if !isNilInterface(propOp.I18nMessage) && propOp.TemplateKind == nil {
 						bindingKind = ir.BindingKindI18n
 					} else if propOp.IsStructuralTemplateAttribute {
 						bindingKind = ir.BindingKindTemplate
@@ -111,38 +125,42 @@ func ExtractAttributes(job compilation.CompilationJob) {
 			case ir.OpKindStyleProp, ir.OpKindClassProp:
 				var name string
 				var target ir.XrefId
-				var expr ir.Expression
-				isStyleOrClassProp := false
+				var securityContext any
+				shouldExtract := false
 
 				if styleProp, ok := op.(*ir.StylePropOp); ok {
 					name = styleProp.Name
 					target = styleProp.Target
-					expr, _ = styleProp.Expression.(ir.Expression)
-					isStyleOrClassProp = true
+					securityContext = core.SecurityContextStyle
+					expr, _ := styleProp.Expression.(ir.Expression)
+					if expr != nil {
+						if _, isEmpty := expr.(*ir.EmptyExpr); isEmpty {
+							shouldExtract = true
+						}
+					}
 				} else if classProp, ok := op.(*ir.ClassPropOp); ok {
 					name = classProp.Name
 					target = classProp.Target
-					expr, _ = classProp.Expression.(ir.Expression)
-					isStyleOrClassProp = true
+					securityContext = core.SecurityContextNone
+					shouldExtract = false
 				}
 
-				if isStyleOrClassProp && expr != nil {
-					if _, isEmpty := expr.(*ir.EmptyExpr); isEmpty {
-						extractedAttrOp := &ir.ExtractedAttributeOp{
-							Target:          target,
-							BindingKind:     ir.BindingKindProperty,
-							Namespace:       nil,
-							Name:            name,
-							Expression:      nil,
-							I18nContext:     0,
-							I18nMessage:     nil,
-							SecurityContext: core.SecurityContextStyle,
-						}
+				if shouldExtract {
+					// The name of the property is always extracted into the bindings array
+					extractedAttrOp := &ir.ExtractedAttributeOp{
+						Target:          target,
+						BindingKind:     ir.BindingKindProperty,
+						Namespace:       nil,
+						Name:            name,
+						Expression:      nil,
+						I18nContext:     0,
+						I18nMessage:     nil,
+						SecurityContext: securityContext,
+					}
 
-						targetEl := lookupElement(elements, target)
-						if targetEl != nil {
-							toInsertBefore[targetEl] = append(toInsertBefore[targetEl], extractedAttrOp)
-						}
+					targetEl := lookupElement(elements, target)
+					if targetEl != nil {
+						toInsertBefore[targetEl] = append(toInsertBefore[targetEl], extractedAttrOp)
 					}
 				}
 				newUpdateOps = append(newUpdateOps, op)
@@ -171,7 +189,7 @@ func ExtractAttributes(job compilation.CompilationJob) {
 					if job.GetKind() != compilation.CompilationJobKind_Host {
 						targetEl := lookupElement(elements, listenerOp.Target)
 						if targetEl != nil {
-							toInsertBefore[targetEl] = append(toInsertBefore[targetEl], extractedAttrOp)
+							toInsertBefore[targetEl] = append([]ir.Op{extractedAttrOp}, toInsertBefore[targetEl]...)
 						}
 					}
 				}
@@ -191,7 +209,7 @@ func ExtractAttributes(job compilation.CompilationJob) {
 				if job.GetKind() != compilation.CompilationJobKind_Host {
 					targetEl := lookupElement(elements, twoWayListenerOp.Target)
 					if targetEl != nil {
-						toInsertBefore[targetEl] = append(toInsertBefore[targetEl], extractedAttrOp)
+						toInsertBefore[targetEl] = append([]ir.Op{extractedAttrOp}, toInsertBefore[targetEl]...)
 					}
 				}
 			}

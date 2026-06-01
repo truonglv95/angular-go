@@ -43,7 +43,7 @@ export declare class MyDir {
 	assert.NotNil(t, compNode, "Could not find MyComp class")
 	assert.NotNil(t, dirNode, "Could not find MyDir class")
 
-	reader := metadata.NewDtsMetadataReader()
+	reader := metadata.NewDtsMetadataReader(nil)
 
 	// 1. Verify Component Metadata
 	compMeta := reader.GetDirectiveMetadata(compNode)
@@ -87,7 +87,7 @@ export declare class MyPipe {
 
 	assert.NotNil(t, pipeNode, "Could not find MyPipe class")
 
-	reader := metadata.NewDtsMetadataReader()
+	reader := metadata.NewDtsMetadataReader(nil)
 	pipeMeta := reader.GetPipeMetadata(pipeNode)
 	assert.NotNil(t, pipeMeta)
 	assert.Equal(t, "my-pipe-name", pipeMeta.Name)
@@ -120,7 +120,7 @@ export declare class MyModule {
 
 	assert.NotNil(t, moduleNode, "Could not find MyModule class")
 
-	reader := metadata.NewDtsMetadataReader()
+	reader := metadata.NewDtsMetadataReader(nil)
 	moduleMeta := reader.GetNgModuleMetadata(moduleNode)
 	assert.NotNil(t, moduleMeta)
 
@@ -136,7 +136,7 @@ export declare class MyModule {
 
 func TestCompoundMetadataReader(t *testing.T) {
 	localRegistry := metadata.NewLocalMetadataRegistry()
-	dtsReader := metadata.NewDtsMetadataReader()
+	dtsReader := metadata.NewDtsMetadataReader(nil)
 	compound := metadata.NewCompoundMetadataReader([]metadata.MetadataReader{localRegistry, dtsReader})
 
 	localNode := &ast.Node{}

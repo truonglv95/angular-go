@@ -216,7 +216,7 @@ func (s *schemaRegistryAdapter) ValidateAttribute(name string) struct {
 	}
 }
 
-var elementRegistry = &schemaRegistryAdapter{registry: schema.NewDomElementSchemaRegistry()}
+var ElementRegistry = &schemaRegistryAdapter{registry: schema.NewDomElementSchemaRegistry()}
 
 func ParseTemplate(template string, templateUrl string, options *ParseTemplateOptions) ParsedTemplate {
 	preserveWhitespaces := false
@@ -281,8 +281,8 @@ func ParseTemplate(template string, templateUrl string, options *ParseTemplateOp
 	}
 
 	lexer := expression_parser.Lexer{}
-	parser := expression_parser.NewParser(lexer, false)
-	bindingParser := template_parser.NewBindingParser(parser, elementRegistry, nil)
+	exprParser := expression_parser.NewParser(lexer, false)
+	bindingParser := template_parser.NewBindingParser(exprParser, ElementRegistry, []template_parser.ParseError{})
 
 	r3Result := HtmlAstToRender3Ast(htmlNodes, bindingParser, Render3ParseOptions{CollectCommentNodes: collectCommentNodes})
 
@@ -324,5 +324,5 @@ func ParseTemplate(template string, templateUrl string, options *ParseTemplateOp
 func MakeBindingParser(selectorlessEnabled bool) *template_parser.BindingParser {
 	lexer := expression_parser.Lexer{}
 	parser := expression_parser.NewParser(lexer, false)
-	return template_parser.NewBindingParser(parser, elementRegistry, nil)
+	return template_parser.NewBindingParser(parser, ElementRegistry, nil)
 }

@@ -97,6 +97,7 @@ func OpListInsertBefore(list *OpList, op Op, target Op) {
 			return
 		}
 	}
+	list.Ops = append(list.Ops, op)
 }
 
 // OpListRemove removes op from the list.
