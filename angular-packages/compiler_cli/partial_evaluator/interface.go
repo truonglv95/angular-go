@@ -540,6 +540,23 @@ func (pe *PartialEvaluator) evaluateCallExpression(node *ast.CallExpression, sco
 	// Direct function call: fn(args)
 	if ast.IsIdentifier(node.Expression) {
 		fnName := node.Expression.AsIdentifier().Text
+		if fnName == "forwardRef" {
+			if node.Arguments != nil && len(node.Arguments.Nodes) == 1 {
+				arg := node.Arguments.Nodes[0]
+				if ast.IsArrowFunction(arg) {
+					arrow := arg.AsArrowFunction()
+					if arrow.Body != nil {
+						return pe.evaluateNode(arrow.Body, scope)
+					}
+				} else if ast.IsFunctionExpression(arg) {
+					fnExpr := arg.AsFunctionExpression()
+					if fnExpr.Body != nil {
+						return pe.evaluateNode(fnExpr.Body, scope)
+					}
+				}
+			}
+		}
+
 		sf := getSourceFile(node.AsNode())
 		if sf != nil {
 			fn := pe.findFunctionDeclaration(sf, fnName)

@@ -21,6 +21,8 @@ func TestLinkerGolden(t *testing.T) {
 		"@angular/common/fesm2022/common.mjs",
 		"@angular/forms/fesm2022/forms.mjs",
 		"@angular/router/fesm2022/router.mjs",
+		"@angular/animations/fesm2022/animations.mjs",
+		"@angular/animations/fesm2022/browser.mjs",
 		"primeng/fesm2022/primeng-button.mjs",
 		"primeng/fesm2022/primeng-table.mjs",
 		"primeng/fesm2022/primeng-select.mjs",

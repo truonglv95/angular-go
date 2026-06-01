@@ -54,6 +54,14 @@ func evaluate(t *testing.T, code string, expr string) partial_evaluator.Resolved
 // Tests ported from evaluator_spec.ts
 // -----------------------------------------------------------------------
 
+func TestEvaluator_ForwardRef(t *testing.T) {
+	// Test forwardRef with arrow function
+	assert.Equal(t, float64(42), evaluate(t, "const val = 42; const ref = forwardRef(() => val);", "ref"))
+	
+	// Test forwardRef with function expression
+	assert.Equal(t, float64(42), evaluate(t, "const val = 42; const ref = forwardRef(function() { return val; });", "ref"))
+}
+
 func TestEvaluator_Addition(t *testing.T) {
 	result := evaluate(t, "const x = 1 + 2;", "x")
 	assert.Equal(t, float64(3), result)
