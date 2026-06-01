@@ -1,0 +1,1 @@
+import {Component} from '@angular/core'; @Component({selector: 'test', standalone: true, template: `<ng-template #tpl let-a="a" let-b="b"><button (click)="do(a, b)"></button></ng-template>`}) export class C { do(a: any, b: any) {} }
