@@ -86,4 +86,78 @@ test.describe('Runtime Smoke Suite', () => {
     await expect(page.locator('.deferred-content')).toBeVisible();
     await expect(page.locator('text=Deferred Component Loaded!')).toBeVisible();
   });
+
+  test('dialog opens and closes', async ({ page }) => {
+    await page.locator('.p-menu-item-content').filter({ hasText: 'Dialog' }).click();
+    
+    await expect(page.locator('.p-dialog')).toBeHidden();
+    await page.locator('button').filter({ hasText: 'Show Dialog' }).click();
+    await expect(page.locator('.p-dialog')).toBeVisible();
+    await expect(page.locator('text=Update your information.')).toBeVisible();
+    
+    await page.locator('button').filter({ hasText: 'Cancel' }).click();
+    await expect(page.locator('.p-dialog')).toBeHidden();
+  });
+
+  test('datepicker popups and selects', async ({ page }) => {
+    await page.locator('.p-menu-item-content').filter({ hasText: 'Extra' }).click();
+    
+    const datepicker = page.locator('p-datepicker input');
+    await datepicker.click();
+    await expect(page.locator('.p-datepicker')).toBeVisible();
+    
+    // Click on a day (e.g., today or any available day)
+    await page.locator('.p-datepicker-day').first().click();
+    await expect(page.locator('.p-datepicker')).toBeHidden();
+  });
+
+  test('tree and treetable expand', async ({ page }) => {
+    // Tree
+    await page.locator('.p-menu-item-content').filter({ hasText: 'Tree' }).click();
+    await expect(page.locator('.p-tree')).toBeVisible();
+    const treeNode = page.locator('.p-tree-node-toggle-icon').first();
+    await treeNode.click();
+    
+    // TreeTable in Advanced
+    await page.locator('.p-menu-item-content').filter({ hasText: 'Advanced' }).click();
+    await expect(page.locator('.p-treetable-table')).toBeVisible();
+    const treeTableNode = page.locator('.p-treetable-row-toggle-button').first();
+    await treeTableNode.click();
+  });
+
+  test('accordion and panel toggle', async ({ page }) => {
+    await page.locator('.p-menu-item-content').filter({ hasText: 'Accordion' }).click();
+    await expect(page.locator('p-accordion')).toBeVisible();
+    await page.locator('p-accordion-header').filter({ hasText: 'Header II' }).first().click();
+    await expect(page.locator('p-accordion-content').filter({ hasText: 'Sed ut perspiciatis' }).first()).toBeVisible();
+
+    await page.locator('.p-menu-item-content').filter({ hasText: 'Advanced' }).click();
+    const panelHeader = page.locator('p-panel .p-panel-header').first();
+    await expect(panelHeader).toBeVisible();
+    // Toggle
+    await page.locator('p-panel .p-panel-toggle-button').click();
+  });
+
+  test('picklist and orderlist render', async ({ page }) => {
+    await page.locator('.p-menu-item-content').filter({ hasText: 'Advanced' }).click();
+    await expect(page.locator('p-picklist')).toBeVisible();
+    await expect(page.locator('p-orderlist')).toBeVisible();
+    
+    // Verify items
+    await expect(page.locator('p-picklist').locator('text=San Francisco').first()).toBeVisible();
+  });
+
+  test('splitter renders', async ({ page }) => {
+    await page.locator('.p-menu-item-content').filter({ hasText: 'Advanced' }).click();
+    await expect(page.locator('p-splitter')).toBeVisible();
+    await expect(page.locator('text=Panel 1')).toBeVisible();
+    await expect(page.locator('text=Panel 2')).toBeVisible();
+  });
+
+  test('router navigation works', async ({ page }) => {
+    await expect(page.locator('.dummy-route-content')).toBeHidden();
+    await page.locator('a.route-link').click();
+    await expect(page.locator('.dummy-route-content')).toBeVisible();
+    await expect(page.locator('text=Routed Component Successfully Loaded!')).toBeVisible();
+  });
 });

@@ -1,12 +1,17 @@
-<div class="container">
-  <div class="hero">
-    <img src="/angular-go-logo.png" alt="Angular Go Logo" class="logo" />
-    <h1>Angular on Go Compiler!</h1>
-    <p class="subtitle">Insanely fast builds, powered by Go and Vite</p>
-  </div>
+<div class="layout-wrapper">
+    <div class="layout-sidebar">
+        <h2>Go-NGC Demo</h2>
+        <p-menu [model]="items" styleClass="w-full"></p-menu>
+    </div>
     
     <div class="layout-main">
         <h1>PrimeNG Components via Native Go Compiler</h1>
+        
+        <div class="card flex justify-center mb-5">
+            <a routerLink="/dummy" class="route-link">Go to Dummy Route</a>
+        </div>
+        
+        <router-outlet></router-outlet>
         
         <div *ngIf="activeView === 'button'" class="card flex justify-center flex-wrap gap-4 mt-5">
             <p-button label="Primary" />

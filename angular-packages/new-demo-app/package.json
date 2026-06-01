@@ -8,7 +8,8 @@
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
     "vite": "vite",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:prod": "playwright test --config playwright.prod.config.ts"
   },
   "private": true,
   "packageManager": "npm@10.9.0",
