@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "experimentalDecorators": true,
+    "module": "preserve",
+    "noEmitOnError": false,
+    "outDir": "./out", "rootDir": ".",
+    "skipLibCheck": true,
+    "strict": true,
+    "target": "ES2022",
+    "types": []
+  },
+  "include": [
+    "app/**/*.ts"
+  ]
+}
