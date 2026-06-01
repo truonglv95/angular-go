@@ -74,14 +74,40 @@ class GoNgcError extends Error {
   readonly stderr: string;
   readonly args: string[];
   readonly code: number | null;
+  readonly id?: string;
+  readonly loc?: { file?: string; line: number; column: number };
+  readonly frame?: string;
 
   constructor(args: string[], code: number | null, stdout: string, stderr: string) {
+    const rawOutput = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n');
     super(formatGoNgcError(args, code, stdout, stderr));
     this.name = 'GoNgcError';
     this.args = args;
     this.code = code;
     this.stdout = stdout;
     this.stderr = stderr;
+
+    const match = rawOutput.match(/^([^\n]+?):(\d+):(\d+) - error ([A-Z0-9]+):\s+([^\n]+(?:\n\n[\s\S]+?(?=\n\/?.*?:\d+:\d+ - error|\n*$))?)/m);
+    if (match) {
+      const file = match[1];
+      const line = parseInt(match[2], 10);
+      const column = parseInt(match[3], 10);
+      const rawMessage = match[5].trim();
+      
+      const frameMatch = rawMessage.match(/(^\d+\s+.*[\s\S]*)/m);
+      let frame = undefined;
+      let message = match[4] + ': ' + rawMessage;
+      
+      if (frameMatch) {
+        frame = frameMatch[1];
+        message = match[4] + ': ' + rawMessage.substring(0, frameMatch.index).trim();
+      }
+
+      this.message = message;
+      this.id = file;
+      this.loc = { file, line, column };
+      this.frame = frame;
+    }
   }
 }
 
@@ -236,6 +262,9 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
   let lastCompileKey = '';
   const recompileOnChange = options.recompileOnChange !== false;
 
+  const htmlToTs = new Map<string, Set<string>>();
+  const cssToTs = new Map<string, Set<string>>();
+
   function log(message: string) {
     if (options.verbose) {
       config.logger.info(`[angular-go:compile] ${message}`);
@@ -347,7 +376,7 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
         await compileProject('startup');
       } catch (e: any) {
         if (config.command === 'build') {
-          this.error(e.message);
+          this.error(e);
         } else {
           config.logger.error(e.message);
         }
@@ -369,14 +398,53 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
       }
 
       if (compileError) {
-        this.error(compileError.message);
+        this.error(compileError);
       }
 
       if (!fs.existsSync(jsPath)) {
         this.error(`go-ngc did not emit ${jsPath} for ${cleanId(id)}`);
       }
 
-      return { code: fs.readFileSync(jsPath, 'utf8'), map: null };
+      const sourcePath = cleanId(id);
+      if (sourcePath.endsWith('.ts')) {
+        const sourceCode = fs.readFileSync(sourcePath, 'utf8');
+        const templateMatch = sourceCode.match(/templateUrl\s*:\s*['"]([^'"]+)['"]/);
+        if (templateMatch) {
+          const htmlPath = path.resolve(path.dirname(sourcePath), templateMatch[1]);
+          if (!htmlToTs.has(htmlPath)) htmlToTs.set(htmlPath, new Set());
+          htmlToTs.get(htmlPath)!.add(id);
+        }
+        const styleMatch = sourceCode.match(/styleUrl\s*:\s*['"]([^'"]+)['"]/);
+        if (styleMatch) {
+          const cssPath = path.resolve(path.dirname(sourcePath), styleMatch[1]);
+          if (!cssToTs.has(cssPath)) cssToTs.set(cssPath, new Set());
+          cssToTs.get(cssPath)!.add(id);
+        }
+        const styleUrlsMatch = sourceCode.match(/styleUrls\s*:\s*\[([^\]]+)\]/);
+        if (styleUrlsMatch) {
+          const urls = styleUrlsMatch[1].match(/['"]([^'"]+)['"]/g);
+          if (urls) {
+            for (const url of urls) {
+              const cleanUrl = url.replace(/['"]/g, '');
+              const cssPath = path.resolve(path.dirname(sourcePath), cleanUrl);
+              if (!cssToTs.has(cssPath)) cssToTs.set(cssPath, new Set());
+              cssToTs.get(cssPath)!.add(id);
+            }
+          }
+        }
+      }
+
+      let map = null;
+      const mapPath = jsPath + '.map';
+      if (fs.existsSync(mapPath)) {
+        try {
+          map = JSON.parse(fs.readFileSync(mapPath, 'utf8'));
+        } catch {
+          // ignore
+        }
+      }
+
+      return { code: fs.readFileSync(jsPath, 'utf8'), map };
     },
 
     async handleHotUpdate(ctx: any) {
@@ -404,13 +472,39 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
             message: e.message,
             stack: '',
             plugin: 'vite-plugin-angular-go',
+            id: e.id,
+            loc: e.loc,
+            frame: e.frame
           }
         });
         return [];
       }
-      server?.moduleGraph.invalidateAll();
-      server?.ws.send({ type: 'full-reload' });
-      return [];
+
+      if (!server) return [];
+      const modulesToUpdate = new Set<any>();
+
+      if (filePath.endsWith('.html') && htmlToTs.has(filePath)) {
+        for (const tsFile of htmlToTs.get(filePath)!) {
+          const mod = server.moduleGraph.getModuleById(tsFile);
+          if (mod) modulesToUpdate.add(mod);
+        }
+      } else if (filePath.endsWith('.css') && cssToTs.has(filePath)) {
+        for (const tsFile of cssToTs.get(filePath)!) {
+          const mod = server.moduleGraph.getModuleById(tsFile);
+          if (mod) modulesToUpdate.add(mod);
+        }
+      } else {
+        const mod = server.moduleGraph.getModuleById(filePath);
+        if (mod) modulesToUpdate.add(mod);
+      }
+
+      if (modulesToUpdate.size > 0) {
+        return Array.from(modulesToUpdate);
+      } else {
+        server.moduleGraph.invalidateAll();
+        server.ws.send({ type: 'full-reload' });
+        return [];
+      }
     },
   };
 }

@@ -2,7 +2,6 @@ package compiler_cli
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -67,7 +66,7 @@ func newSystem() *osSys {
 
 func ReadConfiguration(project string) *ParsedConfiguration {
 	sys := newSystem()
-	resolvedProject := tspath.NormalizePath(project)
+	resolvedProject := tspath.CombinePaths(sys.GetCurrentDirectory(), project)
 	if sys.FS().DirectoryExists(resolvedProject) {
 		resolvedProject = tspath.CombinePaths(resolvedProject, "tsconfig.json")
 	}
@@ -143,6 +142,16 @@ func PerformCompilation(config *ParsedConfiguration) *PerformCompilationResult {
 	ngProgram.LoadNgStructureAsync(ctx)
 	diags = append(diags, ngProgram.GetNgDiagnostics()...)
 
+	diags = append(diags, ngProgram.GetTsProgram().GetConfigFileParsingDiagnostics()...)
+	diags = append(diags, ngProgram.GetTsProgram().GetSyntacticDiagnostics(nil, nil)...)
+
+	if len(diags) > 0 {
+		return &PerformCompilationResult{
+			Diagnostics: diags,
+			Status:      tsc.ExitStatusDiagnosticsPresent_OutputsSkipped,
+		}
+	}
+
 	// Perform compiler emission with the modified AST directly
 	emitResult := ngProgram.Emit(ctx, compiler.EmitOptions{
 		WriteFile: func(fileName string, text string, data *compiler.WriteFileData) error {
@@ -199,9 +208,6 @@ func PerformCompilation(config *ParsedConfiguration) *PerformCompilationResult {
 		},
 	})
 
-	diags = append(diags, ngProgram.GetTsProgram().GetConfigFileParsingDiagnostics()...)
-	diags = append(diags, ngProgram.GetTsProgram().GetSyntacticDiagnostics(nil, nil)...)
-	fmt.Printf("Syntactic diagnostics count: %d\n", len(diags))
 	diags = append(diags, emitResult.Diagnostics...)
 
 	status := tsc.ExitStatusSuccess
