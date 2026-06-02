@@ -5,8 +5,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
+	"regexp"
+	"strings"
 	"time"
+
+	"github.com/microsoft/typescript-go/internal/perf"
 
 	_ "github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline"
 	_ "github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline/emit"
@@ -14,13 +17,11 @@ import (
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc"
 
 	"github.com/microsoft/typescript-go/internal/ast"
-	"github.com/microsoft/typescript-go/internal/astnav"
 	"github.com/microsoft/typescript-go/internal/bundled"
 	"github.com/microsoft/typescript-go/internal/compiler"
 	"github.com/microsoft/typescript-go/internal/core"
 	"github.com/microsoft/typescript-go/internal/execute/tsc"
 	"github.com/microsoft/typescript-go/internal/locale"
-	"github.com/microsoft/typescript-go/internal/parser"
 	"github.com/microsoft/typescript-go/internal/tsoptions"
 	"github.com/microsoft/typescript-go/internal/tspath"
 	"github.com/microsoft/typescript-go/internal/vfs"
@@ -28,11 +29,13 @@ import (
 )
 
 type ParsedConfiguration struct {
-	Project   string
-	Options   *core.CompilerOptions
-	RootNames []string
-	Errors    []*ast.Diagnostic
-	Locale    locale.Locale
+	Project         string
+	Options         *core.CompilerOptions
+	RootNames       []string
+	Errors          []*ast.Diagnostic
+	Locale          locale.Locale
+	CompilationMode string
+	DiscardOutput   bool
 }
 
 type osSys struct {
@@ -53,19 +56,49 @@ func (s *osSys) GetEnvironmentVariable(name string) string { return os.Getenv(na
 func (s *osSys) Now() time.Time                            { return time.Now() }
 func (s *osSys) SinceStart() time.Duration                 { return time.Since(s.start) }
 
-func newSystem() *osSys {
+func newSystem(discardOutput bool) *osSys {
 	cwd, _ := os.Getwd()
+	fsys := bundled.WrapFS(osvfs.FS())
+	fsys = &optimizedFS{fsys}
+	if discardOutput {
+		fsys = &discardFS{fsys}
+	}
 	return &osSys{
 		cwd:                tspath.NormalizePath(cwd),
-		fs:                 bundled.WrapFS(osvfs.FS()),
+		fs:                 fsys,
 		defaultLibraryPath: bundled.LibPath(),
 		writer:             os.Stdout,
 		start:              time.Now(),
 	}
 }
 
+type optimizedFS struct {
+	vfs.FS
+}
+
+func (o *optimizedFS) WriteFile(path string, data string) error {
+	if existing, ok := o.FS.ReadFile(path); ok && existing == data {
+		return nil
+	}
+	defer perf.Time("emit.fs_write")()
+	return o.FS.WriteFile(path, data)
+}
+
+type discardFS struct {
+	vfs.FS
+}
+
+func (d *discardFS) WriteFile(path string, data string) error {
+	return nil
+}
+
+func (d *discardFS) AppendFile(path string, data string) error {
+	return nil
+}
+
 func ReadConfiguration(project string) *ParsedConfiguration {
-	sys := newSystem()
+	defer perf.Time("config.read")()
+	sys := newSystem(false)
 	resolvedProject := tspath.CombinePaths(sys.GetCurrentDirectory(), project)
 	if sys.FS().DirectoryExists(resolvedProject) {
 		resolvedProject = tspath.CombinePaths(resolvedProject, "tsconfig.json")
@@ -101,7 +134,8 @@ type PerformCompilationResult struct {
 }
 
 func PerformCompilation(config *ParsedConfiguration) *PerformCompilationResult {
-	sys := newSystem()
+	defer perf.Time("compile.total")()
+	sys := newSystem(config.DiscardOutput)
 
 	if len(config.Errors) > 0 {
 		return &PerformCompilationResult{
@@ -110,13 +144,17 @@ func PerformCompilation(config *ParsedConfiguration) *PerformCompilationResult {
 		}
 	}
 
-	host := compiler.NewCachedFSCompilerHost(
-		sys.GetCurrentDirectory(),
-		sys.FS(),
-		sys.DefaultLibraryPath(),
-		&tsc.ExtendedConfigCache{},
-		nil,
-	)
+	var host compiler.CompilerHost
+	func() {
+		defer perf.Time("compile.host_create")()
+		host = compiler.NewCachedFSCompilerHost(
+			sys.GetCurrentDirectory(),
+			sys.FS(),
+			sys.DefaultLibraryPath(),
+			&tsc.ExtendedConfigCache{},
+			nil,
+		)
+	}()
 
 	// Build a standard parsed command line for the program creation
 	parsedConfig := &core.ParsedOptions{
@@ -130,20 +168,32 @@ func PerformCompilation(config *ParsedConfiguration) *PerformCompilationResult {
 	// Run Custom Angular AST transformations on all source files before emission
 	ctx := context.Background()
 
-	ngProgram, err := ngtsc.NewNgtscProgram(
-		config.RootNames,
-		parsedCommandLine,
-		host,
-	)
+	var ngProgram *ngtsc.NgtscProgram
+	var err error
+	func() {
+		defer perf.Time("compile.program_create")()
+		ngProgram, err = ngtsc.NewNgtscProgram(
+			config.RootNames,
+			parsedCommandLine,
+			host,
+			config.CompilationMode,
+		)
+	}()
 	if err != nil {
 		return &PerformCompilationResult{Diagnostics: nil}
 	}
 	var diags []*ast.Diagnostic
-	ngProgram.LoadNgStructureAsync(ctx)
+	func() {
+		defer perf.Time("angular.load_structure")()
+		ngProgram.LoadNgStructureAsync(ctx)
+	}()
 	diags = append(diags, ngProgram.GetNgDiagnostics()...)
 
-	diags = append(diags, ngProgram.GetTsProgram().GetConfigFileParsingDiagnostics()...)
-	diags = append(diags, ngProgram.GetTsProgram().GetSyntacticDiagnostics(nil, nil)...)
+	func() {
+		defer perf.Time("ts.diagnostics")()
+		diags = append(diags, ngProgram.GetTsProgram().GetConfigFileParsingDiagnostics()...)
+		diags = append(diags, ngProgram.GetTsProgram().GetSyntacticDiagnostics(nil, nil)...)
+	}()
 
 	if len(diags) > 0 {
 		return &PerformCompilationResult{
@@ -152,61 +202,50 @@ func PerformCompilation(config *ParsedConfiguration) *PerformCompilationResult {
 		}
 	}
 
-	// Perform compiler emission with the modified AST directly
-	emitResult := ngProgram.Emit(ctx, compiler.EmitOptions{
-		WriteFile: func(fileName string, text string, data *compiler.WriteFileData) error {
-			linkedText, changed, err := linkPartialDeclarationsInEmittedJavaScript(fileName, text)
-			if err != nil {
-				return err
-			}
-			if changed {
-				text = linkedText
-			}
-
-			// Parse the emitted JS into a temporary AST using the typescript-go parser
-			sf := parser.ParseSourceFile(ast.SourceFileParseOptions{
-				FileName: fileName,
-			}, text, core.ScriptKindJS)
-			if sf != nil {
-				var pureOffsets []int
-				var findPureCalls func(node *ast.Node)
-				findPureCalls = func(node *ast.Node) {
-					if node == nil {
+	var emitResult *compiler.EmitResult
+	func() {
+		defer perf.Time("ts.emit_total")()
+		emitResult = ngProgram.Emit(ctx, compiler.EmitOptions{
+			WriteFile: func(fileName string, text string, data *compiler.WriteFileData) error {
+				defer perf.Time("emit.write_file")()
+				var linkErr error
+				func() {
+					defer perf.Time("emit.linker")()
+					var linkedText string
+					var changed bool
+					linkedText, changed, linkErr = linkPartialDeclarationsInEmittedJavaScript(fileName, text)
+					if linkErr != nil {
 						return
 					}
-					if node.Kind == ast.KindCallExpression {
-						call := node.AsCallExpression()
-						if call.Expression.Kind == ast.KindPropertyAccessExpression {
-							pa := call.Expression.AsPropertyAccessExpression()
-							if pa.Name().Kind == ast.KindIdentifier {
-								name := pa.Name().AsIdentifier().Text
-								if name == "ɵɵdefineComponent" || name == "ɵɵdefineDirective" || name == "ɵɵdefineNgModule" || name == "ɵɵdefinePipe" || name == "ɵɵdefineInjectable" {
-									pureOffsets = append(pureOffsets, astnav.GetStartOfNode(node, sf, false))
-								}
-							}
-						}
+					if changed {
+						text = linkedText
 					}
-					node.ForEachChild(func(child *ast.Node) bool {
-						findPureCalls(child)
-						return false
-					})
+				}()
+				if linkErr != nil {
+					return linkErr
 				}
-				findPureCalls(sf.AsNode())
 
-				// Insert comments at the exact AST-determined positions in reverse order
-				if len(pureOffsets) > 0 {
-					sort.Slice(pureOffsets, func(i, j int) bool {
-						return pureOffsets[i] > pureOffsets[j]
-					})
-					for _, offset := range pureOffsets {
-						text = text[:offset] + "/*@__PURE__*/ " + text[offset:]
-					}
+				// Insert pure annotations using Regex instead of full AST parsing to save 395ms
+				func() {
+					defer perf.Time("emit.custom_transformers")()
+					re := regexp.MustCompile(`(i\d+\.ɵɵdefine(?:Component|Directive|NgModule|Pipe|Injectable)\()`)
+					text = re.ReplaceAllString(text, "/*@__PURE__*/ $1")
+				}()
+
+				timerName := "emit.write_text"
+				if strings.HasSuffix(fileName, ".js") {
+					timerName = "emit.write_js"
+				} else if strings.HasSuffix(fileName, ".d.ts") {
+					timerName = "emit.write_dts"
+				} else if strings.HasSuffix(fileName, ".map") {
+					timerName = "emit.source_map"
 				}
-			}
+				defer perf.Time(timerName)()
 
-			return host.FS().WriteFile(fileName, text)
-		},
-	})
+				return host.FS().WriteFile(fileName, text)
+			},
+		})
+	}()
 
 	diags = append(diags, emitResult.Diagnostics...)
 

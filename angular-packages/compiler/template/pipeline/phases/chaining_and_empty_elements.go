@@ -22,19 +22,21 @@ func CollapseEmptyInstructions(job compilation.CompilationJob) {
 	}
 
 	for _, unit := range job.GetUnits() {
-		for i := 0; i < len(unit.GetCreate().Elements()); {
-			op := unit.GetCreate().Elements()[i]
+		ops := unit.GetCreate().Elements()
+		var newOps []ir.Op
+		for i := 0; i < len(ops); i++ {
+			op := ops[i]
 			opReplacements, ok := replacements[op.Kind()]
 			if !ok {
-				i++
+				newOps = append(newOps, op)
 				continue
 			}
 			startKind := opReplacements[0]
 			mergedKind := opReplacements[1]
 
 			var prevOp ir.Op
-			for j := i - 1; j >= 0; j-- {
-				candidate := unit.GetCreate().Elements()[j]
+			for j := len(newOps) - 1; j >= 0; j-- {
+				candidate := newOps[j]
 				if !ignoredOpKinds[candidate.Kind()] {
 					prevOp = candidate
 					break
@@ -45,12 +47,12 @@ func CollapseEmptyInstructions(job compilation.CompilationJob) {
 				if setter, ok2 := prevOp.(interface{ SetKind(ir.OpKind) }); ok2 {
 					setter.SetKind(mergedKind)
 				}
-				unit.GetCreate().Remove(op)
-				// Do not increment i, as the next element shifted into the current index
+				// Do not append op since it's collapsed into prevOp
 			} else {
-				i++
+				newOps = append(newOps, op)
 			}
 		}
+		unit.GetCreate().Ops = newOps
 	}
 }
 

@@ -2,6 +2,7 @@ package render3
 
 import (
 	"strings"
+
 	"github.com/microsoft/typescript-go/angular-packages/compiler/core"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/expression_parser"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/i18n"
@@ -9,6 +10,7 @@ import (
 	"github.com/microsoft/typescript-go/angular-packages/compiler/parse_util"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/schema"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/template_parser"
+	"github.com/microsoft/typescript-go/internal/perf"
 )
 
 var LEADING_TRIVIA_CHARS = []string{" ", "\n", "\r", "\t"}
@@ -84,9 +86,13 @@ func (v *mockI18nMetaVisitor) VisitComponent(comp *ml_parser.Component, context 
 	return comp
 }
 
-func (v *mockI18nMetaVisitor) VisitAttribute(attribute *ml_parser.Attribute, context any) any { return attribute }
-func (v *mockI18nMetaVisitor) VisitText(text *ml_parser.Text, context any) any                   { return text }
-func (v *mockI18nMetaVisitor) VisitComment(comment *ml_parser.Comment, context any) any         { return comment }
+func (v *mockI18nMetaVisitor) VisitAttribute(attribute *ml_parser.Attribute, context any) any {
+	return attribute
+}
+func (v *mockI18nMetaVisitor) VisitText(text *ml_parser.Text, context any) any { return text }
+func (v *mockI18nMetaVisitor) VisitComment(comment *ml_parser.Comment, context any) any {
+	return comment
+}
 func (v *mockI18nMetaVisitor) VisitExpansion(expansion *ml_parser.Expansion, context any) any {
 	placeholders := make(map[string]*i18n.MessagePlaceholder)
 	getSpan := func(sub string) *parse_util.ParseSourceSpan {
@@ -219,6 +225,7 @@ func (s *schemaRegistryAdapter) ValidateAttribute(name string) struct {
 var ElementRegistry = &schemaRegistryAdapter{registry: schema.NewDomElementSchemaRegistry()}
 
 func ParseTemplate(template string, templateUrl string, options *ParseTemplateOptions) ParsedTemplate {
+	defer perf.Time("render3.template_parse")()
 	preserveWhitespaces := false
 	collectCommentNodes := false
 	selectorlessEnabled := false
@@ -251,11 +258,11 @@ func ParseTemplate(template string, templateUrl string, options *ParseTemplateOp
 
 	htmlParser := ml_parser.NewHtmlParser()
 	tokenizeOptions := &ml_parser.TokenizeOptions{
-		TokenizeExpansionForms:         true,
-		LeadingTriviaChars:             leadingTrivia,
-		SelectorlessEnabled:            selectorlessEnabled,
-		TokenizeBlocks:                 &enableBlockSyntax,
-		TokenizeLet:                    &enableLetSyntax,
+		TokenizeExpansionForms: true,
+		LeadingTriviaChars:     leadingTrivia,
+		SelectorlessEnabled:    selectorlessEnabled,
+		TokenizeBlocks:         &enableBlockSyntax,
+		TokenizeLet:            &enableLetSyntax,
 	}
 
 	url := templateUrl

@@ -12,6 +12,7 @@ import (
 	"github.com/microsoft/typescript-go/angular-packages/compiler/shadow_css"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline/compilation"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/template_parser"
+	"github.com/microsoft/typescript-go/internal/perf"
 )
 
 var IngestComponent func(
@@ -320,29 +321,40 @@ func CompileComponentFromMetadata(
 	if IngestComponent == nil {
 		panic("render3.IngestComponent is not initialized")
 	}
-	tpl := IngestComponent(
-		meta.Name,
-		meta.Template.Children,
-		constantPool,
-		compilationMode,
-		meta.RelativeContextFilePath,
-		meta.I18nUseExternalIds,
-		meta.Defer,
-		nil,
-		meta.RelativeTemplatePath,
-		false,
-		meta.LegacyOptionalChaining,
-		foreignImportsAny,
-	)
+	var tpl *compilation.ComponentCompilationJob
+	func() {
+		defer perf.Time("render3.ingest")()
+		tpl = IngestComponent(
+			meta.Name,
+			meta.Template.Children,
+			constantPool,
+			compilationMode,
+			meta.RelativeContextFilePath,
+			meta.I18nUseExternalIds,
+			meta.Defer,
+			nil,
+			meta.RelativeTemplatePath,
+			false,
+			meta.LegacyOptionalChaining,
+			foreignImportsAny,
+		)
+	}()
 
 	if Transform != nil {
-		Transform(tpl)
+		func() {
+			defer perf.Time("render3.pipeline_transform")()
+			Transform(tpl)
+		}()
 	}
 
 	if EmitTemplateFn == nil {
 		panic("render3.EmitTemplateFn is not initialized")
 	}
-	templateFn := EmitTemplateFn(tpl, constantPool)
+	var templateFn output.Expression
+	func() {
+		defer perf.Time("render3.emit_template_fn")()
+		templateFn = EmitTemplateFn(tpl, constantPool)
+	}()
 
 	if tpl.ContentSelectors != nil {
 		definitionMap.Set("ngContentSelectors", tpl.ContentSelectors)

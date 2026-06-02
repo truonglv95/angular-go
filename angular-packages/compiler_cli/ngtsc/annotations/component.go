@@ -31,21 +31,24 @@ type ComponentImport struct {
 }
 
 type ComponentAnalysis struct {
-	Selector       string
-	Template       string
-	TemplateUrl    string
-	Styles         []string
-	StyleUrls      []string
-	IsStandalone   bool
-	Imports        []ComponentImport
-	Inputs         map[string]render3.R3InputMetadata
-	Outputs        map[string]string
-	Queries        []render3.R3QueryMetadata
-	ViewQueries    []render3.R3QueryMetadata
-	Host           render3.R3HostMetadata
-	Animations     output.Expression
-	DecoratorNode  *ast.Node
-	PropDecorators map[string][]*ast.Node
+	Selector        string
+	Template        string
+	TemplateUrl     string
+	Styles          []string
+	StyleUrls       []string
+	IsStandalone    bool
+	Imports         []ComponentImport
+	Inputs          map[string]render3.R3InputMetadata
+	Outputs         map[string]string
+	Queries         []render3.R3QueryMetadata
+	ViewQueries     []render3.R3QueryMetadata
+	Host            render3.R3HostMetadata
+	Animations      output.Expression
+	DecoratorNode   *ast.Node
+	PropDecorators  map[string][]*ast.Node
+	ParsedTemplate  *render3.ParsedTemplate
+	CompilationMode string
+	RawImports      output.Expression
 }
 
 type ComponentResolution struct {
@@ -235,12 +238,13 @@ func (h *ComponentDecoratorHandler) Detect(node *ast.ClassDeclaration, decorator
 
 func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorator *reflection.Decorator) (any, []ast.Diagnostic) {
 	analysis := &ComponentAnalysis{
-		IsStandalone:   true,
-		Inputs:         make(map[string]render3.R3InputMetadata),
-		Outputs:        make(map[string]string),
-		Host:           render3.R3HostMetadata{},
-		DecoratorNode:  decorator.Node,
-		PropDecorators: make(map[string][]*ast.Node),
+		IsStandalone:    true,
+		Inputs:          make(map[string]render3.R3InputMetadata),
+		Outputs:         make(map[string]string),
+		Host:            render3.R3HostMetadata{},
+		DecoratorNode:   decorator.Node,
+		PropDecorators:  make(map[string][]*ast.Node),
+		CompilationMode: "global",
 	}
 
 	if node.Members != nil {
@@ -579,6 +583,7 @@ func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysis
 				}
 			}
 			parsedTemplate := render3.ParseTemplate(templateStr, "", nil)
+			analysis.ParsedTemplate = &parsedTemplate
 
 			// Deduplicate dependencies
 			seenDeps := make(map[string]bool)
@@ -788,7 +793,12 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 		}
 	}
 
-	parsedTemplate := render3.ParseTemplate(analysis.Template, "", nil)
+	var parsedTemplate render3.ParsedTemplate
+	if analysis.ParsedTemplate != nil {
+		parsedTemplate = *analysis.ParsedTemplate
+	} else {
+		parsedTemplate = render3.ParseTemplate(analysis.Template, "", nil)
+	}
 
 	className := ""
 	if node.Name() != nil && node.Name().Kind == ast.KindIdentifier {
@@ -876,6 +886,7 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 	}
 
 	meta := render3.R3ComponentMetadata[render3.R3TemplateDependency]{
+		RawImports: analysis.RawImports,
 		R3DirectiveMetadata: render3.R3DirectiveMetadata{
 			Name: className,
 			Type: render3.R3Reference{
@@ -900,6 +911,9 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 			Mode:   render3.DeferBlockDepsEmitMode_PerBlock,
 			Blocks: deferBlocks,
 		},
+	}
+	if analysis.CompilationMode == "local" {
+		meta.DeclarationListEmitMode = render3.DeclarationListEmitMode_RuntimeResolved
 	}
 	var compiled render3.R3CompiledExpression
 	if h.isPartial {

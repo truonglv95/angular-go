@@ -34,34 +34,41 @@ func (l *ParseLocation) MoveBy(delta int) *ParseLocation {
 	offset := l.Offset
 	line := l.Line
 	col := l.Col
-	for offset > 0 && delta < 0 {
-		offset--
-		delta++
-		ch := source[offset]
-		if ch == '\n' {
-			line--
-			var priorLine int = -1
-			if offset > 0 {
-				priorLine = strings.LastIndexByte(source[:offset], '\n')
-			}
-			if priorLine > 0 {
-				col = offset - priorLine
-			} else {
-				col = offset
-			}
-		} else {
-			col--
+
+	if delta > 0 {
+		end := offset + delta
+		if end > length {
+			end = length
 		}
-	}
-	for offset < length && delta > 0 {
-		ch := source[offset]
-		offset++
-		delta--
-		if ch == '\n' {
-			line++
-			col = 0
+		chunk := source[offset:end]
+		newlines := strings.Count(chunk, "\n")
+		line += newlines
+		if newlines > 0 {
+			lastNewline := strings.LastIndexByte(chunk, '\n')
+			col = len(chunk) - lastNewline - 1
 		} else {
-			col++
+			col += delta
+		}
+		offset = end
+	} else if delta < 0 {
+		for offset > 0 && delta < 0 {
+			offset--
+			delta++
+			ch := source[offset]
+			if ch == '\n' {
+				line--
+				var priorLine int = -1
+				if offset > 0 {
+					priorLine = strings.LastIndexByte(source[:offset], '\n')
+				}
+				if priorLine > 0 {
+					col = offset - priorLine
+				} else {
+					col = offset
+				}
+			} else {
+				col--
+			}
 		}
 	}
 	return NewParseLocation(l.File, offset, line, col)
@@ -240,4 +247,3 @@ func (f *ParseSourceFile) GetUrl() string {
 func (f *ParseSourceFile) GetContent() string {
 	return f.Content
 }
-

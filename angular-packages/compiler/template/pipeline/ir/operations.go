@@ -57,7 +57,9 @@ func (l *OpList) PushSlice(ops []Op) {
 
 // Prepend inserts ops at the beginning of the slice.
 func (l *OpList) Prepend(ops []Op) {
-	l.Ops = append(ops, l.Ops...)
+	l.Ops = append(l.Ops, ops...)
+	copy(l.Ops[len(ops):], l.Ops[:len(l.Ops)-len(ops)])
+	copy(l.Ops[:len(ops)], ops)
 }
 
 // Remove removes an op from the list.
@@ -74,7 +76,9 @@ func (l *OpList) Remove(target Op) {
 func OpListInsertBefore(list *OpList, op Op, target Op) {
 	for i, o := range list.Ops {
 		if o == target {
-			list.Ops = append(list.Ops[:i], append([]Op{op}, list.Ops[i:]...)...)
+			list.Ops = append(list.Ops, nil)
+			copy(list.Ops[i+1:], list.Ops[i:len(list.Ops)-1])
+			list.Ops[i] = op
 			return
 		}
 	}
