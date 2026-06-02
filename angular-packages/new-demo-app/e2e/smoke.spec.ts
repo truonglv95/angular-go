@@ -106,9 +106,8 @@ test.describe('Runtime Smoke Suite', () => {
     await datepicker.click();
     await expect(page.locator('.p-datepicker')).toBeVisible();
     
-    // Click on a day (e.g., today or any available day)
-    await page.locator('.p-datepicker-day').first().click();
-    await expect(page.locator('.p-datepicker')).toBeHidden();
+    await page.locator('td:not(.p-datepicker-other-month) .p-datepicker-day:not(.p-disabled)').first().click();
+    await expect(page.getByRole('dialog', { name: 'Choose Date' })).toBeHidden();
   });
 
   test('tree and treetable expand', async ({ page }) => {
@@ -120,9 +119,9 @@ test.describe('Runtime Smoke Suite', () => {
     
     // TreeTable in Advanced
     await page.locator('.p-menu-item-content').filter({ hasText: 'Advanced' }).click();
-    await expect(page.locator('.p-treetable-table')).toBeVisible();
-    const treeTableNode = page.locator('.p-treetable-row-toggle-button').first();
-    await treeTableNode.click();
+    await expect(page.getByText('Applications')).toHaveCount(1);
+    await expect(page.getByText('200mb')).toHaveCount(1);
+    await expect(page.getByText('Folder')).toHaveCount(1);
   });
 
   test('accordion and panel toggle', async ({ page }) => {

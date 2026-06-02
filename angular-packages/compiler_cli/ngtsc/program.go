@@ -18,6 +18,7 @@ func NewNgtscProgram(
 	rootNames []string,
 	tsConfig *tsoptions.ParsedCommandLine,
 	delegateHost compiler.CompilerHost,
+	compilationMode string,
 ) (*NgtscProgram, error) {
 	// Create the TypeScript program inside NgtscProgram
 	tsProgram := compiler.NewProgram(compiler.ProgramOptions{
@@ -25,7 +26,7 @@ func NewNgtscProgram(
 		Host:   delegateHost,
 	})
 
-	ngCompiler, err := core.NewNgCompiler(tsProgram)
+	ngCompiler, err := core.NewNgCompiler(tsProgram, compilationMode)
 	if err != nil {
 		return nil, err
 	}

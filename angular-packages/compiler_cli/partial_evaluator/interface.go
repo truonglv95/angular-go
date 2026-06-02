@@ -133,6 +133,21 @@ func (pe *PartialEvaluator) evaluateNode(node *ast.Node, scope *evalScope) Resol
 		// Evaluated inside array literal context; by itself it's dynamic
 		return &DynamicValue{Node: node, Reason: "spread element"}
 
+	case ast.IsBlock(node):
+		block := node.AsBlock()
+		if block.Statements != nil {
+			for _, stmt := range block.Statements.Nodes {
+				if ast.IsReturnStatement(stmt) {
+					retStmt := stmt.AsReturnStatement()
+					if retStmt.Expression != nil {
+						return pe.evaluateNode(retStmt.Expression, scope)
+					}
+					return nil
+				}
+			}
+		}
+		return nil
+
 	default:
 		return &DynamicValue{Node: node, Reason: "unrecognized expression"}
 	}

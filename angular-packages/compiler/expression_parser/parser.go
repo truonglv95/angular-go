@@ -418,7 +418,7 @@ func (p *Parser) checkNoInterpolation(errors *[]ParseError, input string, parseS
 	startIndex := -1
 	endIndex := -1
 
-	for charIndex := range p.forEachUnquotedChar(input, 0) {
+	p.forEachUnquotedChar(input, 0, func(charIndex int) bool {
 		if startIndex == -1 {
 			if strings.HasPrefix(input[charIndex:], "{{") {
 				startIndex = charIndex
@@ -426,10 +426,11 @@ func (p *Parser) checkNoInterpolation(errors *[]ParseError, input string, parseS
 		} else {
 			endIndex = p.getInterpolationEndIndex(input, "}}", charIndex)
 			if endIndex > -1 {
-				break
+				return false
 			}
 		}
-	}
+		return true
+	})
 
 	if startIndex > -1 && endIndex > -1 {
 		*errors = append(*errors, getParseError(
@@ -442,46 +443,46 @@ func (p *Parser) checkNoInterpolation(errors *[]ParseError, input string, parseS
 }
 
 func (p *Parser) getInterpolationEndIndex(input string, expressionEnd string, start int) int {
-	for charIndex := range p.forEachUnquotedChar(input, start) {
+	res := -1
+	p.forEachUnquotedChar(input, start, func(charIndex int) bool {
 		if strings.HasPrefix(input[charIndex:], expressionEnd) {
-			return charIndex
+			res = charIndex
+			return false
 		}
 		if strings.HasPrefix(input[charIndex:], "//") {
 			idx := strings.Index(input[charIndex:], expressionEnd)
 			if idx != -1 {
-				return charIndex + idx
+				res = charIndex + idx
 			}
-			return -1
+			return false
 		}
-	}
-	return -1
+		return true
+	})
+	return res
 }
 
-func (p *Parser) forEachUnquotedChar(input string, start int) <-chan int {
-	ch := make(chan int)
-	go func() {
-		defer close(ch)
-		outerQuote := -1
-		escapeCount := 0
-		for i := start; i < len(input); i++ {
-			char := int(input[i])
-			if isQuote(char) && (outerQuote == -1 || outerQuote == char) && escapeCount%2 == 0 {
-				if outerQuote == -1 {
-					outerQuote = char
-				} else {
-					outerQuote = -1
-				}
-			} else if outerQuote == -1 {
-				ch <- i
-			}
-			if input[i] == '\\' {
-				escapeCount++
+func (p *Parser) forEachUnquotedChar(input string, start int, cb func(int) bool) {
+	outerQuote := -1
+	escapeCount := 0
+	for i := start; i < len(input); i++ {
+		char := int(input[i])
+		if isQuote(char) && (outerQuote == -1 || outerQuote == char) && escapeCount%2 == 0 {
+			if outerQuote == -1 {
+				outerQuote = char
 			} else {
-				escapeCount = 0
+				outerQuote = -1
+			}
+		} else if outerQuote == -1 {
+			if !cb(i) {
+				return
 			}
 		}
-	}()
-	return ch
+		if input[i] == '\\' {
+			escapeCount++
+		} else {
+			escapeCount = 0
+		}
+	}
 }
 
 func isQuote(code int) bool {
@@ -1699,7 +1700,6 @@ func (p *parseAST) skip() {
 		n = p.next()
 	}
 }
-
 
 type SimpleExpressionChecker struct {
 	RecursiveAstVisitor

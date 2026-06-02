@@ -96,8 +96,40 @@ func SpecializeBindings(job compilation.CompilationJob) {
 					AnimationBindingKind: ir.AnimationBindingKindVALUE,
 				}
 
-			case ir.BindingKindProperty, ir.BindingKindLegacyAnimation:
-				if job.GetMode() == compilation.TemplateCompilationMode_DomOnly && isAriaAttribute(bindingOp.Name) {
+			case ir.BindingKindClassName:
+				if _, isInterpolation := bindingOp.Expression.(*ir.Interpolation); isInterpolation {
+					panic("Unexpected interpolation in ClassName binding")
+				}
+				finalOp = &ir.ClassPropOp{
+					Target:     bindingOp.Target,
+					Name:       bindingOp.Name,
+					Expression: bindingOp.Expression,
+					SourceSpan: bindingOp.SourceSpan,
+				}
+
+			case ir.BindingKindStyleProperty:
+				finalOp = &ir.StylePropOp{
+					Target:     bindingOp.Target,
+					Name:       bindingOp.Name,
+					Expression: bindingOp.Expression,
+					Unit:       bindingOp.Unit,
+					SourceSpan: bindingOp.SourceSpan,
+				}
+
+			case ir.BindingKindProperty, ir.BindingKindTemplate, ir.BindingKindLegacyAnimation:
+				if bindingOp.Name == "style" {
+					finalOp = &ir.StyleMapOp{
+						Target:     bindingOp.Target,
+						Expression: bindingOp.Expression,
+						SourceSpan: bindingOp.SourceSpan,
+					}
+				} else if bindingOp.Name == "class" {
+					finalOp = &ir.ClassMapOp{
+						Target:     bindingOp.Target,
+						Expression: bindingOp.Expression,
+						SourceSpan: bindingOp.SourceSpan,
+					}
+				} else if job.GetMode() == compilation.TemplateCompilationMode_DomOnly && isAriaAttribute(bindingOp.Name) {
 					finalOp = &ir.AttributeOp{
 						Target:                        bindingOp.Target,
 						Namespace:                     nil,
@@ -151,7 +183,7 @@ func SpecializeBindings(job compilation.CompilationJob) {
 					SourceSpan:                    bindingOp.SourceSpan,
 				}
 
-			case ir.BindingKindI18n, ir.BindingKindClassName, ir.BindingKindStyleProperty:
+			case ir.BindingKindI18n:
 				panic(fmt.Sprintf("Unhandled binding of kind %v", bindingKind))
 			}
 

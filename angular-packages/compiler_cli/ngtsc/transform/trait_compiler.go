@@ -7,23 +7,29 @@ import (
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/reflection"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/translator"
 	"github.com/microsoft/typescript-go/internal/ast"
+	"sync"
 )
 
 // TraitCompiler là bộ điều phối trung tâm của ngtsc. Nó quản lý tất cả các class
 // trong chương trình, chạy qua các bước Analyze -> Resolve -> Compile.
 type TraitCompiler struct {
-	handlers []DecoratorHandler
-	host     reflection.ReflectionHost
+	handlers  []DecoratorHandler
+	host      reflection.ReflectionHost
+	localHost reflection.ReflectionHost // AST-only host
 
 	// classes lưu trữ danh sách các Traits cho mỗi class declaration.
+	mu      sync.Mutex
 	classes map[*ast.ClassDeclaration][]*Trait
+	files   map[*ast.SourceFile]bool
 }
 
-func NewTraitCompiler(handlers []DecoratorHandler, host reflection.ReflectionHost) *TraitCompiler {
+func NewTraitCompiler(handlers []DecoratorHandler, host reflection.ReflectionHost, localHost reflection.ReflectionHost) *TraitCompiler {
 	return &TraitCompiler{
-		handlers: handlers,
-		host:     host,
-		classes:  make(map[*ast.ClassDeclaration][]*Trait),
+		handlers:  handlers,
+		host:      host,
+		localHost: localHost,
+		classes:   make(map[*ast.ClassDeclaration][]*Trait),
+		files:     make(map[*ast.SourceFile]bool),
 	}
 }
 
@@ -33,19 +39,50 @@ func (tc *TraitCompiler) AnalyzeSync(sf *ast.SourceFile) {
 		return
 	}
 
+	var hasTraits bool
 	sf.AsNode().ForEachChild(func(node *ast.Node) bool {
 		if node.Kind == ast.KindClassDeclaration {
 			classDecl := node.AsClassDeclaration()
-			tc.analyzeClass(classDecl)
+			if tc.analyzeClass(classDecl) {
+				hasTraits = true
+			}
 		}
 		return false
 	})
+	if hasTraits {
+		tc.mu.Lock()
+		tc.files[sf] = true
+		tc.mu.Unlock()
+	}
 }
 
-func (tc *TraitCompiler) analyzeClass(classDecl *ast.ClassDeclaration) {
-	decorators := tc.host.GetDecoratorsOfDeclaration(classDecl.AsNode())
-	if len(decorators) == 0 {
+// AnalyzeSyncLocal is the AST-based version of AnalyzeSync.
+func (tc *TraitCompiler) AnalyzeSyncLocal(sf *ast.SourceFile) {
+	if sf == nil || sf.Statements == nil {
 		return
+	}
+
+	var hasTraits bool
+	sf.AsNode().ForEachChild(func(node *ast.Node) bool {
+		if node.Kind == ast.KindClassDeclaration {
+			classDecl := node.AsClassDeclaration()
+			if tc.analyzeClassLocal(classDecl) {
+				hasTraits = true
+			}
+		}
+		return false
+	})
+	if hasTraits {
+		tc.mu.Lock()
+		tc.files[sf] = true
+		tc.mu.Unlock()
+	}
+}
+
+func (tc *TraitCompiler) analyzeClassLocal(classDecl *ast.ClassDeclaration) bool {
+	decorators := tc.localHost.GetDecoratorsOfDeclaration(classDecl.AsNode())
+	if len(decorators) == 0 {
+		return false
 	}
 
 	var traits []*Trait
@@ -63,7 +100,44 @@ func (tc *TraitCompiler) analyzeClass(classDecl *ast.ClassDeclaration) {
 	}
 
 	if len(traits) == 0 {
-		return
+		return false
+	}
+
+	tc.mu.Lock()
+	tc.classes[classDecl] = traits
+	tc.mu.Unlock()
+
+	// 2. Analyze
+	for _, trait := range traits {
+		analysis, _ := trait.Handler.Analyze(classDecl, trait.Decorator)
+		trait.Analysis = analysis
+		trait.State = TraitStateAnalyzed
+	}
+	return true
+}
+
+func (tc *TraitCompiler) analyzeClass(classDecl *ast.ClassDeclaration) bool {
+	decorators := tc.host.GetDecoratorsOfDeclaration(classDecl.AsNode())
+	if len(decorators) == 0 {
+		return false
+	}
+
+	var traits []*Trait
+
+	// 1. Detect
+	for _, handler := range tc.handlers {
+		dec := handler.Detect(classDecl, decorators)
+		if dec != nil {
+			traits = append(traits, &Trait{
+				Handler:   handler,
+				Decorator: dec,
+				State:     TraitStatePending,
+			})
+		}
+	}
+
+	if len(traits) == 0 {
+		return false
 	}
 
 	tc.classes[classDecl] = traits
@@ -74,6 +148,7 @@ func (tc *TraitCompiler) analyzeClass(classDecl *ast.ClassDeclaration) {
 		trait.Analysis = analysis
 		trait.State = TraitStateAnalyzed
 	}
+	return true
 }
 
 // Resolve chạy bước giải quyết tham chiếu cho tất cả các traits đã được Analyze.
@@ -91,7 +166,7 @@ func (tc *TraitCompiler) Resolve() {
 
 // UpdateSourceFile áp dụng kết quả compile (CompileResult) vào AST của source file.
 func (tc *TraitCompiler) UpdateSourceFile(sf *ast.SourceFile, factory *ast.NodeFactory) {
-	if sf == nil || sf.Statements == nil {
+	if sf == nil || sf.Statements == nil || !tc.files[sf] {
 		return
 	}
 

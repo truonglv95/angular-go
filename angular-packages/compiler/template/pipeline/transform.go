@@ -30,7 +30,6 @@ func Transform(job *compilation.ComponentCompilationJob) {
 	phases.PropagateI18nBlocks(job)
 	phases.WrapI18nIcus(job)
 	phases.DeduplicateTextBindings(job)
-	phases.SpecializeStyleBindings(job)
 	phases.SpecializeBindings(job)
 	phases.SpecializeControlProperties(job)
 	phases.ConvertAnimations(job)
@@ -97,7 +96,6 @@ func Transform(job *compilation.ComponentCompilationJob) {
 
 func TransformHostBinding(job *compilation.HostBindingCompilationJob) {
 	phases.ParseHostStyleProperties(job)
-	phases.SpecializeStyleBindings(job)
 	phases.SpecializeBindings(job)
 	phases.DeleteAnyCasts(job)
 	phases.ResolveDollarEvent(job)
