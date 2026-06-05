@@ -18,6 +18,7 @@ type ComponentLocalDecoratorHandler struct {
 	isCore        bool
 	metaRegistry  *metadata.LocalMetadataRegistry
 	scopeRegistry *scope.LocalModuleScopeRegistry
+	enableHmr     bool
 }
 
 func NewComponentLocalDecoratorHandler(
@@ -25,12 +26,14 @@ func NewComponentLocalDecoratorHandler(
 	isCore bool,
 	metaRegistry *metadata.LocalMetadataRegistry,
 	scopeRegistry *scope.LocalModuleScopeRegistry,
+	enableHmr bool,
 ) *ComponentLocalDecoratorHandler {
 	return &ComponentLocalDecoratorHandler{
 		host:          host,
 		isCore:        isCore,
 		metaRegistry:  metaRegistry,
 		scopeRegistry: scopeRegistry,
+		enableHmr:     enableHmr,
 	}
 }
 
@@ -335,11 +338,11 @@ func (h *ComponentLocalDecoratorHandler) Resolve(node *ast.ClassDeclaration, ana
 		}
 	}
 
-	globalHandler := annotations.NewComponentDecoratorHandler(h.host, h.isCore, h.metaRegistry, h.scopeRegistry)
+	globalHandler := annotations.NewComponentDecoratorHandler(h.host, h.isCore, h.metaRegistry, h.scopeRegistry, h.enableHmr)
 	return globalHandler.Resolve(node, localAnalysis)
 }
 
 func (h *ComponentLocalDecoratorHandler) CompileFull(node *ast.ClassDeclaration, analysisData any, resolutionData any, pool *compiler.ConstantPool, importMgr *imports.ImportManager, factory *ast.NodeFactory) ([]transform.CompileResult, []ast.Diagnostic) {
-	globalHandler := annotations.NewComponentDecoratorHandler(h.host, h.isCore, h.metaRegistry, h.scopeRegistry)
+	globalHandler := annotations.NewComponentDecoratorHandler(h.host, h.isCore, h.metaRegistry, h.scopeRegistry, h.enableHmr)
 	return globalHandler.CompileFull(node, analysisData, resolutionData, pool, importMgr, factory)
 }

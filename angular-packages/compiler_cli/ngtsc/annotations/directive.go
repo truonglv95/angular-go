@@ -413,8 +413,13 @@ func (h *DirectiveDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 		}
 	}
 	
+	coreModule := "@angular/core"
+	directiveName := "Directive"
 	decMapEntries := []output.LiteralMapEntry{
-		output.NewLiteralMapPropertyAssignment("type", output.NewReadVarExpr("Directive", nil, nil, nil), false),
+		output.NewLiteralMapPropertyAssignment("type", output.NewExternalExpr(output.ExternalReference{
+			ModuleName: &coreModule,
+			Name:       &directiveName,
+		}, nil, nil, nil, nil), false),
 	}
 	if len(decArgs) > 0 {
 		decMapEntries = append(decMapEntries, output.NewLiteralMapPropertyAssignment("args", output.NewLiteralArrayExpr(decArgs, nil, nil, nil), false))
@@ -434,7 +439,10 @@ func (h *DirectiveDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 					}
 				}
 				pMap := []output.LiteralMapEntry{
-					output.NewLiteralMapPropertyAssignment("type", output.NewReadVarExpr(id, nil, nil, nil), false),
+					output.NewLiteralMapPropertyAssignment("type", output.NewExternalExpr(output.ExternalReference{
+						ModuleName: &coreModule,
+						Name:       &id,
+					}, nil, nil, nil, nil), false),
 				}
 				if len(pDecArgs) > 0 {
 					pMap = append(pMap, output.NewLiteralMapPropertyAssignment("args", output.NewLiteralArrayExpr(pDecArgs, nil, nil, nil), false))

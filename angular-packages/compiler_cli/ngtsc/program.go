@@ -18,7 +18,8 @@ func NewNgtscProgram(
 	rootNames []string,
 	tsConfig *tsoptions.ParsedCommandLine,
 	delegateHost compiler.CompilerHost,
-	compilationMode string,
+	options core.NgCompilerOptions,
+	oldProgram *NgtscProgram,
 ) (*NgtscProgram, error) {
 	// Create the TypeScript program inside NgtscProgram
 	tsProgram := compiler.NewProgram(compiler.ProgramOptions{
@@ -26,7 +27,11 @@ func NewNgtscProgram(
 		Host:   delegateHost,
 	})
 
-	ngCompiler, err := core.NewNgCompiler(tsProgram, compilationMode)
+	var oldCompiler *core.NgCompiler
+	if oldProgram != nil {
+		oldCompiler = oldProgram.compiler
+	}
+	ngCompiler, err := core.NewNgCompiler(tsProgram, options, oldCompiler)
 	if err != nil {
 		return nil, err
 	}
@@ -57,4 +62,18 @@ func (p *NgtscProgram) GetNgDiagnostics() []*ast.Diagnostic {
 func (p *NgtscProgram) Emit(ctx context.Context, opts compiler.EmitOptions) *compiler.EmitResult {
 	p.compiler.PrepareEmit()
 	return p.tsProgram.Emit(ctx, opts)
+}
+
+func (p *NgtscProgram) GetHmrUpdate(componentId string) string {
+	if p.compiler != nil {
+		return p.compiler.GetHmrUpdate(componentId)
+	}
+	return ""
+}
+
+func (p *NgtscProgram) GetHmrComponentIds() []string {
+	if p.compiler != nil {
+		return p.compiler.GetHmrComponentIds()
+	}
+	return nil
 }

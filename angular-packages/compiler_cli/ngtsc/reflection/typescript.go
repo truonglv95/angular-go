@@ -1,7 +1,6 @@
 package reflection
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/microsoft/typescript-go/internal/ast"
@@ -353,6 +352,41 @@ func (h *TypeScriptReflectionHost) GetImportOfIdentifier(id *ast.Node) *Import {
 
 // getDirectImportOfIdentifier resolves an identifier to a direct import.
 func (h *TypeScriptReflectionHost) getDirectImportOfIdentifier(id *ast.Node) *Import {
+	if h.checker == nil {
+		sf := ast.GetSourceFileOfNode(id)
+		if sf == nil {
+			return nil
+		}
+		idText := id.AsIdentifier().Text
+		for _, stmt := range sf.Statements.Nodes {
+			if stmt.Kind == ast.KindImportDeclaration {
+				importDecl := stmt.AsImportDeclaration()
+				if importDecl.ImportClause != nil && importDecl.ImportClause.AsImportClause().NamedBindings != nil {
+					namedBindings := importDecl.ImportClause.AsImportClause().NamedBindings
+					if namedBindings.Kind == ast.KindNamedImports {
+						namedImports := namedBindings.AsNamedImports()
+						for _, element := range namedImports.Elements.Nodes {
+							if element.Kind == ast.KindImportSpecifier {
+								importSpecifier := element.AsImportSpecifier()
+								name := importSpecifier.Name().AsIdentifier().Text
+								if name == idText {
+									moduleSpecifier := importDecl.ModuleSpecifier
+									if moduleSpecifier != nil && ast.IsStringLiteral(moduleSpecifier) {
+										return &Import{
+											From: moduleSpecifier.AsStringLiteral().Text,
+											Name: name, // If there's a propertyName, handle it? We'll assume simple name for now
+											Node: stmt,
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		return nil
+	}
 	symbol := h.checker.GetSymbolAtLocation(id)
 	if symbol == nil || len(symbol.Declarations) != 1 {
 		return nil
@@ -379,6 +413,29 @@ func (h *TypeScriptReflectionHost) getDirectImportOfIdentifier(id *ast.Node) *Im
 // getImportOfNamespacedIdentifier resolves a namespaced import like `ns.Identifier`.
 func (h *TypeScriptReflectionHost) getImportOfNamespacedIdentifier(id *ast.Node, namespaceIdentifier *ast.Node) *Import {
 	if namespaceIdentifier == nil {
+		return nil
+	}
+	if h.checker == nil {
+		sf := ast.GetSourceFileOfNode(id)
+		if sf == nil { return nil }
+		nsName := namespaceIdentifier.AsIdentifier().Text
+		idName := id.AsIdentifier().Text
+		for _, stmt := range sf.Statements.Nodes {
+			if stmt.Kind == ast.KindImportDeclaration {
+				importDecl := stmt.AsImportDeclaration()
+				if importDecl.ImportClause != nil && importDecl.ImportClause.AsImportClause().NamedBindings != nil {
+					namedBindings := importDecl.ImportClause.AsImportClause().NamedBindings
+					if namedBindings.Kind == ast.KindNamespaceImport {
+						if namedBindings.AsNamespaceImport().Name().AsIdentifier().Text == nsName {
+							mod := importDecl.ModuleSpecifier
+							if mod != nil && ast.IsStringLiteral(mod) {
+								return &Import{From: mod.AsStringLiteral().Text, Name: idName, Node: stmt}
+							}
+						}
+					}
+				}
+			}
+		}
 		return nil
 	}
 	nsSymbol := h.checker.GetSymbolAtLocation(namespaceIdentifier)
@@ -466,14 +523,30 @@ func (h *TypeScriptReflectionHost) GetBaseClassExpression(clazz ClassDeclaration
 
 // GetDeclarationOfIdentifier resolves an identifier to its declaration.
 func (h *TypeScriptReflectionHost) GetDeclarationOfIdentifier(id *ast.Node) *Declaration {
+	if h.checker == nil {
+		sf := ast.GetSourceFileOfNode(id)
+		if sf == nil { return nil }
+		idText := id.AsIdentifier().Text
+		var foundDecl *Declaration
+		sf.ForEachChild(func(n *ast.Node) bool {
+			if n.Kind == ast.KindClassDeclaration {
+				c := n.AsClassDeclaration()
+				if c.Name() != nil && c.Name().AsIdentifier().Text == idText {
+					foundDecl = &Declaration{Node: n, ViaModule: ""}
+					return true // stop
+				}
+			} else if n.Kind == ast.KindVariableStatement {
+				// simplify: just look at VariableDeclarationList
+			}
+			return false
+		})
+		return foundDecl
+	}
 	symbol := h.checker.GetSymbolAtLocation(id)
 	if symbol == nil {
 		return nil
 	}
 	decl := h.getDeclarationOfSymbol(symbol, id)
-	if decl != nil && decl.Node != nil {
-		fmt.Printf("GetDeclarationOfIdentifier %s -> %d\n", id.AsIdentifier().Text, decl.Node.Kind)
-	}
 	return decl
 }
 
@@ -691,7 +764,6 @@ func (h *TypeScriptReflectionHost) getDeclarationOfSymbol(symbol *ast.Symbol, or
 			targetName = spec.Name()
 		}
 		targetSymbol := h.checker.GetSymbolAtLocation(targetName)
-		fmt.Printf("getDeclarationOfSymbol: ExportSpecifier targetName=%s, targetSymbol=%v\n", targetName.AsIdentifier().Text, targetSymbol)
 		if targetSymbol == nil {
 			return nil
 		}

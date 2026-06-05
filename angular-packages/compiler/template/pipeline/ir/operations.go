@@ -1,13 +1,13 @@
 package ir
 
+import "sync/atomic"
+
 // OpListNextListId is the counter for assigning debug IDs to OpLists.
-var OpListNextListId = 0
+var OpListNextListId atomic.Int64
 
 // NewOpListId allocates the next debug ID for an OpList.
 func NewOpListId() int {
-	id := OpListNextListId
-	OpListNextListId++
-	return id
+	return int(OpListNextListId.Add(1) - 1)
 }
 
 // OpList is a collection of Op nodes.

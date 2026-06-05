@@ -2,19 +2,20 @@ package compiler_cli
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
+	"sync"
 	"time"
-
-	"github.com/microsoft/typescript-go/internal/perf"
 
 	_ "github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline"
 	_ "github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline/emit"
 	_ "github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline/ingest"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc"
+	ngtsc_core "github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/core"
 
 	"github.com/microsoft/typescript-go/internal/ast"
 	"github.com/microsoft/typescript-go/internal/bundled"
@@ -25,6 +26,7 @@ import (
 	"github.com/microsoft/typescript-go/internal/tsoptions"
 	"github.com/microsoft/typescript-go/internal/tspath"
 	"github.com/microsoft/typescript-go/internal/vfs"
+	"github.com/microsoft/typescript-go/internal/vfs/cachedvfs"
 	"github.com/microsoft/typescript-go/internal/vfs/osvfs"
 )
 
@@ -35,7 +37,10 @@ type ParsedConfiguration struct {
 	Errors          []*ast.Diagnostic
 	Locale          locale.Locale
 	CompilationMode string
+	EnableHmr       bool
 	DiscardOutput   bool
+	Write           bool
+	Format          string
 }
 
 type osSys struct {
@@ -44,6 +49,31 @@ type osSys struct {
 	defaultLibraryPath string
 	cwd                string
 	start              time.Time
+}
+
+type profiledCompilerHost struct {
+	compiler.CompilerHost
+}
+
+func (h *profiledCompilerHost) ClearSourceCache() {
+	if cc, ok := h.CompilerHost.(CacheClearable); ok {
+		cc.ClearSourceCache()
+	}
+}
+
+// H2 FIX: Delegate ClearSourceFile so that the type assertion
+// state.Host.(CacheClearable) in server.go succeeds. Without this method,
+// profiledCompilerHost does not satisfy CacheClearable even though the
+// embedded cachedCompilerHost does, causing per-file invalidation to silently
+// fall back to a full cache clear on every change.
+func (h *profiledCompilerHost) ClearSourceFile(filePath string) {
+	if cc, ok := h.CompilerHost.(CacheClearable); ok {
+		cc.ClearSourceFile(filePath)
+	}
+}
+
+func (h *profiledCompilerHost) GetSourceFile(opts ast.SourceFileParseOptions) *ast.SourceFile {
+	return h.CompilerHost.GetSourceFile(opts)
 }
 
 func (s *osSys) FS() vfs.FS                                { return s.fs }
@@ -77,10 +107,6 @@ type optimizedFS struct {
 }
 
 func (o *optimizedFS) WriteFile(path string, data string) error {
-	if existing, ok := o.FS.ReadFile(path); ok && existing == data {
-		return nil
-	}
-	defer perf.Time("emit.fs_write")()
 	return o.FS.WriteFile(path, data)
 }
 
@@ -97,7 +123,6 @@ func (d *discardFS) AppendFile(path string, data string) error {
 }
 
 func ReadConfiguration(project string) *ParsedConfiguration {
-	defer perf.Time("config.read")()
 	sys := newSystem(false)
 	resolvedProject := tspath.CombinePaths(sys.GetCurrentDirectory(), project)
 	if sys.FS().DirectoryExists(resolvedProject) {
@@ -123,18 +148,26 @@ func ReadConfiguration(project string) *ParsedConfiguration {
 	}
 
 	parsed.Options = configParseResult.CompilerOptions()
+	parsed.Options.SingleThreaded = core.BoolToTristate(false)
 	parsed.RootNames = configParseResult.FileNames()
 	parsed.Locale = configParseResult.Locale()
 	return parsed
 }
 
+type OutputFile struct {
+	Path string `json:"path"`
+	Text string `json:"text"`
+	Hash string `json:"hash,omitempty"`
+	Kind string `json:"kind"`
+}
+
 type PerformCompilationResult struct {
 	Diagnostics []*ast.Diagnostic
 	Status      tsc.ExitStatus
+	Outputs     []OutputFile
 }
 
 func PerformCompilation(config *ParsedConfiguration) *PerformCompilationResult {
-	defer perf.Time("compile.total")()
 	sys := newSystem(config.DiscardOutput)
 
 	if len(config.Errors) > 0 {
@@ -144,17 +177,98 @@ func PerformCompilation(config *ParsedConfiguration) *PerformCompilationResult {
 		}
 	}
 
-	var host compiler.CompilerHost
-	func() {
-		defer perf.Time("compile.host_create")()
-		host = compiler.NewCachedFSCompilerHost(
-			sys.GetCurrentDirectory(),
-			sys.FS(),
-			sys.DefaultLibraryPath(),
-			&tsc.ExtendedConfigCache{},
-			nil,
-		)
-	}()
+	host := CreateCompilerHost(sys)
+	res, _ := PerformCompilationWithHost(config, host, nil)
+	return res
+}
+
+type cachedSourceFile struct {
+	file  *ast.SourceFile
+	mtime time.Time
+	size  int64
+}
+
+type cachedCompilerHost struct {
+	compiler.CompilerHost
+	mu              sync.RWMutex
+	sourceFileCache map[string]*cachedSourceFile
+}
+
+func (h *cachedCompilerHost) ClearSourceCache() {
+	h.mu.Lock()
+	h.sourceFileCache = make(map[string]*cachedSourceFile)
+	h.mu.Unlock()
+}
+
+// B#6 FIX: ClearSourceFile evicts a single file from the source cache instead
+// of nuking the entire cache on every file-change event.
+func (h *cachedCompilerHost) ClearSourceFile(filePath string) {
+	h.mu.Lock()
+	delete(h.sourceFileCache, filePath)
+	h.mu.Unlock()
+}
+
+type CacheClearable interface {
+	ClearSourceCache()
+	// ClearSourceFile evicts a single file; implementors that only support
+	// full-clear may implement this as a no-op or fall back to ClearSourceCache.
+	ClearSourceFile(filePath string)
+}
+
+func (h *cachedCompilerHost) GetSourceFile(opts ast.SourceFileParseOptions) *ast.SourceFile {
+	h.mu.RLock()
+	cached, ok := h.sourceFileCache[opts.FileName]
+	h.mu.RUnlock()
+
+	var mtime time.Time
+	var size int64
+	if stat := h.FS().Stat(opts.FileName); stat != nil {
+		mtime = stat.ModTime()
+		size = stat.Size()
+	}
+
+	if ok && cached.mtime == mtime && cached.size == size && cached.file != nil {
+		return cached.file
+	}
+
+	file := h.CompilerHost.GetSourceFile(opts)
+
+	h.mu.Lock()
+	if h.sourceFileCache == nil {
+		h.sourceFileCache = make(map[string]*cachedSourceFile)
+	}
+	h.sourceFileCache[opts.FileName] = &cachedSourceFile{
+		file:  file,
+		mtime: mtime,
+		size:  size,
+	}
+	h.mu.Unlock()
+
+	return file
+}
+
+func CreateCompilerHost(sys *osSys) compiler.CompilerHost {
+	host := compiler.NewCompilerHost(
+		sys.GetCurrentDirectory(),
+		cachedvfs.From(sys.FS()),
+		sys.DefaultLibraryPath(),
+		&tsc.ExtendedConfigCache{},
+		nil,
+	)
+	cachedHost := &cachedCompilerHost{
+		CompilerHost:    host,
+		sourceFileCache: make(map[string]*cachedSourceFile),
+	}
+	return &profiledCompilerHost{CompilerHost: cachedHost}
+}
+
+func PerformCompilationWithHost(config *ParsedConfiguration, host compiler.CompilerHost, oldProgram *ngtsc.NgtscProgram) (*PerformCompilationResult, *ngtsc.NgtscProgram) {
+	if len(config.Errors) > 0 {
+		return &PerformCompilationResult{
+			Diagnostics: config.Errors,
+			Status:      tsc.ExitStatusDiagnosticsPresent_OutputsSkipped,
+		}, nil
+	}
 
 	// Build a standard parsed command line for the program creation
 	parsedConfig := &core.ParsedOptions{
@@ -171,26 +285,27 @@ func PerformCompilation(config *ParsedConfiguration) *PerformCompilationResult {
 	var ngProgram *ngtsc.NgtscProgram
 	var err error
 	func() {
-		defer perf.Time("compile.program_create")()
 		ngProgram, err = ngtsc.NewNgtscProgram(
 			config.RootNames,
 			parsedCommandLine,
 			host,
-			config.CompilationMode,
+			ngtsc_core.NgCompilerOptions{
+				CompilationMode: config.CompilationMode,
+				EnableHmr:       config.EnableHmr,
+			},
+			oldProgram,
 		)
 	}()
 	if err != nil {
-		return &PerformCompilationResult{Diagnostics: nil}
+		return &PerformCompilationResult{Diagnostics: nil}, nil
 	}
 	var diags []*ast.Diagnostic
 	func() {
-		defer perf.Time("angular.load_structure")()
 		ngProgram.LoadNgStructureAsync(ctx)
 	}()
 	diags = append(diags, ngProgram.GetNgDiagnostics()...)
 
 	func() {
-		defer perf.Time("ts.diagnostics")()
 		diags = append(diags, ngProgram.GetTsProgram().GetConfigFileParsingDiagnostics()...)
 		diags = append(diags, ngProgram.GetTsProgram().GetSyntacticDiagnostics(nil, nil)...)
 	}()
@@ -199,18 +314,25 @@ func PerformCompilation(config *ParsedConfiguration) *PerformCompilationResult {
 		return &PerformCompilationResult{
 			Diagnostics: diags,
 			Status:      tsc.ExitStatusDiagnosticsPresent_OutputsSkipped,
-		}
+		}, ngProgram
 	}
 
 	var emitResult *compiler.EmitResult
+	var outputs []OutputFile
+	var outputsMutex sync.Mutex
+
 	func() {
-		defer perf.Time("ts.emit_total")()
+
+		// Throttle concurrent file writes to avoid disk thrashing
+		writeSemaphore := make(chan struct{}, 16)
+
 		emitResult = ngProgram.Emit(ctx, compiler.EmitOptions{
 			WriteFile: func(fileName string, text string, data *compiler.WriteFileData) error {
-				defer perf.Time("emit.write_file")()
+				writeSemaphore <- struct{}{}
+				defer func() { <-writeSemaphore }()
+
 				var linkErr error
 				func() {
-					defer perf.Time("emit.linker")()
 					var linkedText string
 					var changed bool
 					linkedText, changed, linkErr = linkPartialDeclarationsInEmittedJavaScript(fileName, text)
@@ -225,24 +347,31 @@ func PerformCompilation(config *ParsedConfiguration) *PerformCompilationResult {
 					return linkErr
 				}
 
-				// Insert pure annotations using Regex instead of full AST parsing to save 395ms
-				func() {
-					defer perf.Time("emit.custom_transformers")()
-					re := regexp.MustCompile(`(i\d+\.ɵɵdefine(?:Component|Directive|NgModule|Pipe|Injectable)\()`)
-					text = re.ReplaceAllString(text, "/*@__PURE__*/ $1")
-				}()
-
-				timerName := "emit.write_text"
+				kind := "other"
 				if strings.HasSuffix(fileName, ".js") {
-					timerName = "emit.write_js"
+					kind = "js"
 				} else if strings.HasSuffix(fileName, ".d.ts") {
-					timerName = "emit.write_dts"
+					kind = "dts"
 				} else if strings.HasSuffix(fileName, ".map") {
-					timerName = "emit.source_map"
+					kind = "map"
 				}
-				defer perf.Time(timerName)()
 
-				return host.FS().WriteFile(fileName, text)
+				hash := sha256.Sum256([]byte(text))
+				hashStr := fmt.Sprintf("%x", hash)
+
+				outputsMutex.Lock()
+				outputs = append(outputs, OutputFile{
+					Path: fileName,
+					Text: text,
+					Hash: hashStr,
+					Kind: kind,
+				})
+				outputsMutex.Unlock()
+
+				if config.Write {
+					return host.FS().WriteFile(fileName, text)
+				}
+				return nil
 			},
 		})
 	}()
@@ -257,7 +386,8 @@ func PerformCompilation(config *ParsedConfiguration) *PerformCompilationResult {
 	return &PerformCompilationResult{
 		Diagnostics: diags,
 		Status:      status,
-	}
+		Outputs:     outputs,
+	}, ngProgram
 }
 
 func linkPartialDeclarationsInEmittedJavaScript(fileName string, text string) (string, bool, error) {

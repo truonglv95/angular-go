@@ -12,7 +12,6 @@ import (
 	"github.com/microsoft/typescript-go/angular-packages/compiler/shadow_css"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline/compilation"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/template_parser"
-	"github.com/microsoft/typescript-go/internal/perf"
 )
 
 var IngestComponent func(
@@ -309,7 +308,7 @@ func CompileComponentFromMetadata(
 	}
 
 	compilationMode := compilation.TemplateCompilationMode_Full
-	if meta.IsStandalone && !meta.HasDirectiveDependencies {
+	if meta.IsStandalone && !meta.HasDirectiveDependencies && meta.DeclarationListEmitMode != DeclarationListEmitMode_RuntimeResolved {
 		compilationMode = compilation.TemplateCompilationMode_DomOnly
 	}
 
@@ -323,7 +322,6 @@ func CompileComponentFromMetadata(
 	}
 	var tpl *compilation.ComponentCompilationJob
 	func() {
-		defer perf.Time("render3.ingest")()
 		tpl = IngestComponent(
 			meta.Name,
 			meta.Template.Children,
@@ -342,7 +340,6 @@ func CompileComponentFromMetadata(
 
 	if Transform != nil {
 		func() {
-			defer perf.Time("render3.pipeline_transform")()
 			Transform(tpl)
 		}()
 	}
@@ -352,7 +349,6 @@ func CompileComponentFromMetadata(
 	}
 	var templateFn output.Expression
 	func() {
-		defer perf.Time("render3.emit_template_fn")()
 		templateFn = EmitTemplateFn(tpl, constantPool)
 	}()
 

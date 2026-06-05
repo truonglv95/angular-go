@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"path/filepath"
+	"os"
 	"sort"
 	"strings"
 
@@ -208,14 +209,16 @@ type ComponentDecoratorHandler struct {
 	isPartial     bool
 	metaRegistry  *metadata.LocalMetadataRegistry
 	scopeRegistry *scope.LocalModuleScopeRegistry
+	enableHmr     bool
 }
 
-func NewComponentDecoratorHandler(host reflection.ReflectionHost, isPartial bool, metaRegistry *metadata.LocalMetadataRegistry, scopeRegistry *scope.LocalModuleScopeRegistry) *ComponentDecoratorHandler {
+func NewComponentDecoratorHandler(host reflection.ReflectionHost, isPartial bool, metaRegistry *metadata.LocalMetadataRegistry, scopeRegistry *scope.LocalModuleScopeRegistry, enableHmr bool) *ComponentDecoratorHandler {
 	return &ComponentDecoratorHandler{
 		host:          host,
 		isPartial:     isPartial,
 		metaRegistry:  metaRegistry,
 		scopeRegistry: scopeRegistry,
+		enableHmr:     enableHmr,
 	}
 }
 
@@ -578,8 +581,10 @@ func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysis
 			templateStr := analysis.Template
 			if analysis.TemplateUrl != "" {
 				templatePath := filepath.Join(baseDir, analysis.TemplateUrl)
-				if content, err := ioutil.ReadFile(templatePath); err == nil {
-					templateStr = string(content)
+				if !strings.HasPrefix(templatePath, "http") {
+					if content, err := ioutil.ReadFile(templatePath); err == nil {
+						templateStr = string(content)
+					}
 				}
 			}
 			parsedTemplate := render3.ParseTemplate(templateStr, "", nil)
@@ -974,8 +979,13 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 		}
 	}
 
+	coreModule := "@angular/core"
+	componentName := "Component"
 	decMapEntries := []output.LiteralMapEntry{
-		output.NewLiteralMapPropertyAssignment("type", output.NewReadVarExpr("Component", nil, nil, nil), false),
+		output.NewLiteralMapPropertyAssignment("type", output.NewExternalExpr(output.ExternalReference{
+			ModuleName: &coreModule,
+			Name:       &componentName,
+		}, nil, nil, nil, nil), false),
 	}
 	if len(decArgs) > 0 {
 		decMapEntries = append(decMapEntries, output.NewLiteralMapPropertyAssignment("args", output.NewLiteralArrayExpr(decArgs, nil, nil, nil), false))
@@ -995,7 +1005,10 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 					}
 				}
 				pMap := []output.LiteralMapEntry{
-					output.NewLiteralMapPropertyAssignment("type", output.NewReadVarExpr(id, nil, nil, nil), false),
+					output.NewLiteralMapPropertyAssignment("type", output.NewExternalExpr(output.ExternalReference{
+						ModuleName: &coreModule,
+						Name:       &id,
+					}, nil, nil, nil, nil), false),
 				}
 				if len(pDecArgs) > 0 {
 					pMap = append(pMap, output.NewLiteralMapPropertyAssignment("args", output.NewLiteralArrayExpr(pDecArgs, nil, nil, nil), false))
@@ -1042,7 +1055,7 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 		rawPath := sf.FileName()
 
 		// Attempt to make path relative
-		if rel, err := filepath.Rel(".", rawPath); err == nil && !strings.HasPrefix(rel, "..") {
+		if rel, err := func() (string, error) { cwd, _ := os.Getwd(); return filepath.Rel(cwd, rawPath) }(); err == nil && !strings.HasPrefix(rel, "..") {
 			filePath = rel
 		} else {
 			// fallback: find "src/" and cut from there
@@ -1138,15 +1151,69 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 		extraStatements = append(extraStatements, classDebugInfoNode)
 	}
 
+	var hmrUpdateDecl *HmrUpdateDeclaration
+	if !h.isPartial && h.enableHmr {
+		var classDebugExprArg output.Expression
+		if classDebugExpr != nil {
+			classDebugExprArg = classDebugExpr
+		}
+		hmrDeps := extractHmrDependencies(node, compiled, facExpr, classDebugExprArg)
+		if hmrDeps != nil {
+			hmrMeta := render3.R3HmrMetadata{
+				Type:                  output.NewWrappedNodeExpr(node.Name(), nil, nil, nil),
+				ClassName:             className,
+				FilePath:              filePath,
+				LocalDependencies:     hmrDeps.local,
+				NamespaceDependencies: hmrDeps.external,
+			}
+
+			hmrInitExpr := render3.CompileHmrInitializer(hmrMeta)
+			if hmrInitExpr != nil {
+				hmrInitStmt := hmrInitExpr.ToStmt(nil)
+				astStmt := hmrInitStmt.VisitStatement(visitor, translator.Context{IsStatementMode: true})
+				if astStmt != nil {
+					if n, ok := astStmt.(*ast.Node); ok {
+						extraStatements = append(extraStatements, n)
+					} else if arr, ok := astStmt.([]*ast.Node); ok {
+						extraStatements = append(extraStatements, arr...)
+					}
+					// Unknown AST stmt types are silently skipped —
+					// stdout is the JSON-RPC stream in daemon mode, so no debug prints here.
+				}
+			}
+
+			constantStatements := pool.Statements
+
+			hmrUpdateDecl = getHmrUpdateDeclaration(
+				facExpr,
+				compiled,
+				constantStatements,
+				hmrMeta,
+				node,
+				importMgr,
+				factory,
+			)
+		}
+	}
+
+	var hmrUpdateNodes []*ast.Node
+	var hmrImports []*ast.Node
+	if hmrUpdateDecl != nil {
+		hmrUpdateNodes = hmrUpdateDecl.Nodes
+		hmrImports = hmrUpdateDecl.Imports
+	}
+
 	return []transform.CompileResult{
 		{
 			PropertyName: "ɵfac",
 			Initializer:  facInitializerNode,
 		},
 		{
-			PropertyName: "ɵcmp",
-			Initializer:  initializerNode,
-			Statements:   extraStatements,
+			PropertyName:   "ɵcmp",
+			Initializer:    initializerNode,
+			Statements:     extraStatements,
+			HmrUpdateNodes: hmrUpdateNodes,
+			HmrImports:     hmrImports,
 		},
 	}, diagnostics
 }

@@ -179,8 +179,13 @@ func (h *PipeDecoratorHandler) CompileFull(node *ast.ClassDeclaration, analysisD
 		}
 	}
 
+	coreModule := "@angular/core"
+	pipeName := "Pipe"
 	decMapEntries := []output.LiteralMapEntry{
-		output.NewLiteralMapPropertyAssignment("type", output.NewReadVarExpr("Pipe", nil, nil, nil), false),
+		output.NewLiteralMapPropertyAssignment("type", output.NewExternalExpr(output.ExternalReference{
+			ModuleName: &coreModule,
+			Name:       &pipeName,
+		}, nil, nil, nil, nil), false),
 	}
 	if len(decArgs) > 0 {
 		decMapEntries = append(decMapEntries, output.NewLiteralMapPropertyAssignment("args", output.NewLiteralArrayExpr(decArgs, nil, nil, nil), false))

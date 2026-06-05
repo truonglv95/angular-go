@@ -249,8 +249,13 @@ func (h *NgModuleDecoratorHandler) CompileFull(node *ast.ClassDeclaration, analy
 		}
 	}
 
+	coreModule := "@angular/core"
+	ngModuleName := "NgModule"
 	decMapEntries := []output.LiteralMapEntry{
-		output.NewLiteralMapPropertyAssignment("type", output.NewReadVarExpr("NgModule", nil, nil, nil), false),
+		output.NewLiteralMapPropertyAssignment("type", output.NewExternalExpr(output.ExternalReference{
+			ModuleName: &coreModule,
+			Name:       &ngModuleName,
+		}, nil, nil, nil, nil), false),
 	}
 	if len(decArgs) > 0 {
 		decMapEntries = append(decMapEntries, output.NewLiteralMapPropertyAssignment("args", output.NewLiteralArrayExpr(decArgs, nil, nil, nil), false))

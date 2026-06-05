@@ -151,8 +151,13 @@ func (h *InjectableDecoratorHandler) CompileFull(node *ast.ClassDeclaration, ana
 		}
 	}
 
+	coreModule := "@angular/core"
+	injectableName := "Injectable"
 	decMapEntries := []output.LiteralMapEntry{
-		output.NewLiteralMapPropertyAssignment("type", output.NewReadVarExpr("Injectable", nil, nil, nil), false),
+		output.NewLiteralMapPropertyAssignment("type", output.NewExternalExpr(output.ExternalReference{
+			ModuleName: &coreModule,
+			Name:       &injectableName,
+		}, nil, nil, nil, nil), false),
 	}
 	if len(decArgs) > 0 {
 		decMapEntries = append(decMapEntries, output.NewLiteralMapPropertyAssignment("args", output.NewLiteralArrayExpr(decArgs, nil, nil, nil), false))

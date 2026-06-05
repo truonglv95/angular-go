@@ -447,6 +447,9 @@ func (v *AbstractEmitterVisitor) VisitDynamicImportExpr(ast *DynamicImportExpr, 
 	ctx := context.(*EmitterVisitorContext)
 	v.printLeadingComments(ast, ctx)
 	ctx.Print(ast, "import(", false)
+	if ast.UrlComment != nil {
+		ctx.Print(ast, "/* "+*ast.UrlComment+" */ ", false)
+	}
 	if urlStr, ok := ast.Url.(string); ok {
 		ctx.Print(ast, EscapeIdentifier(urlStr, true), false)
 	} else if urlExpr, ok := ast.Url.(Expression); ok {

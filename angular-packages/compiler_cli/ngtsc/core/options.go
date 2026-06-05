@@ -7,7 +7,7 @@ import (
 type NgCompilerOptions struct {
 	CompilationMode string
 	StrictTemplates bool
-	// ... add other options as needed
+	EnableHmr       bool
 }
 
 type ParsedConfiguration struct {

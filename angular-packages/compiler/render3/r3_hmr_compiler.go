@@ -4,7 +4,6 @@ package render3
 
 import (
 	"fmt"
-	"net/url"
 
 	"github.com/microsoft/typescript-go/angular-packages/compiler/output"
 )
@@ -40,6 +39,22 @@ type R3HmrNamespaceDependency struct {
 type R3HmrLocalDependency struct {
 	Name                  string
 	RuntimeRepresentation output.Expression
+}
+
+// Helper equivalent to JavaScript's encodeURIComponent
+func encodeURIComponent(str string) string {
+	var result []byte
+	for i := 0; i < len(str); i++ {
+		c := str[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+			c == '-' || c == '_' || c == '.' || c == '!' || c == '~' || c == '*' || c == '\'' || c == '(' || c == ')' {
+			result = append(result, c)
+		} else {
+			result = append(result, '%')
+			result = append(result, fmt.Sprintf("%02X", c)...)
+		}
+	}
+	return string(result)
 }
 
 // CompileHmrInitializer compiles the expression that initializes HMR for a class.
@@ -125,12 +140,6 @@ func CompileHmrInitializer(meta R3HmrMetadata) output.Expression {
 		nil,
 	)
 
-	// Cmp_HmrLoad(Date.now());
-	initialCall := VariableExpr(importCallbackName).
-		CallFn([]output.Expression{
-			VariableExpr("Date").Prop("now", nil).CallFn(nil, nil, false, nil),
-		}, nil, false, nil)
-
 	// import.meta.hot
 	hotRead := VariableExpr("import").Prop("meta", nil).Prop("hot", nil)
 
@@ -140,13 +149,12 @@ func CompileHmrInitializer(meta R3HmrMetadata) output.Expression {
 		CallFn([]output.Expression{LiteralExpr("angular:component-update"), updateCallback}, nil, false, nil)
 
 	// The encoded component ID
-	componentId := url.PathEscape(fmt.Sprintf("%s@%s", meta.FilePath, meta.ClassName))
+	componentId := encodeURIComponent(fmt.Sprintf("%s@%s", meta.FilePath, meta.ClassName))
 
 	// Wrap everything in an IIFE:
 	// (() => {
 	//   const id = <encoded-id>;
 	//   function Cmp_HmrLoad(t) {...}
-	//   ngDevMode && Cmp_HmrLoad(Date.now());
 	//   ngDevMode && import.meta.hot && import.meta.hot.on(...);
 	// })()
 	body := []output.Statement{
@@ -161,8 +169,6 @@ func CompileHmrInitializer(meta R3HmrMetadata) output.Expression {
 		),
 		// function Cmp_HmrLoad() {...}
 		importCallback,
-		// ngDevMode && Cmp_HmrLoad(Date.now());
-		DevOnlyGuardedExpression(initialCall).ToStmt(nil),
 		// ngDevMode && import.meta.hot && import.meta.hot.on(...)
 		DevOnlyGuardedExpression(hotRead.And(hotListener, nil)).ToStmt(nil),
 	}

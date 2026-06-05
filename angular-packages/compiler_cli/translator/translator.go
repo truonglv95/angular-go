@@ -1,8 +1,8 @@
 package translator
 
 import (
-	"fmt"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/output"
+	"fmt"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/imports"
 	"github.com/microsoft/typescript-go/internal/ast"
 	"reflect"
@@ -73,7 +73,7 @@ func (v *ExpressionTranslatorVisitor) VisitDeclareVarStmt(stmt *output.DeclareVa
 		}
 	}
 
-	name := v.factory.NewIdentifier(stmt.Name)
+	name := v.newIdentifier(stmt.Name)
 
 	var initializer *ast.Node
 	if stmt.Value != nil {
@@ -87,11 +87,11 @@ func (v *ExpressionTranslatorVisitor) VisitDeclareVarStmt(stmt *output.DeclareVa
 
 func (v *ExpressionTranslatorVisitor) VisitDeclareFunctionStmt(stmt *output.DeclareFunctionStmt, context any) any {
 	ctx := context.(Context)
-	name := v.factory.NewIdentifier(stmt.Name)
+	name := v.newIdentifier(stmt.Name)
 
 	var params []*ast.Node
 	for _, p := range stmt.Params {
-		paramName := v.factory.NewIdentifier(p.Name)
+		paramName := v.newIdentifier(p.Name)
 		params = append(params, v.factory.NewParameterDeclaration(nil, nil, (*ast.BindingName)(paramName), nil, nil, nil))
 	}
 
@@ -143,12 +143,16 @@ func (v *ExpressionTranslatorVisitor) VisitIfStmt(stmt *output.IfStmt, context a
 func (v *ExpressionTranslatorVisitor) VisitReadVarExpr(astNode *output.ReadVarExpr, context any) any {
 	if strings.HasPrefix(astNode.Name, "ɵɵ") {
 		if v.coreImportExpression != nil {
-			return v.factory.NewPropertyAccessExpression(
+			propIdent := v.newIdentifier(astNode.Name)
+			propIdent.Flags |= ast.NodeFlagsAmbient
+			propAccess := v.factory.NewPropertyAccessExpression(
 				(*ast.Expression)(v.coreImportExpression),
 				nil,
-				(*ast.MemberName)(v.factory.NewIdentifier(astNode.Name)),
+				(*ast.MemberName)(propIdent),
 				0,
 			)
+			propAccess.Flags |= ast.NodeFlagsAmbient
+			return propAccess
 		}
 		req := imports.ImportRequest{
 			ExportModuleSpecifier: "@angular/core",
@@ -158,12 +162,51 @@ func (v *ExpressionTranslatorVisitor) VisitReadVarExpr(astNode *output.ReadVarEx
 		}
 		return v.imports.AddImport(req)
 	}
-	return v.factory.NewIdentifier(astNode.Name)
+	if v.contextFile != nil && v.contextFile.Kind == ast.KindSourceFile {
+		modSpec, propName, _, isNamespace, found := findImportInfo(v.contextFile.AsSourceFile(), astNode.Name)
+		if found {
+			var symName *string
+			if !isNamespace {
+				symName = &propName
+			}
+			req := imports.ImportRequest{
+				ExportModuleSpecifier: modSpec,
+				ExportSymbolName:      symName,
+				RequestedFile:         v.contextFile,
+				AsTypeReference:       false,
+			}
+			return v.imports.AddImport(req)
+		}
+	}
+	return v.newIdentifier(astNode.Name)
 }
 
 func (v *ExpressionTranslatorVisitor) VisitInvokeFunctionExpr(astNode *output.InvokeFunctionExpr, context any) any {
 	ctx := context.(Context)
 	fn := astNode.Fn.VisitExpression(v, ctx).(*ast.Node)
+
+	isPure := astNode.Pure
+	if ext, ok := astNode.Fn.(*output.ExternalExpr); ok && ext.Value.ModuleName != nil && *ext.Value.ModuleName == "@angular/core" && ext.Value.Name != nil && strings.HasPrefix(*ext.Value.Name, "ɵɵdefine") {
+		name := *ext.Value.Name
+		if name == "ɵɵdefineComponent" || name == "ɵɵdefineDirective" || name == "ɵɵdefineNgModule" || name == "ɵɵdefinePipe" || name == "ɵɵdefineInjectable" {
+			isPure = true
+		}
+	}
+
+	if isPure {
+		if fn.Kind == ast.KindIdentifier {
+			ident := fn.AsIdentifier()
+			fn = v.factory.NewIdentifier("/*@__PURE__*/ " + ident.Text).AsNode()
+		} else if fn.Kind == ast.KindPropertyAccessExpression {
+			prop := fn.AsPropertyAccessExpression()
+			if prop.Expression.Kind == ast.KindIdentifier {
+				ident := prop.Expression.AsIdentifier()
+				newIdent := v.factory.NewIdentifier("/*@__PURE__*/ " + ident.Text)
+				fn = v.factory.NewPropertyAccessExpression((*ast.Expression)(newIdent), prop.QuestionDotToken, prop.Name(), prop.Flags).AsNode()
+			}
+		}
+	}
+
 	var args []*ast.Node
 	for _, arg := range astNode.Args {
 		args = append(args, arg.VisitExpression(v, ctx).(*ast.Node))
@@ -229,7 +272,7 @@ func (v *ExpressionTranslatorVisitor) VisitLiteralExpr(astNode *output.LiteralEx
 }
 
 func (v *ExpressionTranslatorVisitor) VisitLocalizedString(astNode *output.LocalizedString, context any) any {
-	return v.factory.NewIdentifier("$localize")
+	return v.newIdentifier("$localize")
 }
 
 func (v *ExpressionTranslatorVisitor) VisitExternalExpr(astNode *output.ExternalExpr, context any) any {
@@ -237,12 +280,16 @@ func (v *ExpressionTranslatorVisitor) VisitExternalExpr(astNode *output.External
 		if astNode.Value.Name == nil {
 			return v.coreImportExpression
 		}
-		return v.factory.NewPropertyAccessExpression(
+		propIdent := v.newIdentifier(*astNode.Value.Name)
+		propIdent.Flags |= ast.NodeFlagsAmbient
+		propAccess := v.factory.NewPropertyAccessExpression(
 			(*ast.Expression)(v.coreImportExpression),
 			nil,
-			(*ast.MemberName)(v.factory.NewIdentifier(*astNode.Value.Name)),
+			(*ast.MemberName)(propIdent),
 			0,
 		)
+		propAccess.Flags |= ast.NodeFlagsAmbient
+		return propAccess
 	}
 	req := imports.ImportRequest{
 		ExportModuleSpecifier: *astNode.Value.ModuleName,
@@ -279,7 +326,7 @@ func (v *ExpressionTranslatorVisitor) VisitDynamicImportExpr(astNode *output.Dyn
 	if urlArg != nil {
 		args = append(args, urlArg)
 	}
-	return v.factory.NewCallExpression((*ast.Expression)(v.factory.NewIdentifier("import")), nil, nil, v.factory.NewNodeList(args), 0).AsNode()
+	return v.factory.NewCallExpression((*ast.Expression)(v.newIdentifier("import")), nil, nil, v.factory.NewNodeList(args), 0).AsNode()
 }
 
 func (v *ExpressionTranslatorVisitor) VisitNotExpr(astNode *output.NotExpr, context any) any {
@@ -291,13 +338,13 @@ func (v *ExpressionTranslatorVisitor) VisitNotExpr(astNode *output.NotExpr, cont
 func (v *ExpressionTranslatorVisitor) VisitFunctionExpr(astNode *output.FunctionExpr, context any) any {
 	var name *ast.Node
 	if astNode.Name != nil {
-		name = v.factory.NewIdentifier(*astNode.Name)
+		name = v.newIdentifier(*astNode.Name)
 	}
 
 	ctx := context.(Context)
 	var params []*ast.Node
 	for _, p := range astNode.Params {
-		paramName := v.factory.NewIdentifier(p.Name)
+		paramName := v.newIdentifier(p.Name)
 		param := v.factory.NewParameterDeclaration(nil, nil, (*ast.BindingName)(paramName), nil, nil, nil)
 		params = append(params, param)
 	}
@@ -394,7 +441,7 @@ func (v *ExpressionTranslatorVisitor) VisitArrowFunctionExpr(astNode *output.Arr
 	ctx := context.(Context)
 	var params []*ast.Node
 	for _, p := range astNode.Params {
-		paramName := v.factory.NewIdentifier(p.Name)
+		paramName := v.newIdentifier(p.Name)
 		param := v.factory.NewParameterDeclaration(nil, nil, (*ast.BindingName)(paramName), nil, nil, nil)
 		params = append(params, param)
 	}
@@ -455,7 +502,7 @@ func (v *ExpressionTranslatorVisitor) VisitParenthesizedExpr(astNode *output.Par
 func (v *ExpressionTranslatorVisitor) VisitReadPropExpr(astNode *output.ReadPropExpr, context any) any {
 	ctx := context.(Context)
 	receiver := astNode.Receiver.VisitExpression(v, ctx).(*ast.Node)
-	name := v.factory.NewIdentifier(astNode.Name)
+	name := v.newIdentifier(astNode.Name)
 	var qDot *ast.Node
 	if astNode.IsOptional {
 		qDot = v.factory.NewToken(ast.KindQuestionDotToken)
@@ -493,7 +540,7 @@ func (v *ExpressionTranslatorVisitor) VisitLiteralMapExpr(astNode *output.Litera
 			if e.Quoted {
 				name = v.factory.NewStringLiteral(e.Key, 0)
 			} else {
-				name = v.factory.NewIdentifier(e.Key)
+				name = v.newIdentifier(e.Key)
 			}
 			val := e.Value.VisitExpression(v, ctx).(*ast.Node)
 			prop := v.factory.NewPropertyAssignment(nil, (*ast.PropertyName)(name), nil, nil, (*ast.Expression)(val))
@@ -520,3 +567,75 @@ func (v *ExpressionTranslatorVisitor) VisitRegularExpressionLiteral(astNode *out
 	}
 	return v.factory.NewRegularExpressionLiteral(text, 0)
 }
+
+func (v *ExpressionTranslatorVisitor) newIdentifier(text string) *ast.Node {
+	ident := v.factory.NewIdentifier(text)
+	ident.Flags |= ast.NodeFlagsAmbient | ast.NodeFlagsSynthesized
+	return ident
+}
+
+func getModuleExportNameText(node *ast.Node) string {
+	if node == nil {
+		return ""
+	}
+	if node.Kind == ast.KindIdentifier {
+		return node.AsIdentifier().Text
+	}
+	if node.Kind == ast.KindStringLiteral {
+		return node.AsStringLiteral().Text
+	}
+	return ""
+}
+
+func findImportInfo(sourceFile *ast.SourceFile, symbol string) (moduleSpecifier string, symbolName string, isDefault bool, isNamespace bool, found bool) {
+	if sourceFile == nil || sourceFile.Statements == nil {
+		return "", "", false, false, false
+	}
+	for _, node := range sourceFile.Statements.Nodes {
+		if node.Kind == ast.KindImportDeclaration {
+			importDecl := node.AsImportDeclaration()
+			if importDecl.ModuleSpecifier == nil || importDecl.ModuleSpecifier.Kind != ast.KindStringLiteral {
+				continue
+			}
+			modSpec := importDecl.ModuleSpecifier.AsStringLiteral().Text
+			importClause := importDecl.ImportClause
+			if importClause == nil || importClause.AsImportClause() == nil {
+				continue
+			}
+			clause := importClause.AsImportClause()
+			if clause.PhaseModifier == ast.KindTypeKeyword {
+				continue
+			}
+			if clause.Name() != nil && clause.Name().AsIdentifier().Text == symbol {
+				return modSpec, "default", true, false, true
+			}
+			if clause.NamedBindings != nil {
+				if clause.NamedBindings.Kind == ast.KindNamespaceImport {
+					ns := clause.NamedBindings.AsNamespaceImport()
+					if ns.Name() != nil && ns.Name().AsIdentifier().Text == symbol {
+						return modSpec, "", false, true, true
+					}
+				} else if clause.NamedBindings.Kind == ast.KindNamedImports {
+					for _, el := range clause.NamedBindings.AsNamedImports().Elements.Nodes {
+						spec := el.AsImportSpecifier()
+						if spec.IsTypeOnly {
+							continue
+						}
+						name := spec.Name().AsIdentifier().Text
+						if name == symbol {
+							if spec.PropertyName != nil {
+								propText := getModuleExportNameText((*ast.Node)(spec.PropertyName))
+								if propText != "" {
+									return modSpec, propText, propText == "default", false, true
+								}
+							}
+							return modSpec, name, name == "default", false, true
+						}
+					}
+				}
+			}
+		}
+	}
+	return "", "", false, false, false
+}
+

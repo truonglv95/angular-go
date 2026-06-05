@@ -2,6 +2,7 @@ package ml_parser
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/microsoft/typescript-go/angular-packages/compiler/schema"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/tags"
@@ -108,9 +109,10 @@ func (t *HtmlTagDefinition) GetContentType(prefix *string) tags.TagContentType {
 
 var defaultTagDefinition *HtmlTagDefinition
 var tagDefinitions map[string]*HtmlTagDefinition
+var tagDefinitionsOnce sync.Once
 
 func GetHtmlTagDefinition(tagName string) *HtmlTagDefinition {
-	if tagDefinitions == nil {
+	tagDefinitionsOnce.Do(func() {
 		canSelfCloseDefault := true
 		defaultTagDefinition = NewHtmlTagDefinition(HtmlTagDefinitionOptions{CanSelfClose: &canSelfCloseDefault})
 		tagDefinitions = make(map[string]*HtmlTagDefinition)
@@ -194,7 +196,7 @@ func GetHtmlTagDefinition(tagName string) *HtmlTagDefinition {
 				}
 			}
 		}
-	}
+	})
 
 	if def, exists := tagDefinitions[tagName]; exists {
 		return def

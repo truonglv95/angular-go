@@ -5,6 +5,7 @@ import (
 	"github.com/microsoft/typescript-go/angular-packages/compiler"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/reflection"
 	"github.com/microsoft/typescript-go/internal/ast"
+	"sync"
 )
 
 type TraitState int
@@ -20,12 +21,24 @@ const (
 // Trait đại diện cho một Decorator đã được detect trên một Class (vd: @Component)
 // và lưu trữ toàn bộ trạng thái của nó qua các Phase biên dịch.
 type Trait struct {
-	Handler    DecoratorHandler
-	Decorator  *reflection.Decorator
-	State      TraitState
-	Analysis   any
-	Resolution any
-	Diagnostics []ast.Diagnostic
+	Handler      DecoratorHandler
+	Decorator    *reflection.Decorator
+	State        TraitState
+	Analysis     any
+	Resolution   any
+	resolveOnce  sync.Once
+	Diagnostics  []ast.Diagnostic
+}
+
+func (t *Trait) GetResolution(c *ast.ClassDeclaration) any {
+	t.resolveOnce.Do(func() {
+		if t.State == TraitStateAnalyzed {
+			resolution, _ := t.Handler.Resolve(c, t.Analysis)
+			t.Resolution = resolution
+			t.State = TraitStateResolved
+		}
+	})
+	return t.Resolution
 }
 
 type ResourceDependencyProvider interface {
@@ -53,8 +66,16 @@ type DecoratorHandler interface {
 // CompileResult chứa kết quả của quá trình Compile, ví dụ một thuộc tính `ɵcmp` 
 // cần được gắn vào class.
 type CompileResult struct {
-	PropertyName string
-	Initializer  *ast.Node
-	Type         *ast.Node
-	Statements   []*ast.Node
+	PropertyName   string
+	Initializer    *ast.Node
+	Type           *ast.Node
+	Statements     []*ast.Node
+	// HmrUpdateNodes holds the export-default function declaration for the HMR
+	// virtual module (e.g. `export default function App_UpdateMetadata(App) {...}`).
+	HmrUpdateNodes []*ast.Node
+	// HmrImports holds the namespace import declarations produced by the
+	// HMR-specific ImportManager (e.g. `import * as i0 from '@angular/core'`).
+	// These must be prepended to HmrUpdateNodes when building the virtual source
+	// file so that the function body can reference i0, i1, etc.
+	HmrImports     []*ast.Node
 }

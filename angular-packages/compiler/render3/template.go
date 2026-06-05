@@ -10,7 +10,6 @@ import (
 	"github.com/microsoft/typescript-go/angular-packages/compiler/parse_util"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/schema"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/template_parser"
-	"github.com/microsoft/typescript-go/internal/perf"
 )
 
 var LEADING_TRIVIA_CHARS = []string{" ", "\n", "\r", "\t"}
@@ -225,7 +224,6 @@ func (s *schemaRegistryAdapter) ValidateAttribute(name string) struct {
 var ElementRegistry = &schemaRegistryAdapter{registry: schema.NewDomElementSchemaRegistry()}
 
 func ParseTemplate(template string, templateUrl string, options *ParseTemplateOptions) ParsedTemplate {
-	defer perf.Time("render3.template_parse")()
 	preserveWhitespaces := false
 	collectCommentNodes := false
 	selectorlessEnabled := false

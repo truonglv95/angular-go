@@ -2,14 +2,18 @@ package schema
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/microsoft/typescript-go/angular-packages/compiler/core"
 )
 
-var securitySchema map[string]core.SecurityContext
+var (
+	securitySchema map[string]core.SecurityContext
+	securitySchemaOnce sync.Once
+)
 
 func SECURITY_SCHEMA() map[string]core.SecurityContext {
-	if securitySchema == nil {
+	securitySchemaOnce.Do(func() {
 		securitySchema = make(map[string]core.SecurityContext)
 
 		registerSecurityContext(core.SecurityContextHTML, "", []securityContextSpec{
@@ -85,7 +89,7 @@ func SECURITY_SCHEMA() map[string]core.SecurityContext {
 			{Tag: "unknown", Attrs: []string{"attributeName", "values", "to", "from", "sandbox", "allow", "allowFullscreen", "referrerPolicy", "csp", "fetchPriority"}},
 			{Tag: "iframe", Attrs: []string{"sandbox", "allow", "allowFullscreen", "referrerPolicy", "csp", "fetchPriority"}},
 		})
-	}
+	})
 	return securitySchema
 }
 
