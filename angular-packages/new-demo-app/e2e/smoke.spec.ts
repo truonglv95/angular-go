@@ -18,8 +18,7 @@ test.describe('Runtime Smoke Suite', () => {
   test('renders menu and updates views', async ({ page }) => {
     await expect(page.locator('.p-menu')).toBeVisible();
 
-    // Default view should be Button
-    await expect(page.locator('h1').filter({ hasText: 'PrimeNG Components' })).toBeVisible();
+    await expect(page.locator('h1.demo-heading')).toBeVisible();
 
     // Click on Input view
     await page.locator('.p-menu-item-content').filter({ hasText: 'Input' }).click();

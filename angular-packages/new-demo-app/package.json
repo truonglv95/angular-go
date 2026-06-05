@@ -8,8 +8,14 @@
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
     "vite": "vite",
-    "test:e2e": "playwright test",
-    "test:e2e:prod": "playwright test --config playwright.prod.config.ts"
+    "vite:dev": "vite --config vite.config.ts --host 127.0.0.1",
+    "vite:build": "vite build --config vite.config.ts",
+    "vite:preview": "vite preview --config vite.config.ts --host 127.0.0.1",
+    "e2e:prepare": "cd ../.. && go build -o go-ngc ./angular-packages/compiler_cli/cmd/ngtsc/main.go && cd angular-packages/vite-plugin-angular-go && npm run build",
+    "test:e2e": "npm run test:e2e:vite:dev",
+    "test:e2e:prod": "npm run test:e2e:vite:prod",
+    "test:e2e:vite:dev": "playwright test --config playwright.config.ts",
+    "test:e2e:vite:prod": "playwright test --config playwright.prod.config.ts"
   },
   "private": true,
   "packageManager": "npm@10.9.0",

@@ -4,6 +4,27 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createGoNgcClient, GoNgcClient } from './client';
+
+export interface OutputFile {
+  path: string;
+  text: string;
+  hash?: string;
+  kind?: 'js' | 'map' | 'dts' | 'other';
+}
+
+export interface DiagnosticMessage {
+  category: 'error' | 'warning' | 'message' | 'suggestion';
+  code: number;
+  message: string;
+  file?: string;
+}
+
+export interface BuildResult {
+  outputs: OutputFile[];
+  diagnostics?: DiagnosticMessage[];
+  status?: number;
+}
 
 export interface AngularGoBaseOptions {
   /**
@@ -38,6 +59,23 @@ export interface AngularGoCompileOptions extends AngularGoBaseOptions {
    * Re-run go-ngc when app source/template/style files change in dev. Defaults to true.
    */
   recompileOnChange?: boolean;
+  /**
+   * Enable Angular component Hot Module Replacement. Defaults to false.
+   * HMR is opt-in and is always disabled during production builds.
+   */
+  hmr?: boolean;
+  /**
+   * Compilation mode. 'global' resolves templates across the entire program.
+   * 'local' compiles each file in isolation. Defaults to 'global'.
+   */
+  compilationMode?: 'global' | 'local';
+  /**
+   * B#2 FIX: Plugin operating mode.
+   * - 'server' (default): go-ngc runs as a long-lived daemon; outputs are
+   *   served from memory via JSON-RPC.
+   * - 'default': go-ngc is invoked once and outputs are written to disk.
+   */
+  mode?: 'server' | 'default';
 }
 
 export interface AngularGoLinkerOptions extends AngularGoBaseOptions {
@@ -112,6 +150,15 @@ class GoNgcError extends Error {
 }
 
 const angularPartialDeclarationMarker = 'ɵɵngDeclare';
+let linkCache = new Map<string, { key: string; code: string }>();
+
+let sharedDaemonClient: GoNgcClient | null = null;
+let sharedDaemonContextId = '';
+// B#2 FIX: pluginMode is now set per-plugin-instance from options (see angularGoCompile).
+// The module-level variable is kept only as a shared reference for angularGoLinker.
+let pluginMode: 'server' | 'memory' | 'default' = 'server';
+let memoryOutputs = new Map<string, OutputFile>();
+
 const sourceFilePattern = /\.(ts|html|css|scss|sass|less)$/;
 const projectInputPattern = /\.(ts|html|css|scss|sass|less|json)$/;
 
@@ -183,31 +230,7 @@ function shouldSkipProjectInput(filePath: string, projectRoot: string, outDir: s
   return !outRel.startsWith('..') && !path.isAbsolute(outRel);
 }
 
-function collectProjectInputs(projectRoot: string, outDir: string): string[] {
-  const files: string[] = [];
-  const walk = (dir: string) => {
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const filePath = path.join(dir, entry.name);
-      if (shouldSkipProjectInput(filePath, projectRoot, outDir)) {
-        continue;
-      }
-      if (entry.isDirectory()) {
-        walk(filePath);
-      } else if (entry.isFile() && projectInputPattern.test(filePath)) {
-        files.push(filePath);
-      }
-    }
-  };
-  walk(projectRoot);
-  files.sort();
-  return files;
-}
+
 
 function compilerSalt(compilerPath: string): string {
   return `${compilerPath}:${optionalStatKey(compilerPath)}`;
@@ -260,10 +283,142 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
   let compileArgs: string[] = [];
   let compilePromise: Promise<void> | null = null;
   let lastCompileKey = '';
+  let projectInputsCache: Set<string> | null = null;
   const recompileOnChange = options.recompileOnChange !== false;
+  let enableHmr = false;
+
+  // B#2 FIX: Read mode from options (defaults to 'server').
+  // This also updates the module-level pluginMode used by the linker.
+  pluginMode = (options.mode as 'server' | 'memory' | 'default') ?? 'server';
+
+  function getProjectInputs(projectRoot: string, outDir: string): string[] {
+    if (projectInputsCache != null) {
+      const files = Array.from(projectInputsCache);
+      files.sort();
+      return files;
+    }
+    
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        const filePath = path.join(dir, entry.name);
+        if (shouldSkipProjectInput(filePath, projectRoot, outDir)) {
+          continue;
+        }
+        if (entry.isDirectory()) {
+          walk(filePath);
+        } else if (entry.isFile() && projectInputPattern.test(filePath)) {
+          files.push(filePath);
+        }
+      }
+    };
+    walk(projectRoot);
+    projectInputsCache = new Set(files);
+    files.sort();
+    return files;
+  }
 
   const htmlToTs = new Map<string, Set<string>>();
   const cssToTs = new Map<string, Set<string>>();
+  const servedHmrRequests = new Set<string>();
+
+  // B#11 FIX: Eagerly parse all .ts files to populate htmlToTs / cssToTs at
+  // startup. Without this, style/template HMR misses the first change event
+  // because the maps are only filled lazily during the load() hook.
+  function parseStyleMappingsForFile(tsFilePath: string, sourceCode: string): void {
+    const dir = path.dirname(tsFilePath);
+
+    // templateUrl: '...'
+    const templateMatch = sourceCode.match(/templateUrl\s*:\s*['"]([^'"]+)['"]/);
+    if (templateMatch) {
+      const htmlPath = path.resolve(dir, templateMatch[1]);
+      if (!htmlToTs.has(htmlPath)) htmlToTs.set(htmlPath, new Set());
+      htmlToTs.get(htmlPath)!.add(tsFilePath);
+    }
+
+    // styleUrl: '...' (Angular 17+)
+    const styleMatch = sourceCode.match(/styleUrl\s*:\s*['"]([^'"]+)['"]/);
+    if (styleMatch) {
+      const cssPath = path.resolve(dir, styleMatch[1]);
+      if (!cssToTs.has(cssPath)) cssToTs.set(cssPath, new Set());
+      cssToTs.get(cssPath)!.add(tsFilePath);
+    }
+
+    // styleUrls: ['...', '...']  (multi-line safe)
+    const styleUrlsMatch = sourceCode.match(/styleUrls\s*:\s*\[([^\]]+)\]/s);
+    if (styleUrlsMatch) {
+      const urls = styleUrlsMatch[1].matchAll(/['"]([^'"]+)['"]/g);
+      for (const [, url] of urls) {
+        const cssPath = path.resolve(dir, url);
+        if (!cssToTs.has(cssPath)) cssToTs.set(cssPath, new Set());
+        cssToTs.get(cssPath)!.add(tsFilePath);
+      }
+    }
+  }
+
+  function scanProjectForStyleMappings(): void {
+    const walk = (dir: string) => {
+      let entries: fs.Dirent[];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+      catch { return; }
+
+      for (const entry of entries) {
+        const filePath = path.join(dir, entry.name);
+        if (shouldSkipProjectInput(filePath, projectRoot, outDir)) continue;
+        if (entry.isDirectory()) { walk(filePath); continue; }
+        if (!entry.isFile() || !filePath.endsWith('.ts') || filePath.endsWith('.d.ts')) continue;
+        try {
+          const source = fs.readFileSync(filePath, 'utf8');
+          parseStyleMappingsForFile(filePath, source);
+        } catch { /* ignore unreadable files */ }
+      }
+    };
+    walk(projectRoot);
+  }
+
+  async function sendHmrUpdatesForFiles(devServer: ViteDevServer, tsFiles: Iterable<string>): Promise<void> {
+    if (!enableHmr || !sharedDaemonClient) {
+      return;
+    }
+
+    const relFiles = new Set<string>();
+    for (const tsFile of tsFiles) {
+      relFiles.add(path.relative(projectRoot, cleanId(tsFile)).replace(/\\/g, '/'));
+    }
+
+    const { componentIds } = await sharedDaemonClient.listHmrUpdates(sharedDaemonContextId);
+    const timestamp = Date.now();
+
+    for (const componentId of componentIds) {
+      const atIdx = componentId.lastIndexOf('@');
+      const componentFile = atIdx >= 0 ? componentId.slice(0, atIdx) : componentId;
+      if (!relFiles.has(componentFile)) {
+        continue;
+      }
+
+      for (const mod of devServer.moduleGraph.idToModuleMap.values()) {
+        if (mod.id && mod.id.includes('/@ng/component') && mod.id.includes(`c=${encodeURIComponent(componentId)}`)) {
+          devServer.moduleGraph.invalidateModule(mod);
+        }
+      }
+
+      devServer.ws.send({
+        type: 'custom',
+        event: 'angular:component-update',
+        data: {
+          id: encodeURIComponent(componentId),
+          timestamp,
+        },
+      });
+    }
+  }
+
 
   function log(message: string) {
     if (options.verbose) {
@@ -296,12 +451,28 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
   }
 
   let compileError: Error | null = null;
+  // H8 FIX: Cache the projectCompileKey to avoid re-running statSync() for every
+  // file on every load() call. Invalidated by watchChange events.
+  let cachedCompileKey = '';
+  let compileKeyDirty = true;
+
   async function compileProject(reason: string, force = false): Promise<void> {
+    // C5 FIX: When force=true and a non-forced compile is already running,
+    // wait for it to finish then start a fresh one instead of returning early.
     if (compilePromise) {
-      return compilePromise;
+      if (!force) {
+        return compilePromise;
+      }
+      // Wait for current compile to finish, then fall through to re-compile.
+      await compilePromise.catch(() => {});
     }
 
-    const compileKey = projectCompileKey();
+    // H8 FIX: Only recompute compile key when dirty.
+    if (compileKeyDirty) {
+      cachedCompileKey = projectCompileKey();
+      compileKeyDirty = false;
+    }
+    const compileKey = cachedCompileKey;
     if (!force && compileKey === lastCompileKey && fs.existsSync(outDir)) {
       log(`skipped compile for unchanged inputs (${reason})`);
       return;
@@ -309,10 +480,35 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
 
     const started = Date.now();
     compileError = null;
-    compilePromise = runGoNgc(projectRoot, compilerPath, compileArgs)
-      .then(() => {
+    let buildOperation: Promise<any>;
+    if (pluginMode === 'server' && sharedDaemonClient) {
+      buildOperation = sharedDaemonClient.build(sharedDaemonContextId);
+    } else {
+      buildOperation = runGoNgc(projectRoot, compilerPath, compileArgs).then((stdout) => {
+        if (compileArgs.includes('--format=json')) {
+          return JSON.parse(stdout);
+        }
+        return { outputs: [] };
+      });
+    }
+
+    compilePromise = buildOperation
+      .then((result: BuildResult) => {
         lastCompileKey = compileKey;
-        log(`compiled ${path.relative(config.root, projectRoot) || '.'} (${reason}) in ${Date.now() - started}ms`);
+        if (pluginMode === 'memory' || pluginMode === 'server') {
+          try {
+            memoryOutputs.clear();
+            if (result.outputs) {
+              for (const output of result.outputs) {
+                const absPath = path.resolve(projectRoot, output.path);
+                memoryOutputs.set(absPath, output);
+              }
+            }
+          } catch (e) {
+            console.error('Failed to parse in-memory outputs', e);
+          }
+        }
+        log(`compile completed in ${Date.now() - started}ms`);
       })
       .catch((e) => {
         compileError = e;
@@ -331,7 +527,7 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
     hash.update(JSON.stringify(compileArgs));
     hash.update(packageVersion(projectRoot, '@angular/core'));
     hash.update(packageVersion(projectRoot, '@angular/compiler-cli'));
-    for (const filePath of collectProjectInputs(projectRoot, outDir)) {
+    for (const filePath of getProjectInputs(projectRoot, outDir)) {
       hash.update(path.relative(projectRoot, filePath));
       hash.update(optionalStatKey(filePath));
     }
@@ -362,14 +558,150 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
       outDir = resolveFromProjectRoot(options.outDir || 'out-tsc/app');
       compilerPath = resolveCompilerPath(projectRoot, compilerPath);
       compileArgs = normalizeCompileArgs(options.args || ['-p', options.project || 'tsconfig.app.json']);
+      if (config.command === 'build' && pluginMode === 'server') {
+        pluginMode = 'default';
+      }
+      
+      enableHmr = config.command === 'serve' && options.hmr === true;
+      const compilationMode = options.compilationMode || 'global';
+
+      if (!compileArgs.find(arg => arg.startsWith('--compilationMode'))) {
+        compileArgs.push(`--compilationMode=${compilationMode}`);
+      }
+
+      if (enableHmr) {
+        if (!compileArgs.includes('--hmr')) {
+          compileArgs.push('--hmr');
+        }
+      } else {
+        compileArgs = compileArgs.filter(arg => arg !== '--hmr');
+      }
+
+      if (pluginMode === 'memory') {
+        if (!compileArgs.some(arg => arg === '--write=false' || arg === '--write' || arg.startsWith('--write='))) {
+          compileArgs.push('--write=false');
+        }
+        if (!compileArgs.some(arg => arg === '--format=json' || arg === '--format' || arg.startsWith('--format='))) {
+          compileArgs.push('--format=json');
+        }
+      }
     },
 
     configureServer(devServer: ViteDevServer) {
       server = devServer;
+
+      // ─── HMR component middleware ───────────────────────────────────────
+      // When Angular does `import(/* @vite-ignore */ ɵɵgetReplaceMetadataURL(...))`,
+      // Vite bypasses its resolveId/load hooks and the browser sends a raw HTTP
+      // GET request. We intercept it here and serve the HMR module directly.
+      devServer.middlewares.use(async (req: any, res: any, next: any) => {
+        if (!enableHmr) {
+          return next();
+        }
+        const url: string = req.url || '';
+        const qIdx = url.indexOf('?');
+        const pathname = qIdx >= 0 ? url.slice(0, qIdx) : url;
+
+        if (!pathname.endsWith('/@ng/component')) {
+          return next();
+        }
+
+        const qs = qIdx >= 0 ? url.slice(qIdx + 1) : '';
+        const params = new URLSearchParams(qs);
+        const c = params.get('c');
+
+        if (!c || !sharedDaemonClient) {
+          res.writeHead(404, { 'Content-Type': 'text/plain' });
+          res.end('HMR component not found');
+          return;
+        }
+
+        try {
+          const result = await devServer.transformRequest(url);
+          if (result && result.code) {
+            res.writeHead(200, {
+              'Content-Type': 'application/javascript',
+              'Cache-Control': 'no-cache, no-store, must-revalidate',
+            });
+            res.end(result.code);
+            return;
+          }
+          res.writeHead(200, { 'Content-Type': 'application/javascript' });
+          res.end('export default null;');
+        } catch (e: any) {
+          devServer.config.logger.warn(
+            `[angular-go] Failed to serve transformed HMR update for ${url}: ${e.message}`
+          );
+          res.writeHead(200, { 'Content-Type': 'application/javascript' });
+          res.end('export default null;');
+        }
+      });
+      // ────────────────────────────────────────────────────────────────────
+
+      server.watcher.on('add', (filePath) => {
+        if (projectInputsCache && projectInputPattern.test(filePath) && !shouldSkipProjectInput(filePath, projectRoot, outDir)) {
+          projectInputsCache.add(filePath);
+        }
+      });
+      server.watcher.on('unlink', (filePath) => {
+        if (projectInputsCache) {
+          projectInputsCache.delete(filePath);
+        }
+      });
+    },
+
+    watchChange(id: string, change: { event: 'create' | 'update' | 'delete' }) {
+      if (!projectInputsCache || !projectInputPattern.test(id) || shouldSkipProjectInput(id, projectRoot, outDir)) {
+        return;
+      }
+      // H8 FIX: Mark compile key dirty when a project file changes.
+      compileKeyDirty = true;
+      if (change.event === 'delete') {
+        projectInputsCache.delete(id);
+      } else {
+        projectInputsCache.add(id);
+      }
     },
 
     async buildStart() {
-      for (const filePath of collectProjectInputs(projectRoot, outDir)) {
+      const isServe = config.command === 'serve';
+
+      // C3 FIX: Only start the daemon when running the dev server.
+      // Production builds (vite build) must NOT start the daemon:
+      //   1. The daemon is designed for long-lived watch sessions, not one-shot builds.
+      //   2. Sending hmr:true to the daemon causes HMR scaffolding to be emitted
+      //      into the production bundle (~5-10 KB per component).
+      if (pluginMode === 'server' && isServe && !sharedDaemonClient) {
+        sharedDaemonClient = createGoNgcClient(compilerPath, projectRoot);
+        sharedDaemonContextId = await sharedDaemonClient.createContext({
+          project: options.project || 'tsconfig.app.json',
+          compilationMode: options.compilationMode || 'global',
+          // C3 FIX: Only enable HMR when explicitly requested in serve mode.
+          hmr: enableHmr,
+        });
+
+        // M1 FIX: Register SIGINT/SIGTERM handlers so the daemon is cleanly shut down
+        // even when the user presses Ctrl+C during a build/serve session.
+        const shutdown = async () => {
+          if (sharedDaemonClient) {
+            await sharedDaemonClient.close().catch(() => {});
+            sharedDaemonClient = null;
+          }
+          process.exit(0);
+        };
+        process.once('SIGINT', shutdown);
+        process.once('SIGTERM', shutdown);
+      }
+
+      // B#11 FIX: Eagerly scan all project .ts files so htmlToTs / cssToTs are
+      // populated before the first file-change event arrives. Without this, style
+      // and template HMR misses changes that happen before load() is called.
+      // Only needed when Angular HMR is enabled.
+      if (enableHmr) {
+        scanProjectForStyleMappings();
+      }
+
+      for (const filePath of getProjectInputs(projectRoot, outDir)) {
         this.addWatchFile(filePath);
       }
       try {
@@ -383,17 +715,80 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
       }
     },
 
+    resolveId(id: string) {
+      if (!enableHmr) {
+        return;
+      }
+      // Split on '?' so that '.ts' inside query params like
+      // c=src%2Fapp%2Fapp.ts%40App does NOT trigger the old
+      // `!id.includes('.ts')` guard and cause a 404.
+      // Example: id = '/app/@ng/component?c=src%2Fapp%2Fapp.ts%40App&t=123'
+      //          pathPart = '/app/@ng/component'
+      const pathPart = id.split('?')[0];
+      if (pathPart.endsWith('/@ng/component') || pathPart.endsWith('/@ng/component.ts')) {
+        // Return the full id (including query string) as a virtual module.
+        // The \0 prefix tells Vite/Rollup this is a virtual module and to skip
+        // file-system resolution — it will call our load() hook instead.
+        return '\0' + id;
+      }
+    },
+
     async load(id: string) {
+      if (id.startsWith('\0') && id.includes('/@ng/component')) {
+        if (!enableHmr) {
+          return null;
+        }
+        const idWithoutNull = id.slice(1); // remove leading \0
+        const urlObj = new URL(idWithoutNull, 'http://localhost');
+        // URLSearchParams.get() already URL-decodes %2F→/ and %40→@
+        // so c is the raw "relPath@ClassName" string, e.g. "src/app/app.ts@App"
+        const c = urlObj.searchParams.get('c');
+        if (c) {
+          const atIdx = c.lastIndexOf('@');
+          const filePath = atIdx !== -1 ? c.slice(0, atIdx) : c;
+          const compName = atIdx !== -1 ? c.slice(atIdx + 1) : '';
+          if (filePath && compName) {
+            if (pluginMode === 'server' && sharedDaemonClient) {
+              try {
+                const result = await (sharedDaemonClient as GoNgcClient).getHmrUpdate(sharedDaemonContextId, c);
+                if (result && result.code) {
+                  return { code: result.code, map: null };
+                }
+                // Daemon responded but no update available yet — return a no-op
+                // update so Angular doesn't crash with a failed import.
+                log(`HMR update not yet available for ${c}; returning no-op`);
+              } catch (e: any) {
+                config.logger.warn(`[angular-go] Failed to get HMR update for ${c}: ${e.message}`);
+              }
+            }
+          }
+        }
+        // No HMR code available: return a no-op module so the dynamic import
+        // succeeds (browser doesn't get ERR_ABORTED) and Angular gracefully
+        // keeps the existing component state.
+        return { code: 'export default null;', map: null };
+      }
+
       const jsPath = outputPathForSource(id);
       if (jsPath == null) {
         return null;
       }
 
-      if (!fs.existsSync(jsPath)) {
-        try {
-          await compileProject(`missing output for ${path.relative(projectRoot, cleanId(id))}`, true);
-        } catch (e) {
-          // ignore here, we will throw compileError below
+      if (pluginMode !== 'server' && pluginMode !== 'memory') {
+        if (!fs.existsSync(jsPath)) {
+          try {
+            await compileProject(`missing output for ${path.relative(projectRoot, cleanId(id))}`, true);
+          } catch (e) {
+            // ignore here, we will throw compileError below
+          }
+        }
+      } else {
+        if (!memoryOutputs.has(jsPath)) {
+          try {
+            await compileProject(`missing memory output for ${path.relative(projectRoot, cleanId(id))}`, true);
+          } catch (e) {
+            // ignore here
+          }
         }
       }
 
@@ -401,8 +796,10 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
         this.error(compileError);
       }
 
-      if (!fs.existsSync(jsPath)) {
-        this.error(`go-ngc did not emit ${jsPath} for ${cleanId(id)}`);
+      if (pluginMode !== 'server' && pluginMode !== 'memory') {
+        if (!fs.existsSync(jsPath)) {
+          this.error(`go-ngc did not emit ${jsPath} for ${cleanId(id)}`);
+        }
       }
 
       const sourcePath = cleanId(id);
@@ -435,24 +832,42 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
       }
 
       let map = null;
+      let code: string | null = null;
       const mapPath = jsPath + '.map';
-      if (fs.existsSync(mapPath)) {
-        try {
-          map = JSON.parse(fs.readFileSync(mapPath, 'utf8'));
-        } catch {
-          // ignore
+      if (pluginMode === 'server' || pluginMode === 'memory') {
+        const memOut = memoryOutputs.get(jsPath);
+        if (memOut) {
+          code = memOut.text;
+        }
+        const memMap = memoryOutputs.get(mapPath);
+        if (memMap) {
+          map = JSON.parse(memMap.text);
         }
       }
 
-      return { code: fs.readFileSync(jsPath, 'utf8'), map };
+      if (code == null) {
+        if (fs.existsSync(mapPath)) {
+          try {
+            map = JSON.parse(fs.readFileSync(mapPath, 'utf8'));
+          } catch {
+            // ignore
+          }
+        }
+        code = fs.readFileSync(jsPath, 'utf8');
+      }
+      if (enableHmr) {
+        code = code.replace(/import\s*\(\s*i0\.ɵɵgetReplaceMetadataURL/g, 'import(/* @vite-ignore */ i0.ɵɵgetReplaceMetadataURL');
+      }
+
+      return { code, map };
     },
 
-    async handleHotUpdate(ctx: any) {
+    async handleHotUpdate({ file: filePath, server }: any) {
       if (!recompileOnChange) {
         return;
       }
 
-      const filePath = cleanId(ctx.file);
+      filePath = cleanId(filePath);
       if (!sourceFilePattern.test(filePath) || filePath.includes(`${path.sep}node_modules${path.sep}`)) {
         return;
       }
@@ -462,7 +877,91 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
         return;
       }
 
+      // Check 1: Component Template (.html)
+      if (filePath.endsWith('.html') && htmlToTs.has(filePath)) {
+        log(`handleHotUpdate template changed: ${relativePath}`);
+        if (sharedDaemonClient) {
+          // Invalidate the HTML file on the daemon
+          await sharedDaemonClient.invalidate(sharedDaemonContextId, filePath);
+          // Invalidate all associated TS files on the daemon so it re-reads them
+          for (const tsFile of htmlToTs.get(filePath)!) {
+            await sharedDaemonClient.invalidate(sharedDaemonContextId, tsFile);
+          }
+        }
+
+        // Force compile the project immediately to build the new template and HMR code
+        await compileProject(`change in template ${relativePath}`, true);
+
+        if (!enableHmr) {
+          server?.ws.send({ type: 'full-reload', path: '*' });
+          return [];
+        }
+
+        // Send HMR update event to browser and invalidate module graph cache for virtual modules
+        if (server) {
+          const affectedTsFiles = htmlToTs.get(filePath)!;
+          for (const tsFile of affectedTsFiles) {
+            // Invalidate the TS module in Vite's module graph so page refresh (F5) loads the fresh compiled component
+            const tsMods = server.moduleGraph.getModulesByFile(cleanId(tsFile));
+            if (tsMods) {
+              for (const mod of tsMods) {
+                log(`Invalidating TS module cache: ${mod.id}`);
+                server.moduleGraph.invalidateModule(mod);
+              }
+            }
+          }
+          await sendHmrUpdatesForFiles(server, affectedTsFiles);
+        }
+        return [];
+      }
+
+      // Check 2: Component Styles (.css, .scss, etc.)
+      if (
+        (filePath.endsWith('.css') || filePath.endsWith('.scss') ||
+         filePath.endsWith('.less') || filePath.endsWith('.sass')) &&
+        cssToTs.has(filePath)
+      ) {
+        log(`handleHotUpdate style changed: ${relativePath}`);
+        if (sharedDaemonClient) {
+          // Invalidate style file on the daemon
+          await sharedDaemonClient.invalidate(sharedDaemonContextId, filePath);
+          // Invalidate TS files on the daemon so it re-reads them
+          for (const tsFile of cssToTs.get(filePath)!) {
+            await sharedDaemonClient.invalidate(sharedDaemonContextId, tsFile);
+          }
+        }
+
+        // Force compile the project immediately to build the new styles and HMR code
+        await compileProject(`change in style ${relativePath}`, true);
+
+        if (!enableHmr) {
+          server?.ws.send({ type: 'full-reload', path: '*' });
+          return [];
+        }
+
+        // Send HMR update event to browser and invalidate module graph cache for virtual modules
+        if (server) {
+          const affectedTsFiles = cssToTs.get(filePath)!;
+          for (const tsFile of affectedTsFiles) {
+            // Invalidate the TS module in Vite's module graph so page refresh (F5) loads the fresh compiled component
+            const tsMods = server.moduleGraph.getModulesByFile(cleanId(tsFile));
+            if (tsMods) {
+              for (const mod of tsMods) {
+                log(`Invalidating TS module cache for style: ${mod.id}`);
+                server.moduleGraph.invalidateModule(mod);
+              }
+            }
+          }
+          await sendHmrUpdatesForFiles(server, affectedTsFiles);
+        }
+        return [];
+      }
+
+      // Default: Other files (e.g. .ts files or global styles) require recompilation
       try {
+        if (sharedDaemonClient) {
+          await sharedDaemonClient.invalidate(sharedDaemonContextId, filePath);
+        }
         await compileProject(`change in ${relativePath}`);
       } catch (e: any) {
         config.logger.error(e.message);
@@ -477,35 +976,35 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
             frame: e.frame
           }
         });
-        return [];
+        return;
       }
 
-      if (!server) return [];
-      const modulesToUpdate = new Set<any>();
-
-      if (filePath.endsWith('.html') && htmlToTs.has(filePath)) {
-        for (const tsFile of htmlToTs.get(filePath)!) {
-          const mod = server.moduleGraph.getModuleById(tsFile);
-          if (mod) modulesToUpdate.add(mod);
+      if (filePath.endsWith('.ts')) {
+        if (!enableHmr) {
+          server?.ws.send({ type: 'full-reload', path: '*' });
+          return [];
         }
-      } else if (filePath.endsWith('.css') && cssToTs.has(filePath)) {
-        for (const tsFile of cssToTs.get(filePath)!) {
-          const mod = server.moduleGraph.getModuleById(tsFile);
-          if (mod) modulesToUpdate.add(mod);
+        try {
+          const sourceCode = fs.readFileSync(filePath, 'utf8');
+          parseStyleMappingsForFile(filePath, sourceCode);
+          await sendHmrUpdatesForFiles(server, [filePath]);
+        } catch {
+          // ignore read errors
         }
+        return [];
       } else {
         const mod = server.moduleGraph.getModuleById(filePath);
-        if (mod) modulesToUpdate.add(mod);
-      }
-
-      if (modulesToUpdate.size > 0) {
-        return Array.from(modulesToUpdate);
-      } else {
-        server.moduleGraph.invalidateAll();
-        server.ws.send({ type: 'full-reload' });
-        return [];
+        if (mod) {
+          return [mod];
+        }
       }
     },
+
+    async closeBundle() {
+      if (sharedDaemonClient) {
+        await sharedDaemonClient.close();
+      }
+    }
   };
 }
 
@@ -542,7 +1041,15 @@ export function angularGoLinker(options: AngularGoLinkerOptions = {}): any {
       return cached.code;
     }
 
-    const linked = await runGoNgc(projectRoot, compilerPath, ['--link', filePath]);
+    // B#4 FIX: Use the shared daemon client when available to avoid spawning
+    // a fresh go-ngc subprocess for every dependency file (~50ms overhead each).
+    let linked: string;
+    if (sharedDaemonClient) {
+      const result = await sharedDaemonClient.linkFile(filePath);
+      linked = result.code;
+    } else {
+      linked = await runGoNgc(projectRoot, compilerPath, ['--link', filePath]);
+    }
     linkCache.set(cacheId, { key, code: linked });
     return linked;
   }
@@ -553,6 +1060,13 @@ export function angularGoLinker(options: AngularGoLinkerOptions = {}): any {
     const cached = linkCache.get(cacheId);
     if (cached) {
       return cached.code;
+    }
+
+    // B#4 FIX: Use daemon client when available
+    if (sharedDaemonClient) {
+      const result = await sharedDaemonClient.linkCode(code, id);
+      linkCache.set(cacheId, { key, code: result.code });
+      return result.code;
     }
 
     const tempPath = path.join(
@@ -569,6 +1083,8 @@ export function angularGoLinker(options: AngularGoLinkerOptions = {}): any {
       fs.rmSync(tempPath, { force: true });
     }
   }
+
+
 
   async function linkIfNeeded(code: string, id: string): Promise<string | null> {
     if (!code.includes(angularPartialDeclarationMarker)) {

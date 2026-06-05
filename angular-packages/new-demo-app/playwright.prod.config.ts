@@ -18,9 +18,9 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'npx vite build && npx vite preview --host 127.0.0.1 --port 4202',
+    command: 'npm run e2e:prepare && npm run vite:build && npm run vite:preview -- --port 4202',
     url: 'http://localhost:4202',
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
     timeout: 120000,
   },
 });

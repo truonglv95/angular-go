@@ -76,3 +76,7 @@
 .demo-stack input {
     width: 100%;
 }
+
+.demo-heading {
+    color: red;
+}

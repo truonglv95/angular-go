@@ -18,9 +18,9 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'npx vite --config vite.config.ts --force --host 127.0.0.1 --port 4201',
+    command: 'npm run e2e:prepare && npx vite --config vite.config.ts --force --host 127.0.0.1 --port 4201',
     url: 'http://localhost:4201',
     reuseExistingServer: false,
-    timeout: 60000,
+    timeout: 120000,
   },
 });

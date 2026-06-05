@@ -33,6 +33,7 @@ import { TreeTableModule } from 'primeng/treetable';
 import { Panel } from 'primeng/panel';
 import { Fieldset } from 'primeng/fieldset';
 import { Splitter } from 'primeng/splitter';
+import { Knob } from 'primeng/knob';
 interface Product {
   code: string;
   name: string;
@@ -48,16 +49,17 @@ type DemoView = 'button' | 'input' | 'table' | 'form' | 'accordion' | 'dialog' |
     RouterOutlet, RouterLink, NgIf, FormsModule, Menu, Button, Ripple, InputText, TableModule, 
     Checkbox, RadioButton, Select, ToggleButton, AccordionModule, Dialog, TabsModule, 
     Slider, ProgressBar, TreeModule, Rating, ToggleSwitch, DatePicker, Badge, Avatar,
-    Tag, Card, Tooltip, Carousel, PickList, OrderList, TreeTableModule, Panel, Fieldset, Splitter
+    Tag, Card, Tooltip, Carousel, PickList, OrderList, TreeTableModule, Panel, Fieldset, Splitter, Knob
   ],
   templateUrl: './app.html',
   styleUrl: './app.css'
 })
 export class App {
   protected readonly title = signal('new-demo-app');
-  activeView: DemoView = 'button';
+  activeView: DemoView = 'knob' as any; // default to knob to see it immediately!
+  knobValue = 60;
   customerName = 'Go compiler';
-  loadDeferred = false;
+  loadDeferred = false;;
   
   checked: boolean = false;
   selectedCity: any | undefined;
@@ -166,3 +168,7 @@ export class App {
       { label: 'Defer', icon: 'pi pi-fw pi-clock', command: () => this.activeView = 'defer' }
   ];
 }
+// test invalidate
+// test phase 8
+// test phase 8 final
+// Trigger HMR 5

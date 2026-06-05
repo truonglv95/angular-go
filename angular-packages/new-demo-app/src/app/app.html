@@ -1,18 +1,22 @@
 <div class="layout-wrapper">
     <div class="layout-sidebar">
-        <h2>Go-NGC Demo</h2>
+        <h2>Go-NGC DemoTest 11</h2>
         <p-menu [model]="items" styleClass="w-full"></p-menu>
     </div>
-    
+
     <div class="layout-main">
-        <h1>PrimeNG Components via Native Go Compiler</h1>
-        
+        <h1 class="demo-heading">HMR WORKS BABY AMAZING 20</h1>
+
         <div class="card flex justify-center mb-5">
             <a routerLink="/dummy" class="route-link">Go to Dummy Route</a>
         </div>
-        
+
         <router-outlet></router-outlet>
-        
+
+        <div *ngIf="activeView === 'knob'" class="card flex justify-center mt-5">
+            <p-knob [(ngModel)]="knobValue" />
+        </div>
+
         <div *ngIf="activeView === 'button'" class="card flex justify-center flex-wrap gap-4 mt-5">
             <p-button label="Primary" />
             <p-button label="Secondary" severity="secondary" />
@@ -85,7 +89,7 @@
                 <ng-template pTemplate="header">
                     <tr>
                         <th>Code</th>
-                        <th>Name</th>
+                        <th>Name Updated HMR</th>
                         <th>Category</th>
                         <th>Quantity</th>
                     </tr>
@@ -107,7 +111,7 @@
                     <p-accordion-header>Header I</p-accordion-header>
                     <p-accordion-content>
                         <p>
-                            Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. 
+                            Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
                             Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
                         </p>
                     </p-accordion-content>
@@ -116,7 +120,7 @@
                     <p-accordion-header>Header II</p-accordion-header>
                     <p-accordion-content>
                         <p>
-                            Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium, totam rem aperiam, 
+                            Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium, totam rem aperiam,
                             eaque ipsa quae ab illo inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo.
                         </p>
                     </p-accordion-content>
@@ -125,17 +129,17 @@
                     <p-accordion-header>Header III</p-accordion-header>
                     <p-accordion-content>
                         <p>
-                            At vero eos et accusamus et iusto odio dignissimos ducimus qui blanditiis praesentium voluptatum deleniti atque corrupti 
+                            At vero eos et accusamus et iusto odio dignissimos ducimus qui blanditiis praesentium voluptatum deleniti atque corrupti
                             quos dolores et quas molestias excepturi sint occaecati cupiditate non provident, similique sunt in culpa qui officia deserunt mollitia animi.
                         </p>
                     </p-accordion-content>
                 </p-accordion-panel>
             </p-accordion>
         </div>
-        
+
         <div *ngIf="activeView === 'dialog'" class="card mt-5">
             <p-button (onClick)="displayDialog = true" label="Show Dialog" />
-            
+
             <p-dialog header="Go-NGC Dialog" [(visible)]="displayDialog" [modal]="true" [style]="{ width: '25rem' }">
                 <span class="p-text-secondary block mb-8">Update your information.</span>
                 <div class="flex items-center gap-4 mb-4">
@@ -163,19 +167,19 @@
                 <p-tabpanels>
                     <p-tabpanel value="0">
                         <p class="m-0">
-                            Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. 
-                            Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. 
+                            Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
+                            Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
                         </p>
                     </p-tabpanel>
                     <p-tabpanel value="1">
                         <p class="m-0">
-                            Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium, totam rem aperiam, 
-                            eaque ipsa quae ab illo inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo. 
+                            Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium, totam rem aperiam,
+                            eaque ipsa quae ab illo inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo.
                         </p>
                     </p-tabpanel>
                     <p-tabpanel value="2">
                         <p class="m-0">
-                            At vero eos et accusamus et iusto odio dignissimos ducimus qui blanditiis praesentium voluptatum deleniti atque corrupti 
+                            At vero eos et accusamus et iusto odio dignissimos ducimus qui blanditiis praesentium voluptatum deleniti atque corrupti
                             quos dolores et quas molestias excepturi sint occaecati cupiditate non provident, similique sunt in culpa qui officia deserunt mollitia animi.
                         </p>
                     </p-tabpanel>
@@ -232,14 +236,14 @@
                     <p-tag severity="danger" value="Danger" />
                 </div>
             </div>
-            
+
             <div class="flex flex-col gap-2 mt-4">
                 <p-card header="Advanced Card" subheader="Card Subtitle" [style]="{ width: '360px' }">
                     <ng-template pTemplate="header">
                         <img alt="Card" src="https://primefaces.org/cdn/primeng/images/usercard.png" />
                     </ng-template>
                     <p>
-                        Lorem ipsum dolor sit amet, consectetur adipisicing elit. Inventore sed consequuntur error repudiandae 
+                        Lorem ipsum dolor sit amet, consectetur adipisicing elit. Inventore sed consequuntur error repudiandae
                         numquam deserunt quisquam repellat libero asperiores earum nam nobis, culpa ratione quam perferendis esse, cupiditate neque quas!
                     </p>
                     <ng-template pTemplate="footer">
@@ -312,7 +316,7 @@
                 <p-treetable [value]="treeTableData">
                     <ng-template pTemplate="header">
                         <tr>
-                            <th>Name</th>
+                            <th>Name Updated HMR</th>
                             <th>Size</th>
                             <th>Type</th>
                         </tr>
@@ -360,3 +364,19 @@
     </div>
 </div>
 <div>
+<!-- trigger HMR -->
+<!-- trigger HMR 2 -->
+<!-- trigger HMR 3 -->
+<!-- trigger HMR 4 -->
+<!-- trigger HMR 6 -->
+<!-- trigger HMR 7 -->
+<!-- trigger HMR 8 -->
+<!-- trigger HMR 9 -->
+<!-- trigger HMR 10 -->
+<!-- trigger HMR 11 -->
+<!-- trigger HMR 12 -->
+<!-- trigger HMR 13 -->
+<!-- trigger HMR 14 -->
+<!-- trigger HMR 15 -->
+<!-- trigger HMR 16 -->
+<!-- trigger HMR 17 -->
