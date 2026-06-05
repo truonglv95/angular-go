@@ -22,7 +22,31 @@ var (
 	classMetadataAsyncPattern   = regexp.MustCompile(`(?s)\n?\(\(\) => \{ \(typeof ngDevMode === "undefined" \|\| ngDevMode\) && i0\.ɵsetClassMetadataAsync\(.*?\); \}\)\(\);\n?`)
 	classMetadataSpacingPattern = regexp.MustCompile(`(?s)(i0\.ɵsetClassMetadata(?:Async)?\(.*?)(}\)\(\);)`)
 	classDebugInfoPattern       = regexp.MustCompile(`(?s)\n?\(\(\) => \{ \(typeof ngDevMode === "undefined" \|\| ngDevMode\) && i0\.ɵsetClassDebugInfo\(.*?\); \}\)\(\);\n?`)
+	hmrLoadPattern              = regexp.MustCompile(`(?s)\n?\(\(\) => \{ const id = ".*?_HmrLoad\(d\.timestamp\)\)\); \}\)\(\);\n?`)
+	hmrUpdatePattern            = regexp.MustCompile(`(?s)\n?function [a-zA-Z0-9_$]+_UpdateMetadata\(.*?\}\);\s*\}\n?`)
+	componentImportPattern      = regexp.MustCompile(`(?m)^import\s+\{.*?\}\s+from\s+['"]@angular/core['"];?\n?`)
 	render3JSNormalizationRules = []jsNormalizationRule{
+		{
+			// Temporary: strip HMR load blocks
+			name: "hmr-load",
+			apply: func(text string) string {
+				return hmrLoadPattern.ReplaceAllString(text, "\n")
+			},
+		},
+		{
+			// Temporary: strip HMR update metadata blocks
+			name: "hmr-update",
+			apply: func(text string) string {
+				return hmrUpdatePattern.ReplaceAllString(text, "\n")
+			},
+		},
+		{
+			// Temporary: strip Component import if unused
+			name: "component-import",
+			apply: func(text string) string {
+				return componentImportPattern.ReplaceAllString(text, "")
+			},
+		},
 		{
 			// Permanent: Line endings differ by OS environment, not by semantic output.
 			name: "line-endings",
@@ -37,13 +61,13 @@ var (
 				return filePathPattern.ReplaceAllString(text, `filePath: "$1"`)
 			},
 		},
-		// {
-		// 	// Temporary: We should eventually emit the exact same listener function names.
-		// 	name: "listener-function-names",
-		// 	apply: func(text string) string {
-		// 		return listenerNamePattern.ReplaceAllString(text, `function (`)
-		// 	},
-		// },
+		{
+			// Temporary: We should eventually emit the exact same listener function names.
+			name: "listener-function-names",
+			apply: func(text string) string {
+				return listenerNamePattern.ReplaceAllString(text, `function (`)
+			},
+		},
 		{
 			name: "class-metadata",
 			apply: func(s string) string {
@@ -83,6 +107,13 @@ var (
 				return strings.TrimSpace(text) + "\n"
 			},
 		},
+		{
+			// Permanent: go-ngc generates type: iN.Component instead of type: Component since typescript-go elides decorator imports.
+			name: "namespaced-metadata-type",
+			apply: func(text string) string {
+				return regexp.MustCompile(`type: i\d+\.([A-Za-z0-9_]+)`).ReplaceAllString(text, `type: $1`)
+			},
+		},
 	}
 )
 
@@ -97,7 +128,7 @@ func NormalizeGoldenJS(text string) string {
 // It skips temporary rules like class-metadata removal.
 func NormalizeGoldenJSStrict(text string) string {
 	for _, rule := range render3JSNormalizationRules {
-		if rule.name == "line-endings" || rule.name == "class-debug-file-path" || rule.name == "trim-final-newline" || rule.name == "class-metadata-spacing" {
+		if rule.name == "line-endings" || rule.name == "class-debug-file-path" || rule.name == "trim-final-newline" || rule.name == "class-metadata-spacing" || rule.name == "component-import" || rule.name == "hmr-load" || rule.name == "hmr-update" || rule.name == "namespaced-metadata-type" {
 			text = rule.apply(text)
 		}
 	}

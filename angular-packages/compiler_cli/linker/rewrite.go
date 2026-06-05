@@ -76,11 +76,16 @@ func LinkSourceFile(sourceFile *ast.SourceFile, constantPool render3.ConstantPoo
 					}
 				}
 			}
-			
+
 			if len(generatedNodes) > 0 {
+				insertAt := 0
+				for insertAt < len(linked.Statements.Nodes) && ast.IsImportDeclaration(linked.Statements.Nodes[insertAt]) {
+					insertAt++
+				}
 				var finalNodes []*ast.Node
-				finalNodes = append(finalNodes, linked.Statements.Nodes...)
+				finalNodes = append(finalNodes, linked.Statements.Nodes[:insertAt]...)
 				finalNodes = append(finalNodes, generatedNodes...)
+				finalNodes = append(finalNodes, linked.Statements.Nodes[insertAt:]...)
 				linked.Statements.Nodes = finalNodes
 				ast.SetParentInChildren(linked.AsNode())
 			}

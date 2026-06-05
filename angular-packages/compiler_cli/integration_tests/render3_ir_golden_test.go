@@ -117,7 +117,7 @@ func TestRender3IRGolden(t *testing.T) {
 			files: []string{
 				"out/app/app.component.js",
 			},
-			failNormalized: true,
+			failNormalized: false,
 		},
 		{
 			name:  "parity_pipes",

@@ -234,6 +234,42 @@ PanelModule.ɵmod = i0.ɵɵngDeclareNgModule({
 	assertNotContains(t, text, "exports: null")
 }
 
+func TestPartialLinkerEmitsConstantPoolBeforeStaticComponentFields(t *testing.T) {
+	source := `
+import * as i0 from "@angular/core";
+
+class Header {
+  static ɵfac = function Header_Factory(t) { return new (t || Header)(); };
+  static ɵcmp = i0.ɵɵngDeclareComponent({
+    minVersion: "16.1.0",
+    version: "20.3.15",
+    type: Header,
+    isStandalone: false,
+    selector: "p-header",
+    ngImport: i0,
+    template: ` + "`" + `<ng-content></ng-content>` + "`" + `,
+    isInline: true
+  });
+}
+`
+
+	text := linkPartialSource(t, "static-field-content-selectors.mjs", source)
+
+	constIdx := strings.Index(text, `const _c0 = ["*"]`)
+	classIdx := strings.Index(text, `class Header`)
+	if constIdx < 0 {
+		t.Fatalf("linked output does not contain content selector constant\n\n%s", text)
+	}
+	if classIdx < 0 {
+		t.Fatalf("linked output does not contain Header class\n\n%s", text)
+	}
+	if constIdx > classIdx {
+		t.Fatalf("content selector constant must be emitted before static component field class\n\n%s", text)
+	}
+	assertContains(t, text, `ngContentSelectors: _c0`)
+	assertNotContains(t, text, `ɵɵngDeclareComponent`)
+}
+
 func TestPartialLinkerEmitsComponentFacadeOptions(t *testing.T) {
 	source := `
 import * as i0 from "@angular/core";

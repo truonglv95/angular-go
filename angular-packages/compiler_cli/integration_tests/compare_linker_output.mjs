@@ -3,7 +3,31 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 
-const requireFromCwd = createRequire(path.join(process.cwd(), 'package.json'));
+function createRequireWithFallbacks() {
+  const packageJsons = [
+    path.join(process.cwd(), 'package.json'),
+    path.resolve(import.meta.dirname, '../../new-demo-app/package.json'),
+    path.resolve(import.meta.dirname, '../../vite-plugin-angular-go/package.json'),
+  ];
+
+  for (const packageJson of packageJsons) {
+    if (!fs.existsSync(packageJson)) {
+      continue;
+    }
+    const req = createRequire(packageJson);
+    try {
+      req.resolve('@babel/core');
+      req.resolve('@angular/compiler-cli/linker/babel');
+      return req;
+    } catch {
+      // Try the next package root.
+    }
+  }
+
+  throw new Error('Unable to resolve @babel/core and @angular/compiler-cli/linker/babel from known package roots.');
+}
+
+const requireForLinker = createRequireWithFallbacks();
 
 const [inputPath, goOutputPath, expectedOutputPath] = process.argv.slice(2);
 if (!inputPath || !goOutputPath) {
@@ -11,8 +35,8 @@ if (!inputPath || !goOutputPath) {
   process.exit(2);
 }
 
-const babel = requireFromCwd('@babel/core');
-const linkerBabelPath = requireFromCwd.resolve('@angular/compiler-cli/linker/babel');
+const babel = requireForLinker('@babel/core');
+const linkerBabelPath = requireForLinker.resolve('@angular/compiler-cli/linker/babel');
 const { createEs2015LinkerPlugin } = await import(pathToFileURL(linkerBabelPath));
 
 const absoluteInputPath = path.resolve(inputPath);
