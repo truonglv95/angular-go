@@ -5,9 +5,10 @@ import (
 )
 
 type NgCompilerOptions struct {
-	CompilationMode string
-	StrictTemplates bool
-	EnableHmr       bool
+	CompilationMode  string
+	StrictTemplates  bool
+	EnableHmr        bool
+	InvalidatedFiles map[string]bool
 }
 
 type ParsedConfiguration struct {

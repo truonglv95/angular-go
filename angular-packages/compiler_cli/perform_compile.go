@@ -178,7 +178,7 @@ func PerformCompilation(config *ParsedConfiguration) *PerformCompilationResult {
 	}
 
 	host := CreateCompilerHost(sys)
-	res, _ := PerformCompilationWithHost(config, host, nil)
+	res, _ := PerformCompilationWithHost(config, host, nil, nil)
 	return res
 }
 
@@ -262,7 +262,7 @@ func CreateCompilerHost(sys *osSys) compiler.CompilerHost {
 	return &profiledCompilerHost{CompilerHost: cachedHost}
 }
 
-func PerformCompilationWithHost(config *ParsedConfiguration, host compiler.CompilerHost, oldProgram *ngtsc.NgtscProgram) (*PerformCompilationResult, *ngtsc.NgtscProgram) {
+func PerformCompilationWithHost(config *ParsedConfiguration, host compiler.CompilerHost, oldProgram *ngtsc.NgtscProgram, invalidatedFiles map[string]bool) (*PerformCompilationResult, *ngtsc.NgtscProgram) {
 	if len(config.Errors) > 0 {
 		return &PerformCompilationResult{
 			Diagnostics: config.Errors,
@@ -290,8 +290,9 @@ func PerformCompilationWithHost(config *ParsedConfiguration, host compiler.Compi
 			parsedCommandLine,
 			host,
 			ngtsc_core.NgCompilerOptions{
-				CompilationMode: config.CompilationMode,
-				EnableHmr:       config.EnableHmr,
+				CompilationMode:  config.CompilationMode,
+				EnableHmr:        config.EnableHmr,
+				InvalidatedFiles: invalidatedFiles,
 			},
 			oldProgram,
 		)

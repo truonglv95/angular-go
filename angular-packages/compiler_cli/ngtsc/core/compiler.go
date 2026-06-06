@@ -2,11 +2,15 @@ package core
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"runtime"
 	"sync"
 
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/annotations"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/annotations_local"
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/incremental"
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/incremental/semantic_graph"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/metadata"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/scope"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/transform"
@@ -17,11 +21,13 @@ import (
 )
 
 type NgCompiler struct {
-	tsProgram     *compiler.Program
-	checker       *checker.Checker
-	reflector     reflection.ReflectionHost
-	handlers      []transform.DecoratorHandler
-	traitCompiler *transform.TraitCompiler
+	tsProgram              *compiler.Program
+	checker                *checker.Checker
+	reflector              reflection.ReflectionHost
+	handlers               []transform.DecoratorHandler
+	traitCompiler          *transform.TraitCompiler
+	incrementalCompilation *incremental.IncrementalCompilation
+	affectedFiles          map[string]bool
 
 	metaRegistry  *metadata.LocalMetadataRegistry
 	scopeRegistry *scope.LocalModuleScopeRegistry
@@ -72,21 +78,47 @@ func NewNgCompiler(tsProgram *compiler.Program, options NgCompilerOptions, oldCo
 	}
 
 	var oldTc *transform.TraitCompiler
+	var oldGraph *semantic_graph.SemanticDepGraph
+	var oldIncrementalState *incremental.IncrementalState
 	if oldCompiler != nil {
 		oldTc = oldCompiler.traitCompiler
+		if oldCompiler.incrementalCompilation != nil && oldCompiler.incrementalCompilation.State != nil {
+			oldIncrementalState = oldCompiler.incrementalCompilation.State
+			if sg, ok := oldIncrementalState.SemanticGraph.(*semantic_graph.SemanticDepGraph); ok {
+				oldGraph = sg
+			}
+		}
 	}
 	traitCompiler := transform.NewTraitCompiler(handlers, refHost, localRefHost, oldTc)
+	traitCompiler.SemanticUpdater = semantic_graph.NewSemanticDepGraphUpdater(oldGraph)
+
+	newVersions := getFileVersions(tsProgram)
+	var incrementalComp *incremental.IncrementalCompilation
+	if oldIncrementalState != nil {
+		incrementalComp = incremental.Incremental(
+			tsProgram,
+			newVersions,
+			nil,
+			oldIncrementalState,
+			options.InvalidatedFiles,
+			nil,
+		)
+	} else {
+		incrementalComp = incremental.Fresh(newVersions)
+	}
+	traitCompiler.DepTracker = incrementalComp
 
 	return &NgCompiler{
-		tsProgram:       tsProgram,
-		checker:         chk,
-		reflector:       refHost,
-		handlers:        handlers,
-		traitCompiler:   traitCompiler,
-		metaRegistry:    localMetaRegistry,
-		scopeRegistry:   scopeRegistry,
-		compilationMode: options.CompilationMode,
-		options:         options,
+		tsProgram:              tsProgram,
+		checker:                chk,
+		reflector:              refHost,
+		handlers:               handlers,
+		traitCompiler:          traitCompiler,
+		incrementalCompilation: incrementalComp,
+		metaRegistry:           localMetaRegistry,
+		scopeRegistry:          scopeRegistry,
+		compilationMode:        options.CompilationMode,
+		options:                options,
 	}, nil
 }
 
@@ -147,6 +179,18 @@ func (c *NgCompiler) AnalyzeSync() []*ast.Diagnostic {
 	}
 	wg.Wait()
 
+	if c.traitCompiler.SemanticUpdater != nil {
+		res := c.traitCompiler.SemanticUpdater.Finalize()
+		if c.incrementalCompilation != nil && c.incrementalCompilation.State != nil {
+			c.incrementalCompilation.State.SemanticGraph = c.traitCompiler.SemanticUpdater.GetGraph()
+		}
+		c.mergeSemanticAffectedFiles(res)
+	}
+
+	if c.incrementalCompilation != nil {
+		c.incrementalCompilation.RecordSuccessfulAnalysis(c.traitCompiler)
+	}
+
 	c.analyzed = true
 	return nil
 }
@@ -156,8 +200,38 @@ func (c *NgCompiler) Resolve() []*ast.Diagnostic {
 		return nil
 	}
 	c.traitCompiler.Resolve()
+
+	if c.traitCompiler.SemanticUpdater != nil {
+		res := c.traitCompiler.SemanticUpdater.Finalize()
+		if c.incrementalCompilation != nil && c.incrementalCompilation.State != nil {
+			c.incrementalCompilation.State.SemanticGraph = c.traitCompiler.SemanticUpdater.GetGraph()
+		}
+		c.mergeSemanticAffectedFiles(res)
+	}
+
+	if c.incrementalCompilation != nil {
+		fileDiags := c.traitCompiler.GetDiagnostics()
+		res := make(map[string]any)
+		for file, diags := range fileDiags {
+			res[file] = diags
+		}
+		c.incrementalCompilation.RecordSuccessfulTypeCheck(res)
+	}
+
 	c.resolved = true
 	return nil
+}
+
+func (c *NgCompiler) mergeSemanticAffectedFiles(res semantic_graph.SemanticDependencyResult) {
+	if res == nil {
+		return
+	}
+	if c.affectedFiles == nil {
+		c.affectedFiles = make(map[string]bool)
+	}
+	for _, f := range res.GetAffectedFiles() {
+		c.affectedFiles[f] = true
+	}
 }
 
 func (c *NgCompiler) PrepareEmit() []*ast.Diagnostic {
@@ -165,10 +239,52 @@ func (c *NgCompiler) PrepareEmit() []*ast.Diagnostic {
 		return nil
 	}
 
-	factory := ast.NewNodeFactory(ast.NodeFactoryHooks{})
-	for _, sf := range c.tsProgram.SourceFiles() {
-		c.traitCompiler.UpdateSourceFile(sf, factory)
+	sourceFiles := c.tsProgram.SourceFiles()
+	if len(sourceFiles) == 0 {
+		c.prepared = true
+		return nil
 	}
+
+	ch := make(chan *ast.SourceFile, len(sourceFiles))
+	for _, sf := range sourceFiles {
+		ch <- sf
+	}
+	close(ch)
+
+	numWorkers := runtime.NumCPU()
+	if numWorkers > 16 {
+		numWorkers = 16
+	}
+	if numWorkers > len(sourceFiles) {
+		numWorkers = len(sourceFiles)
+	}
+	if numWorkers < 1 {
+		numWorkers = 1
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			factory := ast.NewNodeFactory(ast.NodeFactoryHooks{})
+			for sf := range ch {
+				isAffected := false
+				if c.affectedFiles != nil && c.affectedFiles[sf.FileName()] {
+					isAffected = true
+				}
+				if !isAffected && c.incrementalCompilation != nil && c.incrementalCompilation.SafeToSkipEmit(sf) {
+					c.incrementalCompilation.RecordSuccessfulEmit(sf)
+					continue
+				}
+				c.traitCompiler.UpdateSourceFile(sf, factory)
+				if c.incrementalCompilation != nil {
+					c.incrementalCompilation.RecordSuccessfulEmit(sf)
+				}
+			}
+		}()
+	}
+	wg.Wait()
 
 	c.prepared = true
 	return nil
@@ -186,4 +302,13 @@ func (c *NgCompiler) GetHmrComponentIds() []string {
 		return c.traitCompiler.GetHmrComponentIds()
 	}
 	return nil
+}
+
+func getFileVersions(tsProgram *compiler.Program) map[string]string {
+	versions := make(map[string]string)
+	for _, sf := range tsProgram.SourceFiles() {
+		hash := sha256.Sum256([]byte(sf.Text()))
+		versions[sf.FileName()] = fmt.Sprintf("%x", hash)
+	}
+	return versions
 }

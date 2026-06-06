@@ -5,8 +5,8 @@ import (
 )
 
 type IncrementalBuild interface {
-	PriorAnalysisFor(sf ast.SourceFile) []any
-	PriorTypeCheckingResultsFor(fileSf ast.SourceFile) any
+	PriorAnalysisFor(sf *ast.SourceFile) []any
+	PriorTypeCheckingResultsFor(fileSf *ast.SourceFile) any
 	RecordSuccessfulTypeCheck(results map[string]any) any
 }
 

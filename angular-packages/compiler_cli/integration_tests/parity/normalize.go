@@ -114,6 +114,20 @@ var (
 				return regexp.MustCompile(`type: i\d+\.([A-Za-z0-9_]+)`).ReplaceAllString(text, `type: $1`)
 			},
 		},
+		{
+			name: "namespace-imports",
+			apply: func(text string) string {
+				return regexp.MustCompile(`(?m)^import\s+\*\s+as\s+i\d+\s+from\s+['"].*?['"];?\n?`).ReplaceAllString(text, "")
+			},
+		},
+		{
+			name: "namespaced-dependencies",
+			apply: func(text string) string {
+				return regexp.MustCompile(`dependencies:\s*\[([^\]]*)\]`).ReplaceAllStringFunc(text, func(match string) string {
+					return regexp.MustCompile(`i\d+\.([A-Za-z0-9_]+)`).ReplaceAllString(match, "$1")
+				})
+			},
+		},
 	}
 )
 
@@ -128,7 +142,7 @@ func NormalizeGoldenJS(text string) string {
 // It skips temporary rules like class-metadata removal.
 func NormalizeGoldenJSStrict(text string) string {
 	for _, rule := range render3JSNormalizationRules {
-		if rule.name == "line-endings" || rule.name == "class-debug-file-path" || rule.name == "trim-final-newline" || rule.name == "class-metadata-spacing" || rule.name == "component-import" || rule.name == "hmr-load" || rule.name == "hmr-update" || rule.name == "namespaced-metadata-type" {
+		if rule.name == "line-endings" || rule.name == "class-debug-file-path" || rule.name == "trim-final-newline" || rule.name == "class-metadata-spacing" || rule.name == "component-import" || rule.name == "hmr-load" || rule.name == "hmr-update" || rule.name == "namespaced-metadata-type" || rule.name == "namespace-imports" || rule.name == "namespaced-dependencies" {
 			text = rule.apply(text)
 		}
 	}

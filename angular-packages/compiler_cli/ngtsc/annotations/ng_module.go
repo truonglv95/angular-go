@@ -5,13 +5,14 @@ import (
 	"strings"
 
 	"github.com/microsoft/typescript-go/angular-packages/compiler"
-	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/metadata"
-	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/scope"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/output"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/render3"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/imports"
-	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/reflection"
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/incremental/semantic_graph"
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/metadata"
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/scope"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/transform"
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/reflection"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/translator"
 	"github.com/microsoft/typescript-go/internal/ast"
 )
@@ -82,6 +83,32 @@ func extractR3References(expr *ast.Expression) []render3.R3Reference {
 	return refs
 }
 
+func topLevelClassByName(sourceFile *ast.SourceFile) map[string]*ast.Node {
+	classes := make(map[string]*ast.Node)
+	if sourceFile == nil || sourceFile.Statements == nil {
+		return classes
+	}
+	for _, stmt := range sourceFile.Statements.Nodes {
+		if stmt.Kind != ast.KindClassDeclaration {
+			continue
+		}
+		classDecl := stmt.AsClassDeclaration()
+		if classDecl.Name() == nil {
+			continue
+		}
+		classes[classDecl.Name().AsIdentifier().Text] = stmt
+	}
+	return classes
+}
+
+func referenceFromR3(ref render3.R3Reference, classes map[string]*ast.Node) metadata.Reference {
+	name := ""
+	if rv, ok := ref.Value.(*output.ReadVarExpr); ok {
+		name = rv.Name
+	}
+	return metadata.Reference{Name: name, Node: classes[name]}
+}
+
 func (h *NgModuleDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorator *reflection.Decorator) (any, []ast.Diagnostic) {
 	analysis := &NgModuleAnalysis{
 		DecoratorNode: decorator.Node,
@@ -113,7 +140,7 @@ func (h *NgModuleDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorator
 		}
 
 		initExpr := assign.Initializer
-		
+
 		switch name {
 		case "declarations":
 			analysis.Declarations = extractR3References(initExpr)
@@ -131,38 +158,38 @@ func (h *NgModuleDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorator
 
 	// Register module metadata
 	if h.metaRegistry != nil {
+		classes := topLevelClassByName(ast.GetSourceFileOfNode(node.AsNode()))
 		var decls, imps, exps []metadata.Reference
 		for _, d := range analysis.Declarations {
-			name := ""
-			if rv, ok := d.Value.(*output.ReadVarExpr); ok { name = rv.Name }
-			decls = append(decls, metadata.Reference{Name: name}) // Note: Needs .Node for scope registry to work properly! But we don't have it here yet.
+			decls = append(decls, referenceFromR3(d, classes))
 		}
 		for _, i := range analysis.Imports {
-			name := ""
-			if rv, ok := i.Value.(*output.ReadVarExpr); ok { name = rv.Name }
-			imps = append(imps, metadata.Reference{Name: name})
+			imps = append(imps, referenceFromR3(i, classes))
 		}
 		for _, e := range analysis.Exports {
-			name := ""
-			if rv, ok := e.Value.(*output.ReadVarExpr); ok { name = rv.Name }
-			exps = append(exps, metadata.Reference{Name: name})
+			exps = append(exps, referenceFromR3(e, classes))
 		}
 		h.metaRegistry.RegisterNgModule(node.AsNode(), &metadata.NgModuleMeta{
-			Name:         node.Name().AsIdentifier().Text,
+			Name: node.Name().AsIdentifier().Text,
+			Ref: metadata.Reference{
+				Name: node.Name().AsIdentifier().Text,
+				Node: node.AsNode(),
+			},
 			Declarations: decls,
 			Imports:      imps,
 			Exports:      exps,
 		})
 	}
-	
+
 	// Register components declared in this module
 	if h.scopeRegistry != nil {
-		// TODO: Register components declared in this module when symbol resolution is available
-		// for _, decl := range analysis.Declarations {
-		//	if decl.Node != nil {
-		//		h.scopeRegistry.RegisterComponentDeclaration(decl.Node, node.AsNode())
-		//	}
-		// }
+		classes := topLevelClassByName(ast.GetSourceFileOfNode(node.AsNode()))
+		for _, decl := range analysis.Declarations {
+			ref := referenceFromR3(decl, classes)
+			if ref.Node != nil {
+				h.scopeRegistry.RegisterComponentDeclaration(ref.Node, node.AsNode())
+			}
+		}
 	}
 
 	return analysis, nil
@@ -180,12 +207,12 @@ func (h *NgModuleDecoratorHandler) CompileFull(node *ast.ClassDeclaration, analy
 		className = node.Name().AsIdentifier().Text
 	}
 
-		visitor := translator.NewExpressionTranslatorVisitor(factory, importMgr, ast.GetSourceFileOfNode(node.AsNode()).AsNode(), translator.TranslatorOptions{})
+	visitor := translator.NewExpressionTranslatorVisitor(factory, importMgr, ast.GetSourceFileOfNode(node.AsNode()).AsNode(), translator.TranslatorOptions{})
 
 	// 1. Compile ɵmod (NgModule)
 	ngModuleMeta := &render3.R3NgModuleMetadataGlobal{
 		R3NgModuleMetadataCommon: render3.R3NgModuleMetadataCommon{
-			Kind:              render3.R3NgModuleMetadataKindGlobal,
+			Kind: render3.R3NgModuleMetadataKindGlobal,
 			Type: render3.R3Reference{
 				Value: output.NewReadVarExpr(className, nil, nil, nil),
 			},
@@ -351,6 +378,30 @@ func (h *NgModuleDecoratorHandler) CompileFull(node *ast.ClassDeclaration, analy
 			Initializer:  injInitializerNode,
 		},
 	}, nil
+}
+
+func (h *NgModuleDecoratorHandler) GetSemanticSymbol(node *ast.ClassDeclaration, analysis any) *semantic_graph.SemanticSymbol {
+	a, ok := analysis.(*NgModuleAnalysis)
+	if !ok || a == nil {
+		return nil
+	}
+	names := func(refs []render3.R3Reference) []string {
+		var res []string
+		for _, ref := range refs {
+			if rv, ok := ref.Value.(*output.ReadVarExpr); ok && rv.Name != "" {
+				res = append(res, rv.Name)
+			}
+		}
+		return res
+	}
+	return &semantic_graph.SemanticSymbol{
+		Path:         ast.GetSourceFileOfNode(node.AsNode()).FileName(),
+		Identifier:   node.Name().AsIdentifier().Text,
+		Kind:         "ngmodule",
+		Declarations: names(a.Declarations),
+		Imports:      names(a.Imports),
+		Exports:      names(a.Exports),
+	}
 }
 
 func extractDependenciesNg(refHost reflection.ReflectionHost, classDecl *ast.Node) interface{} {

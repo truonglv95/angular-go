@@ -3,6 +3,7 @@ package scope
 import (
 	"sync"
 
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/incremental/semantic_graph"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/metadata"
 	"github.com/microsoft/typescript-go/internal/ast"
 )
@@ -23,6 +24,7 @@ func NewLocalModuleScopeRegistry(metaReader metadata.MetadataReader) *LocalModul
 
 // Ensure interface implementation
 var _ ScopeReader = (*LocalModuleScopeRegistry)(nil)
+var _ SemanticScopeReader = (*LocalModuleScopeRegistry)(nil)
 
 // RegisterComponentDeclaration registers that a component is declared in a specific NgModule.
 func (r *LocalModuleScopeRegistry) RegisterComponentDeclaration(component *ast.Node, module *ast.Node) {
@@ -145,7 +147,7 @@ func (r *LocalModuleScopeRegistry) collectModuleExports(moduleNode *ast.Node, ow
 		if expRef.Node == nil {
 			continue
 		}
-		
+
 		targetOwningModule := owningModule
 		if expRef.OwningModule != "" {
 			targetOwningModule = expRef.OwningModule
@@ -183,7 +185,7 @@ func (r *LocalModuleScopeRegistry) GetStandaloneScope(node *ast.Node) *Standalon
 	scope := &StandaloneScope{
 		Component: node,
 	}
-	
+
 	visited := make(map[*ast.Node]bool)
 	var dirs []metadata.DirectiveMeta
 	var pipes []metadata.PipeMeta
@@ -192,9 +194,9 @@ func (r *LocalModuleScopeRegistry) GetStandaloneScope(node *ast.Node) *Standalon
 		if ref.Node == nil {
 			continue
 		}
-		
+
 		targetOwningModule := ref.OwningModule
-		
+
 		if dirMeta := r.metaReader.GetDirectiveMetadata(ref.Node); dirMeta != nil {
 			dirMetaCopy := *dirMeta
 			if targetOwningModule != "" {
@@ -216,7 +218,7 @@ func (r *LocalModuleScopeRegistry) GetStandaloneScope(node *ast.Node) *Standalon
 
 	for i := range dirs {
 		scope.Dependencies = append(scope.Dependencies, ScopeDependency{
-			Kind: metadata.MetaKindDirective,
+			Kind:      metadata.MetaKindDirective,
 			Directive: &dirs[i],
 		})
 	}
@@ -228,4 +230,12 @@ func (r *LocalModuleScopeRegistry) GetStandaloneScope(node *ast.Node) *Standalon
 	}
 
 	return scope
+}
+
+func (r *LocalModuleScopeRegistry) GetSemanticSymbol(node *ast.Node) *semantic_graph.SemanticSymbol {
+	reader, ok := r.metaReader.(metadata.SemanticMetadataReader)
+	if !ok {
+		return nil
+	}
+	return reader.GetSemanticSymbol(node)
 }

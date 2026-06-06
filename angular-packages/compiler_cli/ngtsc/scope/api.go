@@ -1,6 +1,7 @@
 package scope
 
 import (
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/incremental/semantic_graph"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/metadata"
 	"github.com/microsoft/typescript-go/internal/ast"
 )
@@ -47,6 +48,10 @@ type CompilationScope struct {
 // ScopeReader defines the reader interface for compilation scopes.
 type ScopeReader interface {
 	GetCompilationScope(component *ast.Node) *CompilationScope
-	
+
 	GetStandaloneScope(node *ast.Node) *StandaloneScope
+}
+
+type SemanticScopeReader interface {
+	GetSemanticSymbol(node *ast.Node) *semantic_graph.SemanticSymbol
 }

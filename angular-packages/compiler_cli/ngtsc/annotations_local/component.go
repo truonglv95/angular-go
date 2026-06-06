@@ -6,6 +6,7 @@ import (
 	"github.com/microsoft/typescript-go/angular-packages/compiler/render3"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/imports"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/annotations"
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/incremental/semantic_graph"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/metadata"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/scope"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/transform"
@@ -345,4 +346,19 @@ func (h *ComponentLocalDecoratorHandler) Resolve(node *ast.ClassDeclaration, ana
 func (h *ComponentLocalDecoratorHandler) CompileFull(node *ast.ClassDeclaration, analysisData any, resolutionData any, pool *compiler.ConstantPool, importMgr *imports.ImportManager, factory *ast.NodeFactory) ([]transform.CompileResult, []ast.Diagnostic) {
 	globalHandler := annotations.NewComponentDecoratorHandler(h.host, h.isCore, h.metaRegistry, h.scopeRegistry, h.enableHmr)
 	return globalHandler.CompileFull(node, analysisData, resolutionData, pool, importMgr, factory)
+}
+
+func (h *ComponentLocalDecoratorHandler) GetSemanticSymbol(node *ast.ClassDeclaration, analysis any) *semantic_graph.SemanticSymbol {
+	globalHandler := annotations.NewComponentDecoratorHandler(h.host, h.isCore, h.metaRegistry, h.scopeRegistry, h.enableHmr)
+	return globalHandler.GetSemanticSymbol(node, analysis)
+}
+
+func (h *ComponentLocalDecoratorHandler) GetSemanticReferenceKeys(node *ast.ClassDeclaration, analysis any, resolution any) []string {
+	globalHandler := annotations.NewComponentDecoratorHandler(h.host, h.isCore, h.metaRegistry, h.scopeRegistry, h.enableHmr)
+	return globalHandler.GetSemanticReferenceKeys(node, analysis, resolution)
+}
+
+func (h *ComponentLocalDecoratorHandler) GetSemanticReferenceSymbols(node *ast.ClassDeclaration, analysis any, resolution any) []semantic_graph.SemanticSymbol {
+	globalHandler := annotations.NewComponentDecoratorHandler(h.host, h.isCore, h.metaRegistry, h.scopeRegistry, h.enableHmr)
+	return globalHandler.GetSemanticReferenceSymbols(node, analysis, resolution)
 }

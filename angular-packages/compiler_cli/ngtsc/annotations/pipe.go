@@ -5,9 +5,10 @@ import (
 	"github.com/microsoft/typescript-go/angular-packages/compiler/output"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/render3"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/imports"
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/incremental/semantic_graph"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/metadata"
-	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/reflection"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/transform"
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/reflection"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/translator"
 	"github.com/microsoft/typescript-go/internal/ast"
 )
@@ -113,7 +114,12 @@ func (h *PipeDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorator *re
 
 	if h.metaRegistry != nil {
 		h.metaRegistry.RegisterPipe(node.AsNode(), &metadata.PipeMeta{
+			Ref: metadata.Reference{
+				Name: node.Name().AsIdentifier().Text,
+				Node: node.AsNode(),
+			},
 			Name:       analysis.Name, // use analysis.Name which is the pipe name string
+			Pure:       analysis.Pure,
 			Standalone: analysis.IsStandalone,
 		})
 	}
@@ -145,7 +151,7 @@ func (h *PipeDecoratorHandler) CompileFull(node *ast.ClassDeclaration, analysisD
 
 	compiled := render3.CompilePipeFromMetadata(meta)
 
-		visitor := translator.NewExpressionTranslatorVisitor(factory, importMgr, ast.GetSourceFileOfNode(node.AsNode()).AsNode(), translator.TranslatorOptions{})
+	visitor := translator.NewExpressionTranslatorVisitor(factory, importMgr, ast.GetSourceFileOfNode(node.AsNode()).AsNode(), translator.TranslatorOptions{})
 
 	var initializerNode *ast.Node
 	if compiled.Expression != nil {
@@ -309,4 +315,32 @@ func extractTokenFromNodePipe(node *ast.Node) output.Expression {
 		}
 	}
 	return output.NewLiteralExpr("UNKNOWN_TOKEN", nil, nil, nil)
+}
+
+func (h *PipeDecoratorHandler) GetSemanticSymbol(node *ast.ClassDeclaration, analysis any) *semantic_graph.SemanticSymbol {
+	a, ok := analysis.(*PipeAnalysis)
+	if !ok || a == nil {
+		return nil
+	}
+
+	var imps []string
+	for _, imp := range a.Imports {
+		imps = append(imps, imp.Name)
+	}
+
+	var tps []string
+	for _, tp := range semantic_graph.ExtractSemanticTypeParameters(node.AsNode()) {
+		tps = append(tps, tp.GetName())
+	}
+
+	return &semantic_graph.SemanticSymbol{
+		Path:           ast.GetSourceFileOfNode(node.AsNode()).FileName(),
+		Identifier:     node.Name().AsIdentifier().Text,
+		Kind:           "pipe",
+		PipeName:       a.Name,
+		Pure:           a.Pure,
+		Standalone:     a.IsStandalone,
+		Imports:        imps,
+		TypeParameters: tps,
+	}
 }

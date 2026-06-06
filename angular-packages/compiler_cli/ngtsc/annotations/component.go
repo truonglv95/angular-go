@@ -1,12 +1,16 @@
 package annotations
 
 import (
+	"bytes"
 	"fmt"
 	"io/ioutil"
-	"path/filepath"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/microsoft/typescript-go/angular-packages/compiler"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/expression_parser"
@@ -15,8 +19,9 @@ import (
 	"github.com/microsoft/typescript-go/angular-packages/compiler/render3/partial"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/imports"
 	ngdiagnostics "github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/diagnostics"
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/incremental/semantic_graph"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/metadata"
-	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/scope"
+	ngscope "github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/scope"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/transform"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/reflection"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/translator"
@@ -41,6 +46,7 @@ type ComponentAnalysis struct {
 	Imports         []ComponentImport
 	Inputs          map[string]render3.R3InputMetadata
 	Outputs         map[string]string
+	ExportAs        []string
 	Queries         []render3.R3QueryMetadata
 	ViewQueries     []render3.R3QueryMetadata
 	Host            render3.R3HostMetadata
@@ -53,7 +59,27 @@ type ComponentAnalysis struct {
 }
 
 type ComponentResolution struct {
-	Dependencies []render3.R3TemplateDependency
+	Dependencies             []render3.R3TemplateDependency
+	SemanticReferenceKeys    []string
+	SemanticReferenceSymbols []semantic_graph.SemanticSymbol
+}
+
+func semanticKeyForRef(ref metadata.Reference) string {
+	if ref.Node == nil || ref.Name == "" {
+		return ""
+	}
+	sf := ast.GetSourceFileOfNode(ref.Node)
+	if sf == nil {
+		return ""
+	}
+	return semantic_graph.SymbolKey(sf.FileName(), ref.Name)
+}
+
+func semanticKeyForSymbol(symbol *semantic_graph.SemanticSymbol) string {
+	if symbol == nil {
+		return ""
+	}
+	return semantic_graph.SymbolKey(symbol.Path, symbol.Identifier)
 }
 
 type directiveMetaAdapter struct {
@@ -208,11 +234,11 @@ type ComponentDecoratorHandler struct {
 	host          reflection.ReflectionHost
 	isPartial     bool
 	metaRegistry  *metadata.LocalMetadataRegistry
-	scopeRegistry *scope.LocalModuleScopeRegistry
+	scopeRegistry *ngscope.LocalModuleScopeRegistry
 	enableHmr     bool
 }
 
-func NewComponentDecoratorHandler(host reflection.ReflectionHost, isPartial bool, metaRegistry *metadata.LocalMetadataRegistry, scopeRegistry *scope.LocalModuleScopeRegistry, enableHmr bool) *ComponentDecoratorHandler {
+func NewComponentDecoratorHandler(host reflection.ReflectionHost, isPartial bool, metaRegistry *metadata.LocalMetadataRegistry, scopeRegistry *ngscope.LocalModuleScopeRegistry, enableHmr bool) *ComponentDecoratorHandler {
 	return &ComponentDecoratorHandler{
 		host:          host,
 		isPartial:     isPartial,
@@ -410,6 +436,14 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 			if assign.Initializer.Kind == ast.KindStringLiteral {
 				analysis.Selector = assign.Initializer.AsStringLiteral().Text
 			}
+		case "exportAs":
+			if assign.Initializer.Kind == ast.KindStringLiteral {
+				val := assign.Initializer.AsStringLiteral().Text
+				parts := strings.Split(val, ",")
+				for _, part := range parts {
+					analysis.ExportAs = append(analysis.ExportAs, strings.TrimSpace(part))
+				}
+			}
 		case "standalone":
 			if assign.Initializer.Kind == ast.KindTrueKeyword {
 				analysis.IsStandalone = true
@@ -549,12 +583,19 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 		for _, imp := range analysis.Imports {
 			metaImports = append(metaImports, metadata.Reference{Name: imp.Name, Node: imp.Decl.Node, OwningModule: imp.Decl.ViaModule})
 		}
+		metaInputs := make(map[string]string, len(analysis.Inputs))
+		for prop, input := range analysis.Inputs {
+			metaInputs[prop] = input.BindingPropertyName
+		}
 		h.metaRegistry.RegisterDirective(node.AsNode(), &metadata.DirectiveMeta{
 			Name:        node.Name().AsIdentifier().Text,
 			Selector:    analysis.Selector,
 			Standalone:  analysis.IsStandalone,
 			Imports:     metaImports,
 			IsComponent: true,
+			Inputs:      metaInputs,
+			Outputs:     analysis.Outputs,
+			ExportAs:    analysis.ExportAs,
 			Ref: metadata.Reference{
 				Name: node.Name().AsIdentifier().Text,
 				Node: node.AsNode(),
@@ -592,6 +633,7 @@ func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysis
 
 			// Deduplicate dependencies
 			seenDeps := make(map[string]bool)
+			seenSemanticRefs := make(map[string]bool)
 			addDep := func(dep render3.R3TemplateDependency) {
 				key := ""
 				if expr, ok := dep.Type.(*output.ExternalExpr); ok {
@@ -603,6 +645,28 @@ func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysis
 					seenDeps[key] = true
 					resolution.Dependencies = append(resolution.Dependencies, dep)
 				}
+			}
+			addSemanticRef := func(key string) {
+				if key == "" || seenSemanticRefs[key] {
+					return
+				}
+				seenSemanticRefs[key] = true
+				resolution.SemanticReferenceKeys = append(resolution.SemanticReferenceKeys, key)
+			}
+			addSemanticRefForRef := func(ref metadata.Reference) {
+				if h.scopeRegistry != nil {
+					if semanticReader, ok := any(h.scopeRegistry).(ngscope.SemanticScopeReader); ok {
+						if sym := semanticReader.GetSemanticSymbol(ref.Node); sym != nil {
+							key := semanticKeyForSymbol(sym)
+							if key != "" {
+								addSemanticRef(key)
+								resolution.SemanticReferenceSymbols = append(resolution.SemanticReferenceSymbols, *sym)
+								return
+							}
+						}
+					}
+				}
+				addSemanticRef(semanticKeyForRef(ref))
 			}
 
 			// Add imported NgModules verbatim. Standalone directives and pipes are added only
@@ -621,6 +685,9 @@ func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysis
 				}
 				dep.Type = output.NewReadVarExpr(imp.Name, nil, nil, nil)
 				addDep(dep)
+				if h.metaRegistry != nil && imp.Decl.Node != nil {
+					addSemanticRefForRef(metadata.Reference{Name: imp.Name, Node: imp.Decl.Node, OwningModule: imp.Decl.ViaModule})
+				}
 			}
 
 			matcher := render3.NewSelectorMatcher[[]directiveMetaAdapter]()
@@ -658,6 +725,7 @@ func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysis
 					for _, matchedDir := range matchedDirectives {
 						if directImportMatchesDirective(imp, matchedDir.meta) {
 							importedDirectiveNodes[matchedDir.meta.Ref.Node] = true
+							addSemanticRefForRef(matchedDir.meta.Ref)
 							addDep(render3.R3TemplateDependency{
 								Kind: render3.R3TemplateDependencyKind_Directive,
 								Type: output.NewReadVarExpr(imp.Name, nil, nil, nil),
@@ -672,6 +740,7 @@ func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysis
 						if matchedDir.meta == dirMeta || (matchedDir.meta.Selector != "" && matchedDir.meta.Selector == dirMeta.Selector) || directImportMatchesDirective(imp, matchedDir.meta) {
 							importedDirectiveNodes[imp.Decl.Node] = true
 							importedDirectiveNodes[matchedDir.meta.Ref.Node] = true
+							addSemanticRefForRef(matchedDir.meta.Ref)
 							addDep(render3.R3TemplateDependency{
 								Kind: render3.R3TemplateDependencyKind_Directive,
 								Type: output.NewReadVarExpr(imp.Name, nil, nil, nil),
@@ -683,6 +752,7 @@ func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysis
 					for _, matchedDir := range matchedDirectives {
 						if directImportMatchesDirective(imp, matchedDir.meta) {
 							importedDirectiveNodes[matchedDir.meta.Ref.Node] = true
+							addSemanticRefForRef(matchedDir.meta.Ref)
 							addDep(render3.R3TemplateDependency{
 								Kind: render3.R3TemplateDependencyKind_Directive,
 								Type: output.NewReadVarExpr(imp.Name, nil, nil, nil),
@@ -693,6 +763,7 @@ func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysis
 				}
 				if pipeMeta := h.metaRegistry.GetPipeMetadata(imp.Decl.Node); pipeMeta != nil && usedPipes[pipeMeta.Name] {
 					importedPipeNodes[imp.Decl.Node] = true
+					addSemanticRefForRef(pipeMeta.Ref)
 					addDep(render3.R3TemplateDependency{
 						Kind: render3.R3TemplateDependencyKind_Pipe,
 						Type: output.NewReadVarExpr(imp.Name, nil, nil, nil),
@@ -707,6 +778,7 @@ func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysis
 				if importedDirectiveNodes[dir.Ref.Node] {
 					continue
 				}
+				addSemanticRefForRef(dir.Ref)
 				dep := render3.R3TemplateDependency{
 					Kind: render3.R3TemplateDependencyKind_Directive,
 				}
@@ -734,6 +806,7 @@ func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysis
 				if pipe.Ref.Name == "" {
 					continue
 				}
+				addSemanticRefForRef(pipe.Ref)
 				dep := render3.R3TemplateDependency{
 					Kind: render3.R3TemplateDependencyKind_Pipe,
 				}
@@ -785,13 +858,13 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 
 	for _, styleUrl := range analysis.StyleUrls {
 		stylePath := filepath.Join(baseDir, styleUrl)
-		if content, err := ioutil.ReadFile(stylePath); err == nil {
-			analysis.Styles = append(analysis.Styles, string(content))
+		if content, err := readAndCompileStyle(stylePath); err == nil {
+			analysis.Styles = append(analysis.Styles, content)
 		} else {
 			diagnostics = append(diagnostics, *ngdiagnostics.MakeDiagnostic(
 				ngdiagnostics.ErrorCode_COMPONENT_RESOURCE_NOT_FOUND,
 				node.AsNode(),
-				fmt.Sprintf("Failed to load styleUrl %q.", stylePath),
+				fmt.Sprintf("Failed to load styleUrl %q: %s.", stylePath, err.Error()),
 				nil,
 				tsdiagnostics.CategoryError,
 			))
@@ -1299,4 +1372,142 @@ func extractTokenFromNode(node *ast.Node) output.Expression {
 	}
 	// Fallback for complex expressions
 	return output.NewLiteralExpr("UNKNOWN_TOKEN", nil, nil, nil)
+}
+
+type styleCacheEntry struct {
+	css   string
+	mtime time.Time
+	size  int64
+}
+
+var (
+	styleCache   = make(map[string]styleCacheEntry)
+	styleCacheMu sync.RWMutex
+)
+
+func readAndCompileStyle(stylePath string) (string, error) {
+	ext := filepath.Ext(stylePath)
+	isSass := ext == ".scss" || ext == ".sass"
+	isLess := ext == ".less"
+
+	stat, statErr := os.Stat(stylePath)
+	if statErr != nil {
+		return "", statErr
+	}
+	mtime := stat.ModTime()
+	size := stat.Size()
+
+	if isSass || isLess {
+		styleCacheMu.RLock()
+		entry, exists := styleCache[stylePath]
+		styleCacheMu.RUnlock()
+		if exists && entry.mtime.Equal(mtime) && entry.size == size {
+			return entry.css, nil
+		}
+	}
+
+	var content []byte
+	var err error
+
+	if isSass {
+		cmd := exec.Command("sass", stylePath)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		if err = cmd.Run(); err == nil {
+			content = stdout.Bytes()
+		} else {
+			cmdNpx := exec.Command("npx", "sass", stylePath)
+			stdout.Reset()
+			stderr.Reset()
+			cmdNpx.Stdout = &stdout
+			cmdNpx.Stderr = &stderr
+			if err = cmdNpx.Run(); err == nil {
+				content = stdout.Bytes()
+			} else {
+				content, err = ioutil.ReadFile(stylePath)
+			}
+		}
+	} else if isLess {
+		cmd := exec.Command("lessc", stylePath)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		if err = cmd.Run(); err == nil {
+			content = stdout.Bytes()
+		} else {
+			content, err = ioutil.ReadFile(stylePath)
+		}
+	} else {
+		content, err = ioutil.ReadFile(stylePath)
+	}
+
+	if err != nil {
+		return "", err
+	}
+
+	css := string(content)
+
+	if isSass || isLess {
+		styleCacheMu.Lock()
+		styleCache[stylePath] = styleCacheEntry{
+			css:   css,
+			mtime: mtime,
+			size:  size,
+		}
+		styleCacheMu.Unlock()
+	}
+
+	return css, nil
+}
+
+func (h *ComponentDecoratorHandler) GetSemanticSymbol(node *ast.ClassDeclaration, analysis any) *semantic_graph.SemanticSymbol {
+	a, ok := analysis.(*ComponentAnalysis)
+	if !ok || a == nil {
+		return nil
+	}
+
+	inputs := make(map[string]string)
+	for prop, meta := range a.Inputs {
+		inputs[prop] = meta.BindingPropertyName
+	}
+
+	var imps []string
+	for _, imp := range a.Imports {
+		imps = append(imps, imp.Name)
+	}
+
+	var tps []string
+	for _, tp := range semantic_graph.ExtractSemanticTypeParameters(node.AsNode()) {
+		tps = append(tps, tp.GetName())
+	}
+
+	return &semantic_graph.SemanticSymbol{
+		Path:           ast.GetSourceFileOfNode(node.AsNode()).FileName(),
+		Identifier:     node.Name().AsIdentifier().Text,
+		Kind:           "component",
+		Selector:       a.Selector,
+		Inputs:         inputs,
+		Outputs:        a.Outputs,
+		ExportAs:       a.ExportAs,
+		Standalone:     a.IsStandalone,
+		Imports:        imps,
+		TypeParameters: tps,
+	}
+}
+
+func (h *ComponentDecoratorHandler) GetSemanticReferenceKeys(node *ast.ClassDeclaration, analysis any, resolution any) []string {
+	r, ok := resolution.(*ComponentResolution)
+	if !ok || r == nil {
+		return nil
+	}
+	return r.SemanticReferenceKeys
+}
+
+func (h *ComponentDecoratorHandler) GetSemanticReferenceSymbols(node *ast.ClassDeclaration, analysis any, resolution any) []semantic_graph.SemanticSymbol {
+	r, ok := resolution.(*ComponentResolution)
+	if !ok || r == nil {
+		return nil
+	}
+	return r.SemanticReferenceSymbols
 }

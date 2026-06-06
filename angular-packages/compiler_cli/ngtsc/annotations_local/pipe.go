@@ -4,6 +4,7 @@ import (
 	"github.com/microsoft/typescript-go/angular-packages/compiler"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/imports"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/annotations"
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/incremental/semantic_graph"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/metadata"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/transform"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/reflection"
@@ -143,3 +144,9 @@ func (h *PipeLocalDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 	globalHandler := annotations.NewPipeDecoratorHandler(h.host, h.metaRegistry)
 	return globalHandler.CompileFull(node, analysisData, resolutionData, pool, importMgr, factory)
 }
+
+func (h *PipeLocalDecoratorHandler) GetSemanticSymbol(node *ast.ClassDeclaration, analysis any) *semantic_graph.SemanticSymbol {
+	globalHandler := annotations.NewPipeDecoratorHandler(h.host, h.metaRegistry)
+	return globalHandler.GetSemanticSymbol(node, analysis)
+}
+

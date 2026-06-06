@@ -10,6 +10,8 @@ import (
 
 	"github.com/microsoft/typescript-go/angular-packages/compiler"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/imports"
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/incremental"
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/incremental/semantic_graph"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/reflection"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/translator"
 	"github.com/microsoft/typescript-go/internal/ast"
@@ -23,6 +25,9 @@ type TraitCompiler struct {
 	host      reflection.ReflectionHost
 	localHost reflection.ReflectionHost // AST-only host
 	oldTc     *TraitCompiler            // Reference to previous compilation
+
+	SemanticUpdater *semantic_graph.SemanticDepGraphUpdater
+	DepTracker      incremental.DependencyTracker
 
 	// classes lưu trữ danh sách các Traits cho mỗi class declaration.
 	mu      sync.RWMutex
@@ -60,14 +65,143 @@ func NewTraitCompiler(handlers []DecoratorHandler, host reflection.ReflectionHos
 		tc.originalStatements = oldTc.originalStatements
 		tc.originalClassMembers = oldTc.originalClassMembers
 		tc.originalClassModifiers = oldTc.originalClassModifiers
+		oldTc.mu.RLock()
+		for k, v := range oldTc.HmrUpdates {
+			tc.HmrUpdates[k] = v
+		}
+		oldTc.mu.RUnlock()
 	}
 	return tc
+}
+
+func (tc *TraitCompiler) recordFileImports(sf *ast.SourceFile) {
+	if tc.DepTracker == nil || sf == nil || sf.Statements == nil {
+		return
+	}
+	for _, stmt := range sf.Statements.Nodes {
+		if stmt.Kind == ast.KindImportDeclaration {
+			importDecl := stmt.AsImportDeclaration()
+			if importDecl.ModuleSpecifier != nil && importDecl.ModuleSpecifier.Kind == ast.KindStringLiteral {
+				moduleSpec := importDecl.ModuleSpecifier.AsStringLiteral().Text
+				if strings.HasPrefix(moduleSpec, ".") {
+					dir := filepath.Dir(sf.FileName())
+					resolved := filepath.Clean(filepath.Join(dir, moduleSpec))
+					tc.DepTracker.AddDependency(sf.FileName(), resolved+".ts")
+					tc.DepTracker.AddDependency(sf.FileName(), filepath.Join(resolved, "index.ts"))
+				}
+			}
+		}
+	}
 }
 
 // AnalyzeSync quét qua một source file, phát hiện các class và chạy hàm Analyze của các Handler.
 func (tc *TraitCompiler) AnalyzeSync(sf *ast.SourceFile) {
 	if sf == nil || sf.Statements == nil {
 		return
+	}
+	tc.recordFileImports(sf)
+
+	tc.mu.Lock()
+	if tc.oldTc != nil && tc.oldTc.files[sf] {
+		reused := false
+		sf.AsNode().ForEachChild(func(node *ast.Node) bool {
+			if node.Kind == ast.KindClassDeclaration {
+				classDecl := node.AsClassDeclaration()
+				if oldTraits, ok := tc.oldTc.classes[classDecl]; ok {
+					var newTraits []*Trait
+					for _, oldTrait := range oldTraits {
+						newTraits = append(newTraits, &Trait{
+							Handler:     oldTrait.Handler,
+							Decorator:   oldTrait.Decorator,
+							State:       TraitStateAnalyzed, // Re-run Resolve
+							Analysis:    oldTrait.Analysis,  // Reuse analysis!
+							Diagnostics: oldTrait.Diagnostics,
+						})
+					}
+					tc.classes[classDecl] = newTraits
+					reused = true
+				}
+			}
+			return false
+		})
+		if reused {
+			tc.files[sf] = true
+			tc.mu.Unlock()
+			return
+		}
+	}
+	tc.mu.Unlock()
+
+	// Prior analysis reuse using Name-based identity checks
+	if tc.DepTracker != nil {
+		if builder, ok := tc.DepTracker.(incremental.IncrementalBuild); ok {
+			priorTraitsAny := builder.PriorAnalysisFor(sf)
+			if priorTraitsAny != nil {
+				reused := false
+				sf.AsNode().ForEachChild(func(node *ast.Node) bool {
+					if node.Kind == ast.KindClassDeclaration {
+						classDecl := node.AsClassDeclaration()
+						className := ""
+						if classDecl.Name() != nil {
+							className = classDecl.Name().AsIdentifier().Text
+						}
+						for _, item := range priorTraitsAny {
+							m, ok := item.(map[string]any)
+							if !ok {
+								continue
+							}
+							if m["className"] == className {
+								priorTraits, _ := m["traits"].([]incremental.AnalyzedTrait)
+								var newTraits []*Trait
+								for _, pt := range priorTraits {
+									var handler DecoratorHandler
+									for _, h := range tc.handlers {
+										if h.Name() == pt.HandlerName {
+											handler = h
+											break
+										}
+									}
+									if handler == nil {
+										continue
+									}
+									dec, _ := pt.Decorator.(*reflection.Decorator)
+									newTraits = append(newTraits, &Trait{
+										Handler:     handler,
+										Decorator:   dec,
+										State:       TraitState(pt.State),
+										Analysis:    pt.Analysis,
+										Diagnostics: pt.Diagnostics,
+									})
+								}
+								tc.mu.Lock()
+								tc.classes[classDecl] = newTraits
+								tc.mu.Unlock()
+								reused = true
+							}
+						}
+					}
+					return false
+				})
+				if reused {
+					tc.mu.Lock()
+					tc.files[sf] = true
+					tc.mu.Unlock()
+					sf.AsNode().ForEachChild(func(node *ast.Node) bool {
+						if node.Kind == ast.KindClassDeclaration {
+							classDecl := node.AsClassDeclaration()
+							tc.mu.RLock()
+							traits := tc.classes[classDecl]
+							tc.mu.RUnlock()
+							if len(traits) > 0 {
+								tc.registerSemanticSymbols(classDecl, traits)
+							}
+						}
+						return false
+					})
+					return
+				}
+			}
+		}
 	}
 
 	var hasTraits bool
@@ -91,6 +225,110 @@ func (tc *TraitCompiler) AnalyzeSync(sf *ast.SourceFile) {
 func (tc *TraitCompiler) AnalyzeSyncLocal(sf *ast.SourceFile) {
 	if sf == nil || sf.Statements == nil {
 		return
+	}
+	tc.recordFileImports(sf)
+
+	tc.mu.Lock()
+	if tc.oldTc != nil && tc.oldTc.files[sf] {
+		reused := false
+		sf.AsNode().ForEachChild(func(node *ast.Node) bool {
+			if node.Kind == ast.KindClassDeclaration {
+				classDecl := node.AsClassDeclaration()
+				if oldTraits, ok := tc.oldTc.classes[classDecl]; ok {
+					var newTraits []*Trait
+					for _, oldTrait := range oldTraits {
+						newTraits = append(newTraits, &Trait{
+							Handler:     oldTrait.Handler,
+							Decorator:   oldTrait.Decorator,
+							State:       TraitStateAnalyzed, // Re-run Resolve
+							Analysis:    oldTrait.Analysis,  // Reuse analysis!
+							Diagnostics: oldTrait.Diagnostics,
+						})
+					}
+					tc.classes[classDecl] = newTraits
+					reused = true
+				}
+			}
+			return false
+		})
+		if reused {
+			tc.files[sf] = true
+			tc.mu.Unlock()
+			return
+		}
+	}
+	tc.mu.Unlock()
+
+	// Prior analysis reuse using Name-based identity checks
+	if tc.DepTracker != nil {
+		if builder, ok := tc.DepTracker.(incremental.IncrementalBuild); ok {
+			priorTraitsAny := builder.PriorAnalysisFor(sf)
+			if priorTraitsAny != nil {
+				reused := false
+				sf.AsNode().ForEachChild(func(node *ast.Node) bool {
+					if node.Kind == ast.KindClassDeclaration {
+						classDecl := node.AsClassDeclaration()
+						className := ""
+						if classDecl.Name() != nil {
+							className = classDecl.Name().AsIdentifier().Text
+						}
+						for _, item := range priorTraitsAny {
+							m, ok := item.(map[string]any)
+							if !ok {
+								continue
+							}
+							if m["className"] == className {
+								priorTraits, _ := m["traits"].([]incremental.AnalyzedTrait)
+								var newTraits []*Trait
+								for _, pt := range priorTraits {
+									var handler DecoratorHandler
+									for _, h := range tc.handlers {
+										if h.Name() == pt.HandlerName {
+											handler = h
+											break
+										}
+									}
+									if handler == nil {
+										continue
+									}
+									dec, _ := pt.Decorator.(*reflection.Decorator)
+									newTraits = append(newTraits, &Trait{
+										Handler:     handler,
+										Decorator:   dec,
+										State:       TraitState(pt.State),
+										Analysis:    pt.Analysis,
+										Diagnostics: pt.Diagnostics,
+									})
+								}
+								tc.mu.Lock()
+								tc.classes[classDecl] = newTraits
+								tc.mu.Unlock()
+								reused = true
+							}
+						}
+					}
+					return false
+				})
+				if reused {
+					tc.mu.Lock()
+					tc.files[sf] = true
+					tc.mu.Unlock()
+					sf.AsNode().ForEachChild(func(node *ast.Node) bool {
+						if node.Kind == ast.KindClassDeclaration {
+							classDecl := node.AsClassDeclaration()
+							tc.mu.RLock()
+							traits := tc.classes[classDecl]
+							tc.mu.RUnlock()
+							if len(traits) > 0 {
+								tc.registerSemanticSymbols(classDecl, traits)
+							}
+						}
+						return false
+					})
+					return
+				}
+			}
+		}
 	}
 
 	var hasTraits bool
@@ -140,10 +378,26 @@ func (tc *TraitCompiler) analyzeClassLocal(classDecl *ast.ClassDeclaration) bool
 
 	// 2. Analyze
 	for _, trait := range traits {
-		analysis, _ := trait.Handler.Analyze(classDecl, trait.Decorator)
+		analysis, diags := trait.Handler.Analyze(classDecl, trait.Decorator)
 		trait.Analysis = analysis
-		trait.State = TraitStateAnalyzed
+		if len(diags) > 0 || analysis == nil {
+			trait.State = TraitStateErrored
+			trait.Diagnostics = append(trait.Diagnostics, diags...)
+		} else {
+			trait.State = TraitStateAnalyzed
+		}
+		if trait.State == TraitStateAnalyzed && trait.Analysis != nil {
+			if resProvider, ok := trait.Analysis.(ResourceDependencyProvider); ok {
+				deps := resProvider.ResourceDependencies(ast.GetSourceFileOfNode(classDecl.AsNode()))
+				if tc.DepTracker != nil {
+					for _, dep := range deps {
+						tc.DepTracker.AddResourceDependency(ast.GetSourceFileOfNode(classDecl.AsNode()), dep)
+					}
+				}
+			}
+		}
 	}
+	tc.registerSemanticSymbols(classDecl, traits)
 	return true
 }
 
@@ -180,11 +434,60 @@ func (tc *TraitCompiler) analyzeClass(classDecl *ast.ClassDeclaration) bool {
 
 	// 2. Analyze (outside lock — handler.Analyze is read-only)
 	for _, trait := range traits {
-		analysis, _ := trait.Handler.Analyze(classDecl, trait.Decorator)
+		analysis, diags := trait.Handler.Analyze(classDecl, trait.Decorator)
 		trait.Analysis = analysis
-		trait.State = TraitStateAnalyzed
+		if len(diags) > 0 || analysis == nil {
+			trait.State = TraitStateErrored
+			trait.Diagnostics = append(trait.Diagnostics, diags...)
+		} else {
+			trait.State = TraitStateAnalyzed
+		}
+		if trait.State == TraitStateAnalyzed && trait.Analysis != nil {
+			if resProvider, ok := trait.Analysis.(ResourceDependencyProvider); ok {
+				deps := resProvider.ResourceDependencies(ast.GetSourceFileOfNode(classDecl.AsNode()))
+				if tc.DepTracker != nil {
+					for _, dep := range deps {
+						tc.DepTracker.AddResourceDependency(ast.GetSourceFileOfNode(classDecl.AsNode()), dep)
+					}
+				}
+			}
+		}
 	}
+	tc.registerSemanticSymbols(classDecl, traits)
 	return true
+}
+
+func (tc *TraitCompiler) registerSemanticSymbols(classDecl *ast.ClassDeclaration, traits []*Trait) {
+	if tc.SemanticUpdater == nil {
+		return
+	}
+	for _, trait := range traits {
+		if trait.State == TraitStateAnalyzed && trait.Analysis != nil {
+			if provider, ok := trait.Handler.(SemanticSymbolProvider); ok {
+				if sym := provider.GetSemanticSymbol(classDecl, trait.Analysis); sym != nil {
+					tc.SemanticUpdater.RegisterSymbolForDecl(classDecl.AsNode(), *sym)
+				}
+			}
+		}
+	}
+}
+
+func (tc *TraitCompiler) registerSemanticReferences(classDecl *ast.ClassDeclaration, trait *Trait) {
+	if tc.SemanticUpdater == nil || classDecl == nil || trait == nil || trait.Analysis == nil || trait.Resolution == nil {
+		return
+	}
+	provider, ok := trait.Handler.(SemanticReferenceProvider)
+	if !ok {
+		return
+	}
+	if symbolProvider, ok := trait.Handler.(SemanticReferenceSymbolProvider); ok {
+		for _, symbol := range symbolProvider.GetSemanticReferenceSymbols(classDecl, trait.Analysis, trait.Resolution) {
+			tc.SemanticUpdater.RegisterSymbol(symbol)
+		}
+	}
+	for _, targetKey := range provider.GetSemanticReferenceKeys(classDecl, trait.Analysis, trait.Resolution) {
+		tc.SemanticUpdater.RegisterReference(classDecl.AsNode(), targetKey)
+	}
 }
 
 // Resolve chạy bước giải quyết tham chiếu cho tất cả các traits đã được Analyze (song song).
@@ -198,6 +501,7 @@ func (tc *TraitCompiler) Resolve() {
 				go func(c *ast.ClassDeclaration, t *Trait) {
 					defer wg.Done()
 					t.GetResolution(c)
+					tc.registerSemanticReferences(c, t)
 				}(classDecl, trait)
 			}
 		}
@@ -252,6 +556,9 @@ func (tc *TraitCompiler) UpdateSourceFile(sf *ast.SourceFile, factory *ast.NodeF
 			for _, trait := range traits {
 				if trait.State == TraitStateResolved || trait.State == TraitStateAnalyzed {
 					resolution := trait.GetResolution(classDecl)
+					if trait.State != TraitStateResolved {
+						continue
+					}
 					results, _ := trait.Handler.CompileFull(classDecl, trait.Analysis, resolution, pool, importMgr, factory)
 					for _, result := range results {
 						if result.Initializer != nil {
@@ -572,4 +879,86 @@ func (tc *TraitCompiler) GetHmrComponentIds() []string {
 	}
 	sort.Strings(ids)
 	return ids
+}
+
+func (tc *TraitCompiler) CollectAnalysis() map[string]incremental.FileAnalysisState {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+
+	res := make(map[string]incremental.FileAnalysisState)
+	fileClasses := make(map[string]map[string][]incremental.AnalyzedTrait)
+
+	for classDecl, traits := range tc.classes {
+		sf := ast.GetSourceFileOfNode(classDecl.AsNode())
+		if classDecl == nil || sf == nil {
+			continue
+		}
+		fileName := sf.FileName()
+
+		className := ""
+		if classDecl.Name() != nil {
+			className = classDecl.Name().AsIdentifier().Text
+		}
+
+		var analyzed []incremental.AnalyzedTrait
+		for _, trait := range traits {
+			analyzed = append(analyzed, incremental.AnalyzedTrait{
+				HandlerName: trait.Handler.Name(),
+				Decorator:   trait.Decorator,
+				Analysis:    trait.Analysis,
+				Diagnostics: trait.Diagnostics,
+				State:       int(trait.State),
+			})
+		}
+
+		if fileClasses[fileName] == nil {
+			fileClasses[fileName] = make(map[string][]incremental.AnalyzedTrait)
+		}
+		fileClasses[fileName][className] = analyzed
+	}
+
+	for fileName, classesMap := range fileClasses {
+		res[fileName] = incremental.FileAnalysisState{
+			FilePath: fileName,
+			Classes:  classesMap,
+		}
+	}
+
+	return res
+}
+
+func (tc *TraitCompiler) GetSemanticGraph() any {
+	if tc.SemanticUpdater != nil {
+		return tc.SemanticUpdater.GetGraph()
+	}
+	return nil
+}
+
+func (tc *TraitCompiler) GetDepGraph() *incremental.FileDependencyGraph {
+	if tc.DepTracker != nil {
+		if comp, ok := tc.DepTracker.(*incremental.IncrementalCompilation); ok && comp.State != nil {
+			return comp.State.DepGraph
+		}
+	}
+	return incremental.NewFileDependencyGraph()
+}
+
+func (tc *TraitCompiler) GetDiagnostics() map[string][]ast.Diagnostic {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+
+	fileDiags := make(map[string][]ast.Diagnostic)
+	for classDecl, traits := range tc.classes {
+		sf := ast.GetSourceFileOfNode(classDecl.AsNode())
+		if classDecl == nil || sf == nil {
+			continue
+		}
+		fileName := sf.FileName()
+		for _, trait := range traits {
+			if len(trait.Diagnostics) > 0 {
+				fileDiags[fileName] = append(fileDiags[fileName], trait.Diagnostics...)
+			}
+		}
+	}
+	return fileDiags
 }

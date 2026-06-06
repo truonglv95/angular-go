@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/incremental/semantic_graph"
 	"github.com/microsoft/typescript-go/internal/ast"
 )
 
@@ -16,8 +17,8 @@ const (
 
 // Reference represents a reference to a declaration node.
 type Reference struct {
-	Name string
-	Node *ast.Node
+	Name         string
+	Node         *ast.Node
 	OwningModule string
 }
 
@@ -66,4 +67,8 @@ type MetadataRegistry interface {
 	RegisterDirective(node *ast.Node, meta *DirectiveMeta)
 	RegisterNgModule(node *ast.Node, meta *NgModuleMeta)
 	RegisterPipe(node *ast.Node, meta *PipeMeta)
+}
+
+type SemanticMetadataReader interface {
+	GetSemanticSymbol(node *ast.Node) *semantic_graph.SemanticSymbol
 }

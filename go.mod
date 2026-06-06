@@ -8,6 +8,7 @@ require (
 	github.com/google/go-cmp v0.7.0
 	github.com/mackerelio/go-osstat v0.2.7
 	github.com/peter-evans/patience v0.3.0
+	github.com/stretchr/testify v1.11.1
 	github.com/zeebo/xxh3 v1.1.0
 	golang.org/x/sync v0.20.0
 	golang.org/x/sys v0.45.0
@@ -17,10 +18,13 @@ require (
 )
 
 require (
+	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
 	github.com/matryer/moq v0.7.1 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
 	golang.org/x/mod v0.36.0 // indirect
 	golang.org/x/tools v0.45.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 tool (

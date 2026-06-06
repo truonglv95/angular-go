@@ -2,60 +2,71 @@ package incremental
 
 type IncrementalBuildStrategy interface {
 	GetIncrementalState(program any) IncrementalState
-	SetIncrementalState(driver IncrementalState, program any) any
+	SetIncrementalState(state IncrementalState, program any) any
 	ToNextBuildStrategy() IncrementalBuildStrategy
 }
 
-type NoopIncrementalBuildStrategy struct {
+type NoopIncrementalBuildStrategy struct{}
+
+func (recv *NoopIncrementalBuildStrategy) GetIncrementalState(program any) IncrementalState {
+	return IncrementalState{
+		Versions:     make(map[string]string),
+		EmittedFiles: make(map[string]bool),
+	}
 }
 
-func (recv *NoopIncrementalBuildStrategy) GetIncrementalState() any {
-	// TODO: stub
-	panic("unimplemented")
-}
-
-func (recv *NoopIncrementalBuildStrategy) SetIncrementalState() any {
-	// TODO: stub
-	panic("unimplemented")
+func (recv *NoopIncrementalBuildStrategy) SetIncrementalState(state IncrementalState, program any) any {
+	return nil
 }
 
 func (recv *NoopIncrementalBuildStrategy) ToNextBuildStrategy() IncrementalBuildStrategy {
-	// TODO: stub
-	panic("unimplemented")
+	return recv
 }
 
 type TrackedIncrementalBuildStrategy struct {
+	state IncrementalState
 }
 
-func (recv *TrackedIncrementalBuildStrategy) GetIncrementalState() IncrementalState {
-	// TODO: stub
-	panic("unimplemented")
+func NewTrackedIncrementalBuildStrategy() *TrackedIncrementalBuildStrategy {
+	return &TrackedIncrementalBuildStrategy{
+		state: IncrementalState{
+			Versions:     make(map[string]string),
+			EmittedFiles: make(map[string]bool),
+		},
+	}
 }
 
-func (recv *TrackedIncrementalBuildStrategy) SetIncrementalState(state IncrementalState) any {
-	// TODO: stub
-	panic("unimplemented")
+func (recv *TrackedIncrementalBuildStrategy) GetIncrementalState(program any) IncrementalState {
+	return recv.state
 }
 
-func (recv *TrackedIncrementalBuildStrategy) ToNextBuildStrategy() TrackedIncrementalBuildStrategy {
-	// TODO: stub
-	panic("unimplemented")
+func (recv *TrackedIncrementalBuildStrategy) SetIncrementalState(state IncrementalState, program any) any {
+	recv.state = state
+	return nil
+}
+
+func (recv *TrackedIncrementalBuildStrategy) ToNextBuildStrategy() IncrementalBuildStrategy {
+	return recv
 }
 
 type PatchedProgramIncrementalBuildStrategy struct {
+	fallback *TrackedIncrementalBuildStrategy
+}
+
+func NewPatchedProgramIncrementalBuildStrategy() *PatchedProgramIncrementalBuildStrategy {
+	return &PatchedProgramIncrementalBuildStrategy{
+		fallback: NewTrackedIncrementalBuildStrategy(),
+	}
 }
 
 func (recv *PatchedProgramIncrementalBuildStrategy) GetIncrementalState(program any) IncrementalState {
-	// TODO: stub
-	panic("unimplemented")
+	return recv.fallback.GetIncrementalState(program)
 }
 
 func (recv *PatchedProgramIncrementalBuildStrategy) SetIncrementalState(state IncrementalState, program any) any {
-	// TODO: stub
-	panic("unimplemented")
+	return recv.fallback.SetIncrementalState(state, program)
 }
 
 func (recv *PatchedProgramIncrementalBuildStrategy) ToNextBuildStrategy() IncrementalBuildStrategy {
-	// TODO: stub
-	panic("unimplemented")
+	return recv
 }

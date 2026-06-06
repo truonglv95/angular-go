@@ -181,6 +181,7 @@ func TestRender3IRGolden(t *testing.T) {
 			if len(config.Errors) > 0 {
 				t.Fatalf("config diagnostics:\n%s", diagnosticsText(config.Errors))
 			}
+			config.Write = true
 
 			result := compiler_cli.PerformCompilation(config)
 			if result.Status != tsc.ExitStatusSuccess {

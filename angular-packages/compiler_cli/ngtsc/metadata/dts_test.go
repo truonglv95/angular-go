@@ -13,10 +13,10 @@ import (
 func TestDtsMetadataReader_ComponentAndDirective(t *testing.T) {
 	dtsSource := `
 export declare class MyComp {
-  static ɵcmp: i0.ɵɵComponentDeclaration<MyComp, "my-comp-selector", never, {}, {}, never, never, true>;
+  static ɵcmp: i0.ɵɵComponentDeclaration<MyComp, "my-comp-selector", ["cmp"], {foo: "fooAlias"}, {closed: "closedAlias"}, never, never, true>;
 }
 export declare class MyDir {
-  static ɵdir: i0.ɵɵDirectiveDeclaration<MyDir, "my-dir-selector", never, {}, {}, never, never, false>;
+  static ɵdir: i0.ɵɵDirectiveDeclaration<MyDir, "my-dir-selector", ["dir"], {bar: {alias: "barAlias", required: true}}, {saved: "savedAlias"}, never, never, false>;
 }
 `
 	opts := ast.SourceFileParseOptions{
@@ -52,6 +52,9 @@ export declare class MyDir {
 	assert.True(t, compMeta.IsComponent)
 	assert.True(t, compMeta.Standalone)
 	assert.Equal(t, metadata.MetaKindComponent, compMeta.Kind)
+	assert.Equal(t, []string{"cmp"}, compMeta.ExportAs)
+	assert.Equal(t, map[string]string{"foo": "fooAlias"}, compMeta.Inputs)
+	assert.Equal(t, map[string]string{"closed": "closedAlias"}, compMeta.Outputs)
 
 	// 2. Verify Directive Metadata
 	dirMeta := reader.GetDirectiveMetadata(dirNode)
@@ -60,6 +63,16 @@ export declare class MyDir {
 	assert.False(t, dirMeta.IsComponent)
 	assert.False(t, dirMeta.Standalone)
 	assert.Equal(t, metadata.MetaKindDirective, dirMeta.Kind)
+	assert.Equal(t, []string{"dir"}, dirMeta.ExportAs)
+	assert.Equal(t, map[string]string{"bar": "barAlias"}, dirMeta.Inputs)
+	assert.Equal(t, map[string]string{"saved": "savedAlias"}, dirMeta.Outputs)
+
+	compSymbol := reader.GetSemanticSymbol(compNode)
+	assert.NotNil(t, compSymbol)
+	assert.Equal(t, "/lib.d.ts", compSymbol.Path)
+	assert.Equal(t, "MyComp", compSymbol.Identifier)
+	assert.Equal(t, "component", compSymbol.Kind)
+	assert.Equal(t, compMeta.Inputs, compSymbol.Inputs)
 }
 
 func TestDtsMetadataReader_Pipe(t *testing.T) {
@@ -132,6 +145,51 @@ export declare class MyModule {
 	declExprName := moduleMeta.Declarations[0].Node
 	assert.Equal(t, ast.KindIdentifier, declExprName.Kind)
 	assert.Equal(t, "MyComp", declExprName.AsIdentifier().Text)
+}
+
+func TestDtsMetadataReader_NgModuleImportAliases(t *testing.T) {
+	dtsSource := `
+import DefaultModule from './default';
+import { RealDir as AliasDir, RealPipe } from './shared';
+import * as shared from './namespace';
+
+export declare class MyModule {
+  static ɵmod: i0.ɵɵNgModuleDeclaration<MyModule, [typeof AliasDir], [typeof DefaultModule, typeof shared.NamespaceModule], [typeof RealPipe, typeof shared.NamespaceDir]>;
+}
+`
+	sourceFile := parser.ParseSourceFile(ast.SourceFileParseOptions{FileName: "/alias-module.d.ts"}, dtsSource, core.ScriptKindTS)
+	if sourceFile == nil {
+		t.Fatal("Failed to parse .d.ts source file")
+	}
+
+	var moduleNode *ast.Node
+	for _, stmt := range sourceFile.Statements.Nodes {
+		if stmt.Kind == ast.KindClassDeclaration {
+			moduleNode = stmt
+			break
+		}
+	}
+	assert.NotNil(t, moduleNode)
+
+	reader := metadata.NewDtsMetadataReader(nil)
+	moduleMeta := reader.GetNgModuleMetadata(moduleNode)
+	assert.NotNil(t, moduleMeta)
+
+	assert.Len(t, moduleMeta.Declarations, 1)
+	assert.Equal(t, "RealDir", moduleMeta.Declarations[0].Name)
+	assert.Equal(t, "./shared", moduleMeta.Declarations[0].OwningModule)
+
+	assert.Len(t, moduleMeta.Imports, 2)
+	assert.Equal(t, "default", moduleMeta.Imports[0].Name)
+	assert.Equal(t, "./default", moduleMeta.Imports[0].OwningModule)
+	assert.Equal(t, "NamespaceModule", moduleMeta.Imports[1].Name)
+	assert.Equal(t, "./namespace", moduleMeta.Imports[1].OwningModule)
+
+	assert.Len(t, moduleMeta.Exports, 2)
+	assert.Equal(t, "RealPipe", moduleMeta.Exports[0].Name)
+	assert.Equal(t, "./shared", moduleMeta.Exports[0].OwningModule)
+	assert.Equal(t, "NamespaceDir", moduleMeta.Exports[1].Name)
+	assert.Equal(t, "./namespace", moduleMeta.Exports[1].OwningModule)
 }
 
 func TestCompoundMetadataReader(t *testing.T) {

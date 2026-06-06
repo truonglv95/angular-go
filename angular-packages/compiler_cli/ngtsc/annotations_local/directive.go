@@ -5,6 +5,7 @@ import (
 	"github.com/microsoft/typescript-go/angular-packages/compiler/render3"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/imports"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/annotations"
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/incremental/semantic_graph"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/metadata"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/transform"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/reflection"
@@ -269,3 +270,9 @@ func (h *DirectiveLocalDecoratorHandler) CompileFull(node *ast.ClassDeclaration,
 	globalHandler := annotations.NewDirectiveDecoratorHandler(h.host, h.metaRegistry)
 	return globalHandler.CompileFull(node, analysisData, resolutionData, pool, importMgr, factory)
 }
+
+func (h *DirectiveLocalDecoratorHandler) GetSemanticSymbol(node *ast.ClassDeclaration, analysis any) *semantic_graph.SemanticSymbol {
+	globalHandler := annotations.NewDirectiveDecoratorHandler(h.host, h.metaRegistry)
+	return globalHandler.GetSemanticSymbol(node, analysis)
+}
+

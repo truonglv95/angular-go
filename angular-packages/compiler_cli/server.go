@@ -80,6 +80,9 @@ type ContextState struct {
 	// H1 FIX: Cache last build outputs indexed by absolute path for get_output.
 	outputs map[string]*OutputFile
 
+	// Map of files that have been invalidated since the last compilation.
+	invalidatedFiles map[string]bool
+
 	// B#5 FIX: RWMutex allows concurrent HMR reads while build holds write lock.
 	mu sync.RWMutex
 }
@@ -282,13 +285,16 @@ func handleRequest(ctx context.Context, req RpcRequest) {
 		state.mu.Lock()
 		defer state.mu.Unlock()
 
+		invalidated := state.invalidatedFiles
+		state.invalidatedFiles = nil
+
 		result := &PerformCompilationResult{
 			Diagnostics: state.Config.Errors,
 			Status:      tsc.ExitStatusDiagnosticsPresent_OutputsSkipped,
 		}
 		if len(state.Config.Errors) == 0 {
 			var ngProgram *ngtsc.NgtscProgram
-			result, ngProgram = PerformCompilationWithHost(state.Config, state.Host, state.NgProgram)
+			result, ngProgram = PerformCompilationWithHost(state.Config, state.Host, state.NgProgram, invalidated)
 			state.NgProgram = ngProgram
 		}
 
@@ -375,6 +381,13 @@ func handleRequest(ctx context.Context, req RpcRequest) {
 			return
 		}
 		if state, ok := getContext(params.ContextId); ok {
+			state.mu.Lock()
+			if state.invalidatedFiles == nil {
+				state.invalidatedFiles = make(map[string]bool)
+			}
+			state.invalidatedFiles[params.File] = true
+			state.mu.Unlock()
+
 			// B#6 FIX: Clear only the specific file's source cache entry.
 			// The VFS layer doesn't support per-file eviction so we still
 			// clear the full VFS cache — but source-level caching (which is
