@@ -52,7 +52,7 @@ type DemoView = 'button' | 'input' | 'table' | 'form' | 'accordion' | 'dialog' |
     Tag, Card, Tooltip, Carousel, PickList, OrderList, TreeTableModule, Panel, Fieldset, Splitter, Knob
   ],
   templateUrl: './app.html',
-  styleUrl: './app.css'
+  styleUrl: './app.scss'
 })
 export class App {
   protected readonly title = signal('new-demo-app');

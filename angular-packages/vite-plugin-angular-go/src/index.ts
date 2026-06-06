@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { createGoNgcClient, GoNgcClient } from './client';
 
 export interface OutputFile {
@@ -107,6 +108,33 @@ interface LinkCacheEntry {
   code: string;
 }
 
+class BoundedMap<K, V> {
+  private map = new Map<K, V>();
+  constructor(private maxSize: number) {}
+  get(key: K): V | undefined {
+    return this.map.get(key);
+  }
+  set(key: K, value: V): this {
+    if (this.map.size >= this.maxSize && !this.map.has(key)) {
+      const oldestKey = this.map.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.map.delete(oldestKey);
+      }
+    }
+    this.map.set(key, value);
+    return this;
+  }
+  delete(key: K): boolean {
+    return this.map.delete(key);
+  }
+  clear(): void {
+    this.map.clear();
+  }
+  get size(): number {
+    return this.map.size;
+  }
+}
+
 class GoNgcError extends Error {
   readonly stdout: string;
   readonly stderr: string;
@@ -150,7 +178,7 @@ class GoNgcError extends Error {
 }
 
 const angularPartialDeclarationMarker = 'ɵɵngDeclare';
-let linkCache = new Map<string, { key: string; code: string }>();
+let linkCache = new BoundedMap<string, { key: string; code: string }>(500);
 
 let sharedDaemonClient: GoNgcClient | null = null;
 let sharedDaemonContextId = '';
@@ -362,24 +390,29 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
     }
   }
 
-  function scanProjectForStyleMappings(): void {
-    const walk = (dir: string) => {
+  async function scanProjectForStyleMappings(): Promise<void> {
+    const walk = async (dir: string) => {
       let entries: fs.Dirent[];
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+      try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); }
       catch { return; }
 
-      for (const entry of entries) {
-        const filePath = path.join(dir, entry.name);
-        if (shouldSkipProjectInput(filePath, projectRoot, outDir)) continue;
-        if (entry.isDirectory()) { walk(filePath); continue; }
-        if (!entry.isFile() || !filePath.endsWith('.ts') || filePath.endsWith('.d.ts')) continue;
-        try {
-          const source = fs.readFileSync(filePath, 'utf8');
-          parseStyleMappingsForFile(filePath, source);
-        } catch { /* ignore unreadable files */ }
-      }
+      await Promise.all(
+        entries.map(async (entry) => {
+          const filePath = path.join(dir, entry.name);
+          if (shouldSkipProjectInput(filePath, projectRoot, outDir)) return;
+          if (entry.isDirectory()) {
+            await walk(filePath);
+            return;
+          }
+          if (!entry.isFile() || !filePath.endsWith('.ts') || filePath.endsWith('.d.ts')) return;
+          try {
+            const source = await fs.promises.readFile(filePath, 'utf8');
+            parseStyleMappingsForFile(filePath, source);
+          } catch { /* ignore unreadable files */ }
+        })
+      );
     };
-    walk(projectRoot);
+    await walk(projectRoot);
   }
 
   async function sendHmrUpdatesForFiles(devServer: ViteDevServer, tsFiles: Iterable<string>): Promise<void> {
@@ -419,6 +452,35 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
     }
   }
 
+  function invalidateTsModulesForFiles(tsFiles: Iterable<string>): void {
+    if (!server) {
+      return;
+    }
+    for (const tsFile of tsFiles) {
+      const tsMods = server.moduleGraph.getModulesByFile(cleanId(tsFile));
+      if (!tsMods) {
+        continue;
+      }
+      for (const mod of tsMods) {
+        server.moduleGraph.invalidateModule(mod);
+      }
+    }
+  }
+
+  function invalidateTsModulesForResource(filePath: string): void {
+    if (filePath.endsWith('.html') && htmlToTs.has(filePath)) {
+      invalidateTsModulesForFiles(htmlToTs.get(filePath)!);
+      return;
+    }
+    if (
+      (filePath.endsWith('.css') || filePath.endsWith('.scss') ||
+       filePath.endsWith('.less') || filePath.endsWith('.sass')) &&
+      cssToTs.has(filePath)
+    ) {
+      invalidateTsModulesForFiles(cssToTs.get(filePath)!);
+    }
+  }
+
 
   function log(message: string) {
     if (options.verbose) {
@@ -454,7 +516,66 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
   // H8 FIX: Cache the projectCompileKey to avoid re-running statSync() for every
   // file on every load() call. Invalidated by watchChange events.
   let cachedCompileKey = '';
+  let cachedInputStats = new Map<string, string>();
+  let lastInputStats = new Map<string, string>();
   let compileKeyDirty = true;
+
+  function computeProjectState(): { key: string; stats: Map<string, string> } {
+    const hash = crypto.createHash('sha1');
+    const stats = new Map<string, string>();
+    hash.update(compilerSalt(compilerPath));
+    hash.update(JSON.stringify(compileArgs));
+    hash.update(packageVersion(projectRoot, '@angular/core'));
+    hash.update(packageVersion(projectRoot, '@angular/compiler-cli'));
+    for (const filePath of getProjectInputs(projectRoot, outDir)) {
+      const key = optionalStatKey(filePath);
+      stats.set(filePath, key);
+      hash.update(path.relative(projectRoot, filePath));
+      hash.update(key);
+    }
+    return { key: hash.digest('hex'), stats };
+  }
+
+  function changedInputs(nextStats: Map<string, string>): string[] {
+    const changed: string[] = [];
+    for (const [filePath, key] of nextStats) {
+      if (lastInputStats.get(filePath) !== key) {
+        changed.push(filePath);
+      }
+    }
+    for (const filePath of lastInputStats.keys()) {
+      if (!nextStats.has(filePath)) {
+        changed.push(filePath);
+      }
+    }
+    return changed;
+  }
+
+  async function invalidateChangedInputs(files: string[]): Promise<void> {
+    if (!sharedDaemonClient) {
+      return;
+    }
+    for (const filePath of files) {
+      if (projectInputPattern.test(filePath) && !shouldSkipProjectInput(filePath, projectRoot, outDir)) {
+        await sharedDaemonClient.invalidate(sharedDaemonContextId, filePath);
+      }
+    }
+  }
+
+  async function ensureFreshDevCompile(reason: string): Promise<void> {
+    if (config.command !== 'serve' || !recompileOnChange) {
+      return;
+    }
+    const nextState = computeProjectState();
+    if (nextState.key === lastCompileKey) {
+      return;
+    }
+    await invalidateChangedInputs(changedInputs(nextState.stats));
+    cachedCompileKey = nextState.key;
+    cachedInputStats = nextState.stats;
+    compileKeyDirty = false;
+    await compileProject(reason, true);
+  }
 
   async function compileProject(reason: string, force = false): Promise<void> {
     // C5 FIX: When force=true and a non-forced compile is already running,
@@ -469,7 +590,9 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
 
     // H8 FIX: Only recompute compile key when dirty.
     if (compileKeyDirty) {
-      cachedCompileKey = projectCompileKey();
+      const state = computeProjectState();
+      cachedCompileKey = state.key;
+      cachedInputStats = state.stats;
       compileKeyDirty = false;
     }
     const compileKey = cachedCompileKey;
@@ -495,6 +618,7 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
     compilePromise = buildOperation
       .then((result: BuildResult) => {
         lastCompileKey = compileKey;
+        lastInputStats = new Map(cachedInputStats);
         if (pluginMode === 'memory' || pluginMode === 'server') {
           try {
             memoryOutputs.clear();
@@ -522,16 +646,7 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
   }
 
   function projectCompileKey(): string {
-    const hash = crypto.createHash('sha1');
-    hash.update(compilerSalt(compilerPath));
-    hash.update(JSON.stringify(compileArgs));
-    hash.update(packageVersion(projectRoot, '@angular/core'));
-    hash.update(packageVersion(projectRoot, '@angular/compiler-cli'));
-    for (const filePath of getProjectInputs(projectRoot, outDir)) {
-      hash.update(path.relative(projectRoot, filePath));
-      hash.update(optionalStatKey(filePath));
-    }
-    return hash.digest('hex');
+    return computeProjectState().key;
   }
 
   function outputPathForSource(id: string): string | null {
@@ -558,8 +673,10 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
       outDir = resolveFromProjectRoot(options.outDir || 'out-tsc/app');
       compilerPath = resolveCompilerPath(projectRoot, compilerPath);
       compileArgs = normalizeCompileArgs(options.args || ['-p', options.project || 'tsconfig.app.json']);
+      // Keep server mode for production build to avoid spawning subprocesses
+      // for linking and compilation.
       if (config.command === 'build' && pluginMode === 'server') {
-        pluginMode = 'default';
+        // pluginMode = 'default';
       }
       
       enableHmr = config.command === 'serve' && options.hmr === true;
@@ -661,6 +778,7 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
       } else {
         projectInputsCache.add(id);
       }
+      invalidateTsModulesForResource(cleanId(id));
     },
 
     async buildStart() {
@@ -671,7 +789,8 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
       //   1. The daemon is designed for long-lived watch sessions, not one-shot builds.
       //   2. Sending hmr:true to the daemon causes HMR scaffolding to be emitted
       //      into the production bundle (~5-10 KB per component).
-      if (pluginMode === 'server' && isServe && !sharedDaemonClient) {
+      // Start the daemon when pluginMode is 'server' (both for serve and build)
+      if (pluginMode === 'server' && !sharedDaemonClient) {
         sharedDaemonClient = createGoNgcClient(compilerPath, projectRoot);
         sharedDaemonContextId = await sharedDaemonClient.createContext({
           project: options.project || 'tsconfig.app.json',
@@ -693,12 +812,11 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
         process.once('SIGTERM', shutdown);
       }
 
-      // B#11 FIX: Eagerly scan all project .ts files so htmlToTs / cssToTs are
-      // populated before the first file-change event arrives. Without this, style
-      // and template HMR misses changes that happen before load() is called.
-      // Only needed when Angular HMR is enabled.
-      if (enableHmr) {
-        scanProjectForStyleMappings();
+      // Eagerly scan all project .ts files so htmlToTs / cssToTs are populated
+      // before the first file-change event arrives. This is required for both
+      // Angular HMR and the non-HMR full-reload path for external templates/styles.
+      if (isServe && recompileOnChange) {
+        await scanProjectForStyleMappings();
       }
 
       for (const filePath of getProjectInputs(projectRoot, outDir)) {
@@ -742,8 +860,9 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
         const urlObj = new URL(idWithoutNull, 'http://localhost');
         // URLSearchParams.get() already URL-decodes %2F→/ and %40→@
         // so c is the raw "relPath@ClassName" string, e.g. "src/app/app.ts@App"
-        const c = urlObj.searchParams.get('c');
+        let c = urlObj.searchParams.get('c');
         if (c) {
+          c = decodeURIComponent(c);
           const atIdx = c.lastIndexOf('@');
           const filePath = atIdx !== -1 ? c.slice(0, atIdx) : c;
           const compName = atIdx !== -1 ? c.slice(atIdx + 1) : '';
@@ -773,6 +892,8 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
       if (jsPath == null) {
         return null;
       }
+
+      await ensureFreshDevCompile(`freshness check for ${path.relative(projectRoot, cleanId(id))}`);
 
       if (pluginMode !== 'server' && pluginMode !== 'memory') {
         if (!fs.existsSync(jsPath)) {
@@ -900,16 +1021,7 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
         // Send HMR update event to browser and invalidate module graph cache for virtual modules
         if (server) {
           const affectedTsFiles = htmlToTs.get(filePath)!;
-          for (const tsFile of affectedTsFiles) {
-            // Invalidate the TS module in Vite's module graph so page refresh (F5) loads the fresh compiled component
-            const tsMods = server.moduleGraph.getModulesByFile(cleanId(tsFile));
-            if (tsMods) {
-              for (const mod of tsMods) {
-                log(`Invalidating TS module cache: ${mod.id}`);
-                server.moduleGraph.invalidateModule(mod);
-              }
-            }
-          }
+          invalidateTsModulesForFiles(affectedTsFiles);
           await sendHmrUpdatesForFiles(server, affectedTsFiles);
         }
         return [];
@@ -942,16 +1054,7 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
         // Send HMR update event to browser and invalidate module graph cache for virtual modules
         if (server) {
           const affectedTsFiles = cssToTs.get(filePath)!;
-          for (const tsFile of affectedTsFiles) {
-            // Invalidate the TS module in Vite's module graph so page refresh (F5) loads the fresh compiled component
-            const tsMods = server.moduleGraph.getModulesByFile(cleanId(tsFile));
-            if (tsMods) {
-              for (const mod of tsMods) {
-                log(`Invalidating TS module cache for style: ${mod.id}`);
-                server.moduleGraph.invalidateModule(mod);
-              }
-            }
-          }
+          invalidateTsModulesForFiles(affectedTsFiles);
           await sendHmrUpdatesForFiles(server, affectedTsFiles);
         }
         return [];
@@ -1000,6 +1103,280 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
       }
     },
 
+    async generateBundle(options: any, bundle: any) {
+      if (config.command !== 'build') {
+        return;
+      }
+
+      const initialChunks = new Set<string>();
+      const lazyChunks = new Set<string>();
+      const initialCss = new Set<string>();
+      const lazyCss = new Set<string>();
+
+      // 1. Identify entry chunks and recursively trace their static imports
+      for (const [fileName, itemVal] of Object.entries(bundle)) {
+        const item = itemVal as any;
+        if (item.type === 'chunk' && item.isEntry) {
+          initialChunks.add(fileName);
+          const addImports = (imports: string[]) => {
+            for (const imp of imports) {
+              if (!initialChunks.has(imp)) {
+                initialChunks.add(imp);
+                const child = bundle[imp] as any;
+                if (child && child.type === 'chunk') {
+                  addImports(child.imports);
+                }
+              }
+            }
+          };
+          addImports(item.imports);
+        }
+      }
+
+      // 2. Classify other chunks as lazy
+      for (const [fileName, itemVal] of Object.entries(bundle)) {
+        const item = itemVal as any;
+        if (item.type === 'chunk' && !initialChunks.has(fileName)) {
+          lazyChunks.add(fileName);
+        }
+      }
+
+      // 3. Classify CSS assets
+      for (const [fileName, itemVal] of Object.entries(bundle)) {
+        const item = itemVal as any;
+        if (item.type === 'asset' && fileName.endsWith('.css')) {
+          let importedByInitial = false;
+          let importedByLazy = false;
+
+          for (const chunkName of initialChunks) {
+            const chunk = bundle[chunkName] as any;
+            if (chunk && chunk.viteMetadata?.importedCss?.has(fileName)) {
+              importedByInitial = true;
+            }
+          }
+
+          for (const chunkName of lazyChunks) {
+            const chunk = bundle[chunkName] as any;
+            if (chunk && chunk.viteMetadata?.importedCss?.has(fileName)) {
+              importedByLazy = true;
+            }
+          }
+
+          if (importedByInitial || !importedByLazy) {
+            initialCss.add(fileName);
+          } else {
+            lazyCss.add(fileName);
+          }
+        }
+      }
+
+      // 4. Compute sizes
+      interface SizeRow {
+        file: string;
+        name: string;
+        rawSize: number;
+        gzipSize: number;
+        type: 'js' | 'css';
+      }
+
+      const initialRows: SizeRow[] = [];
+      const lazyRows: SizeRow[] = [];
+
+      const formatBytes = (bytes: number): string => {
+        if (bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'kB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+      };
+
+      const colorSize = (sizeStr: string, bytes: number): string => {
+        if (bytes < 100 * 1024) {
+          return `\x1b[32m${sizeStr}\x1b[39m`; // Green
+        } else if (bytes < 500 * 1024) {
+          return `\x1b[33m${sizeStr}\x1b[39m`; // Yellow
+        } else {
+          return `\x1b[31m\x1b[1m${sizeStr}\x1b[22m\x1b[39m`; // Bold Red
+        }
+      };
+
+      // JS initial
+      for (const fileName of initialChunks) {
+        const item = bundle[fileName] as any;
+        if (item && item.type === 'chunk') {
+          const code = item.code;
+          const rawSize = Buffer.byteLength(code, 'utf8');
+          const gzipSize = zlib.gzipSync(code).byteLength;
+          initialRows.push({
+            file: fileName,
+            name: item.name || 'main',
+            rawSize,
+            gzipSize,
+            type: 'js'
+          });
+        }
+      }
+
+      // CSS initial
+      for (const fileName of initialCss) {
+        const item = bundle[fileName] as any;
+        if (item && item.type === 'asset') {
+          const source = item.source;
+          const rawSize = typeof source === 'string' ? Buffer.byteLength(source, 'utf8') : source.byteLength;
+          const gzipSize = zlib.gzipSync(source).byteLength;
+          initialRows.push({
+            file: fileName,
+            name: path.basename(fileName, '.css'),
+            rawSize,
+            gzipSize,
+            type: 'css'
+          });
+        }
+      }
+
+      // JS lazy
+      for (const fileName of lazyChunks) {
+        const item = bundle[fileName] as any;
+        if (item && item.type === 'chunk') {
+          const code = item.code;
+          const rawSize = Buffer.byteLength(code, 'utf8');
+          const gzipSize = zlib.gzipSync(code).byteLength;
+          lazyRows.push({
+            file: fileName,
+            name: item.name || 'lazy',
+            rawSize,
+            gzipSize,
+            type: 'js'
+          });
+        }
+      }
+
+      // CSS lazy
+      for (const fileName of lazyCss) {
+        const item = bundle[fileName] as any;
+        if (item && item.type === 'asset') {
+          const source = item.source;
+          const rawSize = typeof source === 'string' ? Buffer.byteLength(source, 'utf8') : source.byteLength;
+          const gzipSize = zlib.gzipSync(source).byteLength;
+          lazyRows.push({
+            file: fileName,
+            name: path.basename(fileName, '.css'),
+            rawSize,
+            gzipSize,
+            type: 'css'
+          });
+        }
+      }
+
+      // 5. Generate beautiful console output
+      let initialRawTotal = 0;
+      let initialGzipTotal = 0;
+      for (const row of initialRows) {
+        initialRawTotal += row.rawSize;
+        initialGzipTotal += row.gzipSize;
+      }
+
+      const maxFileLen = Math.max(
+        'Initial Chunk Files'.length,
+        'Lazy Chunk Files'.length,
+        ...initialRows.map(r => r.file.length),
+        ...lazyRows.map(r => r.file.length)
+      );
+      const maxNameLen = Math.max(
+        'Names'.length,
+        ...initialRows.map(r => r.name.length),
+        ...lazyRows.map(r => r.name.length)
+      );
+
+      const pad = (str: string, len: number) => str.padEnd(len);
+      const padStart = (str: string, len: number) => str.padStart(len);
+
+      const outputLines: string[] = [];
+      outputLines.push(`\n\x1b[1m\x1b[36mAngular Initial Bundle Size Summary:\x1b[0m\n`);
+      outputLines.push(
+        `  ` +
+        `\x1b[1m${pad('Initial Chunk Files', maxFileLen)}\x1b[22m | ` +
+        `\x1b[1m${pad('Names', maxNameLen)}\x1b[22m | ` +
+        `\x1b[1m${padStart('Raw Size', 12)}\x1b[22m | ` +
+        `\x1b[1m${padStart('Estimated Transfer Size', 24)}\x1b[22m`
+      );
+      outputLines.push(
+        `  ` +
+        `\x1b[90m${'-'.repeat(maxFileLen)}\x1b[39m-+-` +
+        `\x1b[90m${'-'.repeat(maxNameLen)}\x1b[39m-+-` +
+        `\x1b[90m${'-'.repeat(12)}\x1b[39m-+-` +
+        `\x1b[90m${'-'.repeat(24)}\x1b[39m`
+      );
+
+      for (const row of initialRows) {
+        const fileStr = row.type === 'js' ? `\x1b[36m${row.file}\x1b[39m` : `\x1b[35m${row.file}\x1b[39m`;
+        const nameStr = row.name;
+        const rawSizeStr = formatBytes(row.rawSize);
+        const gzipSizeStr = colorSize(formatBytes(row.gzipSize), row.gzipSize);
+        
+        outputLines.push(
+          `  ` +
+          `${pad(fileStr, maxFileLen + (fileStr.length - row.file.length))} | ` +
+          `${pad(nameStr, maxNameLen)} | ` +
+          `${padStart(rawSizeStr, 12)} | ` +
+          `${padStart(gzipSizeStr, 24 + (gzipSizeStr.length - formatBytes(row.gzipSize).length))}`
+        );
+      }
+
+      outputLines.push(
+        `  ` +
+        `\x1b[90m${'-'.repeat(maxFileLen)}\x1b[39m-+-` +
+        `\x1b[90m${'-'.repeat(maxNameLen)}\x1b[39m-+-` +
+        `\x1b[90m${'-'.repeat(12)}\x1b[39m-+-` +
+        `\x1b[90m${'-'.repeat(24)}\x1b[39m`
+      );
+
+      const totalLabel = `\x1b[1mInitial Total\x1b[22m`;
+      const totalRawStr = `\x1b[1m${formatBytes(initialRawTotal)}\x1b[22m`;
+      const totalGzipStr = colorSize(formatBytes(initialGzipTotal), initialGzipTotal);
+
+      outputLines.push(
+        `  ` +
+        `${pad('', maxFileLen)} | ` +
+        `${pad(totalLabel, maxNameLen + (totalLabel.length - 'Initial Total'.length))} | ` +
+        `${padStart(totalRawStr, 12 + (totalRawStr.length - formatBytes(initialRawTotal).length))} | ` +
+        `${padStart(totalGzipStr, 24 + (totalGzipStr.length - formatBytes(initialGzipTotal).length))}`
+      );
+
+      if (lazyRows.length > 0) {
+        outputLines.push(`\n  ` +
+          `\x1b[1m${pad('Lazy Chunk Files', maxFileLen)}\x1b[22m | ` +
+          `\x1b[1m${pad('Names', maxNameLen)}\x1b[22m | ` +
+          `\x1b[1m${padStart('Raw Size', 12)}\x1b[22m | ` +
+          `\x1b[1m${padStart('Estimated Transfer Size', 24)}\x1b[22m`
+        );
+        outputLines.push(
+          `  ` +
+          `\x1b[90m${'-'.repeat(maxFileLen)}\x1b[39m-+-` +
+          `\x1b[90m${'-'.repeat(maxNameLen)}\x1b[39m-+-` +
+          `\x1b[90m${'-'.repeat(12)}\x1b[39m-+-` +
+          `\x1b[90m${'-'.repeat(24)}\x1b[39m`
+        );
+
+        for (const row of lazyRows) {
+          const fileStr = `\x1b[90m${row.file}\x1b[39m`;
+          const nameStr = `\x1b[90m${row.name}\x1b[39m`;
+          const rawSizeStr = formatBytes(row.rawSize);
+          const gzipSizeStr = colorSize(formatBytes(row.gzipSize), row.gzipSize);
+          
+          outputLines.push(
+            `  ` +
+            `${pad(fileStr, maxFileLen + (fileStr.length - row.file.length))} | ` +
+            `${pad(nameStr, maxNameLen + (nameStr.length - row.name.length))} | ` +
+            `${padStart(rawSizeStr, 12)} | ` +
+            `${padStart(gzipSizeStr, 24 + (gzipSizeStr.length - formatBytes(row.gzipSize).length))}`
+          );
+        }
+      }
+
+      console.log(outputLines.join('\n') + '\n');
+    },
+
     async closeBundle() {
       if (sharedDaemonClient) {
         await sharedDaemonClient.close();
@@ -1013,11 +1390,49 @@ export function angularGoLinker(options: AngularGoLinkerOptions = {}): any {
   let compilerPath = options.compilerPath || 'go-ngc';
   const ascii = options.ascii !== false;
   const forceOptimizeDeps = options.forceOptimizeDeps !== false;
-  const linkCache = new Map<string, LinkCacheEntry>();
+  const linkCache = new BoundedMap<string, LinkCacheEntry>(500);
+  let cacheDir = '';
 
   function configurePaths() {
     projectRoot = options.projectRoot ? path.resolve(options.projectRoot) : process.cwd();
     compilerPath = resolveCompilerPath(projectRoot, compilerPath);
+  }
+
+  function ensureCacheDir(): string {
+    if (cacheDir) return cacheDir;
+    configurePaths();
+    cacheDir = path.join(projectRoot, '.angular', 'cache', 'vite-plugin-angular-go');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    return cacheDir;
+  }
+
+  function getCacheFilePath(key: string): string {
+    return path.join(ensureCacheDir(), `${hashText(key)}.js`);
+  }
+
+  function readFromDiskCache(key: string): string | null {
+    const cacheFile = getCacheFilePath(key);
+    if (fs.existsSync(cacheFile)) {
+      try {
+        return fs.readFileSync(cacheFile, 'utf8');
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  function writeToDiskCache(key: string, code: string): void {
+    const dir = ensureCacheDir();
+    const cacheFile = getCacheFilePath(key);
+    const hashedKey = hashText(key);
+    try {
+      const tempFile = path.join(dir, `${hashedKey}.${process.pid}.${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`);
+      fs.writeFileSync(tempFile, code, 'utf8');
+      fs.renameSync(tempFile, cacheFile);
+    } catch {
+      // ignore
+    }
   }
 
   function compilerCacheSalt(): string {
@@ -1041,6 +1456,12 @@ export function angularGoLinker(options: AngularGoLinkerOptions = {}): any {
       return cached.code;
     }
 
+    const diskCached = readFromDiskCache(key);
+    if (diskCached != null) {
+      linkCache.set(cacheId, { key, code: diskCached });
+      return diskCached;
+    }
+
     // B#4 FIX: Use the shared daemon client when available to avoid spawning
     // a fresh go-ngc subprocess for every dependency file (~50ms overhead each).
     let linked: string;
@@ -1051,6 +1472,7 @@ export function angularGoLinker(options: AngularGoLinkerOptions = {}): any {
       linked = await runGoNgc(projectRoot, compilerPath, ['--link', filePath]);
     }
     linkCache.set(cacheId, { key, code: linked });
+    writeToDiskCache(key, linked);
     return linked;
   }
 
@@ -1062,26 +1484,34 @@ export function angularGoLinker(options: AngularGoLinkerOptions = {}): any {
       return cached.code;
     }
 
+    const diskCached = readFromDiskCache(key);
+    if (diskCached != null) {
+      linkCache.set(cacheId, { key, code: diskCached });
+      return diskCached;
+    }
+
+    let linked: string;
     // B#4 FIX: Use daemon client when available
     if (sharedDaemonClient) {
       const result = await sharedDaemonClient.linkCode(code, id);
-      linkCache.set(cacheId, { key, code: result.code });
-      return result.code;
+      linked = result.code;
+    } else {
+      const tempPath = path.join(
+        os.tmpdir(),
+        `angular-go-link-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.mjs`,
+      );
+
+      fs.writeFileSync(tempPath, code);
+      try {
+        linked = await runGoNgc(projectRoot, compilerPath, ['--link', tempPath]);
+      } finally {
+        fs.rmSync(tempPath, { force: true });
+      }
     }
 
-    const tempPath = path.join(
-      os.tmpdir(),
-      `angular-go-link-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.mjs`,
-    );
-
-    fs.writeFileSync(tempPath, code);
-    try {
-      const linked = await runGoNgc(projectRoot, compilerPath, ['--link', tempPath]);
-      linkCache.set(cacheId, { key, code: linked });
-      return linked;
-    } finally {
-      fs.rmSync(tempPath, { force: true });
-    }
+    linkCache.set(cacheId, { key, code: linked });
+    writeToDiskCache(key, linked);
+    return linked;
   }
 
 

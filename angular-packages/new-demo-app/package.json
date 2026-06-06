@@ -15,7 +15,9 @@
     "test:e2e": "npm run test:e2e:vite:dev",
     "test:e2e:prod": "npm run test:e2e:vite:prod",
     "test:e2e:vite:dev": "playwright test --config playwright.config.ts",
-    "test:e2e:vite:prod": "playwright test --config playwright.prod.config.ts"
+    "test:e2e:vite:prod": "playwright test --config playwright.prod.config.ts",
+    "test:builder:dev": "npm run e2e:prepare && npm run test:e2e:vite:dev",
+    "test:builder:prod": "npm run e2e:prepare && npm run test:e2e:vite:prod"
   },
   "private": true,
   "packageManager": "npm@10.9.0",
