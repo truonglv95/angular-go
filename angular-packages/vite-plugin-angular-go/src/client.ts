@@ -1,5 +1,5 @@
 import { spawn, ChildProcess } from 'node:child_process';
-import { BuildResult, OutputFile } from './index';
+import { BuildResult, OutputFile } from './index.js';
 import { StringDecoder } from 'node:string_decoder';
 
 export interface CreateContextOptions {

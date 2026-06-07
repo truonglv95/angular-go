@@ -1,3 +1,4 @@
+import { version as viteVersion } from 'vite';
 import type { ResolvedConfig, ViteDevServer } from 'vite';
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
@@ -5,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { createGoNgcClient, GoNgcClient } from './client';
+import { createGoNgcClient, GoNgcClient } from './client.js';
 
 export interface OutputFile {
   path: string;
@@ -604,7 +605,7 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
     const started = Date.now();
     compileError = null;
     let buildOperation: Promise<any>;
-    if (pluginMode === 'server' && sharedDaemonClient) {
+    if (pluginMode === 'server' && sharedDaemonClient && sharedDaemonContextId) {
       buildOperation = sharedDaemonClient.build(sharedDaemonContextId);
     } else {
       buildOperation = runGoNgc(projectRoot, compilerPath, compileArgs).then((stdout) => {
@@ -790,8 +791,10 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
       //   2. Sending hmr:true to the daemon causes HMR scaffolding to be emitted
       //      into the production bundle (~5-10 KB per component).
       // Start the daemon when pluginMode is 'server' (both for serve and build)
-      if (pluginMode === 'server' && !sharedDaemonClient) {
-        sharedDaemonClient = createGoNgcClient(compilerPath, projectRoot);
+      if (pluginMode === 'server' && (!sharedDaemonClient || !sharedDaemonContextId)) {
+        if (!sharedDaemonClient) {
+          sharedDaemonClient = createGoNgcClient(compilerPath, projectRoot);
+        }
         sharedDaemonContextId = await sharedDaemonClient.createContext({
           project: options.project || 'tsconfig.app.json',
           compilationMode: options.compilationMode || 'global',
@@ -805,6 +808,7 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
           if (sharedDaemonClient) {
             await sharedDaemonClient.close().catch(() => {});
             sharedDaemonClient = null;
+            sharedDaemonContextId = '';
           }
           process.exit(0);
         };
@@ -978,6 +982,16 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
       }
       if (enableHmr) {
         code = code.replace(/import\s*\(\s*i0\.ɵɵgetReplaceMetadataURL/g, 'import(/* @vite-ignore */ i0.ɵɵgetReplaceMetadataURL');
+      }
+      if (map && sourcePath.endsWith('.ts') && fs.existsSync(sourcePath)) {
+        try {
+          const sourceCodeForMap = fs.readFileSync(sourcePath, 'utf8');
+          map.sources = [sourcePath];
+          map.sourcesContent = [sourceCodeForMap];
+          map.sourceRoot = undefined;
+        } catch {
+          // Keep the compiler-provided map when the source cannot be read.
+        }
       }
 
       return { code, map };
@@ -1200,10 +1214,21 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
         }
       };
 
+      const isEmptyCssEntryChunk = (item: any): boolean => {
+        return item?.type === 'chunk'
+          && item.isEntry
+          && item.name?.startsWith('style-')
+          && Buffer.byteLength(item.code || '', 'utf8') === 0
+          && item.viteMetadata?.importedCss?.size > 0;
+      };
+
       // JS initial
       for (const fileName of initialChunks) {
         const item = bundle[fileName] as any;
         if (item && item.type === 'chunk') {
+          if (isEmptyCssEntryChunk(item)) {
+            continue;
+          }
           const code = item.code;
           const rawSize = Buffer.byteLength(code, 'utf8');
           const gzipSize = zlib.gzipSync(code).byteLength;
@@ -1380,6 +1405,8 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
     async closeBundle() {
       if (sharedDaemonClient) {
         await sharedDaemonClient.close();
+        sharedDaemonClient = null;
+        sharedDaemonContextId = '';
       }
     }
   };
@@ -1535,6 +1562,37 @@ export function angularGoLinker(options: AngularGoLinkerOptions = {}): any {
 
     config() {
       const linkerSalt = compilerCacheSalt();
+      const isVite8 = viteVersion && viteVersion.startsWith('8');
+
+      if (isVite8) {
+        return {
+          optimizeDeps: {
+            force: forceOptimizeDeps,
+            rolldownOptions: {
+              transform: {
+                define: {
+                  __ANGULAR_GO_LINKER_CACHE_SALT__: JSON.stringify(linkerSalt),
+                },
+              },
+              plugins: [
+                {
+                  name: 'angular-go-linker',
+                  transform: async (code: string, id: string) => {
+                    if (id.endsWith('.js') || id.endsWith('.mjs')) {
+                      const linked = await linkIfNeeded(code, id);
+                      if (linked == null) {
+                        return null;
+                      }
+                      return { code: linked };
+                    }
+                    return null;
+                  },
+                },
+              ],
+            },
+          },
+        } as any;
+      }
 
       return {
         esbuild: ascii ? { charset: 'ascii' } : undefined,
