@@ -1,7 +1,10 @@
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, '..');
 const appHtml = path.join(projectRoot, 'src/app/app.html');
 const appTs = path.join(projectRoot, 'src/app/app.ts');
