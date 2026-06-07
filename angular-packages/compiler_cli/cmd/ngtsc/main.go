@@ -28,7 +28,7 @@ func main() {
 	formatFlag := flag.String("format", "text", "Output format: text or json")
 	serverFlag := flag.Bool("server", false, "Run in daemon mode via JSON-RPC over stdin/stdout")
 	perfReportFlag := flag.Bool("perf-report", false, "Print performance phase timings to os.Stderr")
-	preserveImportsFlag := flag.Bool("preserve-imports", false, "Preserve ES imports during emit by enabling verbatimModuleSyntax")
+	preserveImportsFlag := flag.Bool("preserve-imports", true, "Preserve ES imports during emit by enabling verbatimModuleSyntax")
 	flag.Parse()
 
 	if *serverFlag {

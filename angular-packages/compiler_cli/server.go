@@ -259,7 +259,7 @@ func handleRequest(ctx context.Context, req RpcRequest) {
 			Project         string `json:"project"`
 			CompilationMode string `json:"compilationMode"`
 			Hmr             bool   `json:"hmr"`
-			PreserveImports bool   `json:"preserveImports"`
+			PreserveImports *bool  `json:"preserveImports"`
 		}
 		if err := json.Unmarshal(req.Params, &params); err != nil {
 			sendError(req.Id, "InvalidParams", err.Error())
@@ -276,7 +276,7 @@ func handleRequest(ctx context.Context, req RpcRequest) {
 				config.CompilationMode = "global"
 			}
 			config.EnableHmr = params.Hmr
-			if params.PreserveImports {
+			if params.PreserveImports == nil || *params.PreserveImports {
 				EnablePreserveImports(config)
 			}
 			config.Write = false
