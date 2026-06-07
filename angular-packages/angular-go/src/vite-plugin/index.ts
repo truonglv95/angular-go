@@ -1547,7 +1547,12 @@ export function angularGoLinker(options: AngularGoLinkerOptions = {}): any {
 
     const filePath = cleanId(id);
     if (fs.existsSync(filePath)) {
-      return linkFile(filePath);
+      try {
+        return await linkFile(filePath);
+      } catch (err) {
+        // Best effort: if linkFile fails (e.g. because the file was deleted/renamed by Vite's pre-bundling optimizer),
+        // fallback to linking the in-memory code.
+      }
     }
 
     return linkCode(code, id);
