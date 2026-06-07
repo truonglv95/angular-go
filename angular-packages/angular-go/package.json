@@ -50,10 +50,10 @@
     "@angular-devkit/architect": "^0.2102.13"
   },
   "optionalDependencies": {
-    "angular-go-darwin-arm64": "file:../angular-go-darwin-arm64",
-    "angular-go-darwin-x64": "file:../angular-go-darwin-x64",
-    "angular-go-linux-x64": "file:../angular-go-linux-x64",
-    "angular-go-win32-x64": "file:../angular-go-win32-x64"
+    "angular-go-darwin-arm64": "1.0.0",
+    "angular-go-darwin-x64": "1.0.0",
+    "angular-go-linux-x64": "1.0.0",
+    "angular-go-win32-x64": "1.0.0"
   },
   "peerDependencies": {
     "@angular/common": "^21.0.0",
