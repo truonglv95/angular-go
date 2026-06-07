@@ -125,18 +125,23 @@ func CreateViewQueriesFunction(viewQueries []R3QueryMetadata, constantPool Const
 		updateStatements = append(updateStatements, st)
 	}, TEMPORARY_NAME)
 
-
+	var viewQuerySignalCall output.Expression
+	var viewQueryCall output.Expression
 
 	for _, query := range viewQueries {
 		params := getQueryCreateParameters(query, constantPool, nil)
 
-		var callExpr output.Expression
 		if query.IsSignal {
-			callExpr = ImportExpr(*Identifiers.ViewQuerySignal).CallFn(params, nil, false, nil)
+			if viewQuerySignalCall == nil {
+				viewQuerySignalCall = ImportExpr(*Identifiers.ViewQuerySignal)
+			}
+			viewQuerySignalCall = viewQuerySignalCall.CallFn(params, nil, false, nil)
 		} else {
-			callExpr = ImportExpr(*Identifiers.ViewQuery).CallFn(params, nil, false, nil)
+			if viewQueryCall == nil {
+				viewQueryCall = ImportExpr(*Identifiers.ViewQuery)
+			}
+			viewQueryCall = viewQueryCall.CallFn(params, nil, false, nil)
 		}
-		createStatements = append(createStatements, output.NewExpressionStatement(callExpr, nil, nil))
 
 		if query.IsSignal {
 			updateStatements = append(updateStatements, queryAdvancePlaceholder)
@@ -154,7 +159,12 @@ func CreateViewQueriesFunction(viewQueries []R3QueryMetadata, constantPool Const
 		updateStatements = append(updateStatements, refresh.And(updateDirective, nil).ToStmt(nil))
 	}
 
-
+	if viewQuerySignalCall != nil {
+		createStatements = append(createStatements, output.NewExpressionStatement(viewQuerySignalCall, nil, nil))
+	}
+	if viewQueryCall != nil {
+		createStatements = append(createStatements, output.NewExpressionStatement(viewQueryCall, nil, nil))
+	}
 
 	var viewQueryFnName *string
 	if name != "" {
@@ -182,18 +192,23 @@ func CreateContentQueriesFunction(queries []R3QueryMetadata, constantPool Consta
 		updateStatements = append(updateStatements, st)
 	}, TEMPORARY_NAME)
 
-
+	var contentQuerySignalCall output.Expression
+	var contentQueryCall output.Expression
 
 	for _, query := range queries {
 		params := getQueryCreateParameters(query, constantPool, []output.Expression{output.NewReadVarExpr("dirIndex", nil, nil, nil)})
 
-		var callExpr output.Expression
 		if query.IsSignal {
-			callExpr = ImportExpr(*Identifiers.ContentQuerySignal).CallFn(params, nil, false, nil)
+			if contentQuerySignalCall == nil {
+				contentQuerySignalCall = ImportExpr(*Identifiers.ContentQuerySignal)
+			}
+			contentQuerySignalCall = contentQuerySignalCall.CallFn(params, nil, false, nil)
 		} else {
-			callExpr = ImportExpr(*Identifiers.ContentQuery).CallFn(params, nil, false, nil)
+			if contentQueryCall == nil {
+				contentQueryCall = ImportExpr(*Identifiers.ContentQuery)
+			}
+			contentQueryCall = contentQueryCall.CallFn(params, nil, false, nil)
 		}
-		createStatements = append(createStatements, output.NewExpressionStatement(callExpr, nil, nil))
 
 		if query.IsSignal {
 			updateStatements = append(updateStatements, queryAdvancePlaceholder)
@@ -211,7 +226,12 @@ func CreateContentQueriesFunction(queries []R3QueryMetadata, constantPool Consta
 		updateStatements = append(updateStatements, refresh.And(updateDirective, nil).ToStmt(nil))
 	}
 
-
+	if contentQuerySignalCall != nil {
+		createStatements = append(createStatements, output.NewExpressionStatement(contentQuerySignalCall, nil, nil))
+	}
+	if contentQueryCall != nil {
+		createStatements = append(createStatements, output.NewExpressionStatement(contentQueryCall, nil, nil))
+	}
 
 	var contentQueriesFnName *string
 	if name != "" {

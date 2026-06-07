@@ -30,7 +30,7 @@ go run ./angular-packages/compiler_cli/tools/parity_compare --kind render3 --all
 go run ./angular-packages/compiler_cli/tools/parity_compare --kind linker --all --strict --out "${PARITY_OUT}"
 
 echo "Building Vite plugin..."
-npm run build --prefix angular-packages/vite-plugin-angular-go
+npm run build --prefix angular-packages/angular-go
 
 echo "Building new-demo-app through Vite..."
 (command cd angular-packages/new-demo-app && npx vite build --config vite.config.ts)
