@@ -15,6 +15,7 @@ import (
 	"github.com/microsoft/typescript-go/angular-packages/compiler"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/expression_parser"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/output"
+	"github.com/microsoft/typescript-go/angular-packages/compiler/parse_util"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/render3"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/render3/partial"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/imports"
@@ -26,6 +27,7 @@ import (
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/reflection"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/translator"
 	"github.com/microsoft/typescript-go/internal/ast"
+	core "github.com/microsoft/typescript-go/internal/core"
 	tsdiagnostics "github.com/microsoft/typescript-go/internal/diagnostics"
 )
 
@@ -37,25 +39,30 @@ type ComponentImport struct {
 }
 
 type ComponentAnalysis struct {
-	Selector        string
-	Template        string
-	TemplateUrl     string
-	Styles          []string
-	StyleUrls       []string
-	IsStandalone    bool
-	Imports         []ComponentImport
-	Inputs          map[string]render3.R3InputMetadata
-	Outputs         map[string]string
-	ExportAs        []string
-	Queries         []render3.R3QueryMetadata
-	ViewQueries     []render3.R3QueryMetadata
-	Host            render3.R3HostMetadata
-	Animations      output.Expression
-	DecoratorNode   *ast.Node
-	PropDecorators  map[string][]*ast.Node
-	ParsedTemplate  *render3.ParsedTemplate
-	CompilationMode string
-	RawImports      output.Expression
+	Selector            string
+	Template            string
+	TemplateUrl         string
+	Styles              []string
+	StyleUrls           []string
+	IsStandalone        bool
+	Imports             []ComponentImport
+	Inputs              map[string]render3.R3InputMetadata
+	Outputs             map[string]string
+	ExportAs            []string
+	Queries             []render3.R3QueryMetadata
+	ViewQueries         []render3.R3QueryMetadata
+	Host                render3.R3HostMetadata
+	ParsedTemplate      *render3.ParsedTemplate
+	Animations          output.Expression
+	DecoratorNode       *ast.Node
+	PropDecorators      map[string][]*ast.Node
+	CompilationMode     string
+	Encapsulation       int
+	ChangeDetection     output.Expression
+	PreserveWhitespaces *bool
+	RawImports          output.Expression
+	Providers           output.Expression
+	ViewProviders       output.Expression
 }
 
 type ComponentResolution struct {
@@ -296,6 +303,9 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 					if initVal := member.Initializer(); initVal != nil {
 						if meta, ok := parseSignalInput(initVal, propName); ok {
 							analysis.Inputs[propName] = meta
+						} else if meta, ok := parseModelInput(initVal, propName); ok {
+							analysis.Inputs[propName] = meta
+							analysis.Outputs[propName] = meta.BindingPropertyName + "Change"
 						}
 					}
 				}
@@ -312,14 +322,39 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 									if propName != "" {
 										if id.Text == "Input" {
 											alias := propName
+											required := false
 											if callExpr.Arguments != nil && len(callExpr.Arguments.Nodes) > 0 {
-												if callExpr.Arguments.Nodes[0].Kind == ast.KindStringLiteral {
-													alias = callExpr.Arguments.Nodes[0].AsStringLiteral().Text
+												arg := callExpr.Arguments.Nodes[0]
+												if arg.Kind == ast.KindStringLiteral {
+													alias = arg.AsStringLiteral().Text
+												} else if arg.Kind == ast.KindObjectLiteralExpression {
+													obj := arg.AsObjectLiteralExpression()
+													if obj.Properties != nil {
+														for _, prop := range obj.Properties.Nodes {
+															if prop.Kind == ast.KindPropertyAssignment {
+																pa := prop.AsPropertyAssignment()
+																propNameText := ""
+																if pa.Name() != nil {
+																	if pa.Name().Kind == ast.KindIdentifier {
+																		propNameText = pa.Name().AsIdentifier().Text
+																	} else if pa.Name().Kind == ast.KindStringLiteral {
+																		propNameText = pa.Name().AsStringLiteral().Text
+																	}
+																}
+																if propNameText == "alias" && pa.Initializer != nil && pa.Initializer.Kind == ast.KindStringLiteral {
+																	alias = pa.Initializer.AsStringLiteral().Text
+																} else if propNameText == "required" && pa.Initializer != nil && pa.Initializer.Kind == ast.KindTrueKeyword {
+																	required = true
+																}
+															}
+														}
+													}
 												}
 											}
 											analysis.Inputs[propName] = render3.R3InputMetadata{
 												ClassPropertyName:   propName,
 												BindingPropertyName: alias,
+												Required:            required,
 											}
 										} else if id.Text == "Output" {
 											alias := propName
@@ -361,11 +396,9 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 											isView := id.Text == "ViewChild" || id.Text == "ViewChildren"
 											isFirst := id.Text == "ViewChild" || id.Text == "ContentChild"
 
-											predicate := ""
+											var predicate interface{} = []string{""}
 											if callExpr.Arguments != nil && len(callExpr.Arguments.Nodes) > 0 {
-												if callExpr.Arguments.Nodes[0].Kind == ast.KindStringLiteral {
-													predicate = callExpr.Arguments.Nodes[0].AsStringLiteral().Text
-												}
+												predicate = parseQueryPredicate(callExpr.Arguments.Nodes[0])
 											}
 
 											isStatic := false
@@ -388,8 +421,8 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 											meta := render3.R3QueryMetadata{
 												PropertyName:            propName,
 												First:                   isFirst,
-												Predicate:               []string{predicate},
-												Descendants:             isView || id.Text == "ContentChildren", // ViewChild/Children and ContentChildren are descendants: true by default
+												Predicate:               predicate,
+												Descendants:             isView || id.Text == "ContentChild",
 												Static:                  isStatic,
 												EmitDistinctChangesOnly: true,
 											}
@@ -499,6 +532,63 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 			}
 		case "animations":
 			analysis.Animations = output.NewWrappedNodeExpr(assign.Initializer, nil, nil, nil)
+		case "encapsulation":
+			analysis.Encapsulation = parseEncapsulation(assign.Initializer)
+		case "changeDetection":
+			analysis.ChangeDetection = parseChangeDetection(assign.Initializer)
+		case "providers":
+			analysis.Providers = output.NewWrappedNodeExpr(assign.Initializer, nil, nil, nil)
+		case "viewProviders":
+			analysis.ViewProviders = output.NewWrappedNodeExpr(assign.Initializer, nil, nil, nil)
+		case "preserveWhitespaces":
+			var val bool
+			if assign.Initializer.Kind == ast.KindTrueKeyword {
+				val = true
+				analysis.PreserveWhitespaces = &val
+			} else if assign.Initializer.Kind == ast.KindFalseKeyword {
+				val = false
+				analysis.PreserveWhitespaces = &val
+			}
+		case "inputs":
+			if assign.Initializer.Kind == ast.KindArrayLiteralExpression {
+				arr := assign.Initializer.AsArrayLiteralExpression()
+				if arr.Elements != nil {
+					for _, elem := range arr.Elements.Nodes {
+						if elem.Kind == ast.KindStringLiteral {
+							strVal := elem.AsStringLiteral().Text
+							parts := strings.Split(strVal, ":")
+							classProp := strings.TrimSpace(parts[0])
+							bindingProp := classProp
+							if len(parts) > 1 {
+								bindingProp = strings.TrimSpace(parts[1])
+							}
+							analysis.Inputs[classProp] = render3.R3InputMetadata{
+								ClassPropertyName:   classProp,
+								BindingPropertyName: bindingProp,
+								Required:            false,
+							}
+						}
+					}
+				}
+			}
+		case "outputs":
+			if assign.Initializer.Kind == ast.KindArrayLiteralExpression {
+				arr := assign.Initializer.AsArrayLiteralExpression()
+				if arr.Elements != nil {
+					for _, elem := range arr.Elements.Nodes {
+						if elem.Kind == ast.KindStringLiteral {
+							strVal := elem.AsStringLiteral().Text
+							parts := strings.Split(strVal, ":")
+							classProp := strings.TrimSpace(parts[0])
+							bindingProp := classProp
+							if len(parts) > 1 {
+								bindingProp = strings.TrimSpace(parts[1])
+							}
+							analysis.Outputs[classProp] = bindingProp
+						}
+					}
+				}
+			}
 		case "imports":
 			if assign.Initializer.Kind == ast.KindArrayLiteralExpression {
 				arr := assign.Initializer.AsArrayLiteralExpression()
@@ -591,8 +681,12 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 			metaImports = append(metaImports, metadata.Reference{Name: imp.Name, Node: imp.Decl.Node, OwningModule: imp.Decl.ViaModule})
 		}
 		metaInputs := make(map[string]string, len(analysis.Inputs))
+		var reqInputs []string
 		for prop, input := range analysis.Inputs {
 			metaInputs[prop] = input.BindingPropertyName
+			if input.Required {
+				reqInputs = append(reqInputs, input.BindingPropertyName)
+			}
 		}
 		h.metaRegistry.RegisterDirective(node.AsNode(), &metadata.DirectiveMeta{
 			Name:        node.Name().AsIdentifier().Text,
@@ -603,21 +697,38 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 			Inputs:      metaInputs,
 			Outputs:     analysis.Outputs,
 			ExportAs:    analysis.ExportAs,
+			RequiredInputs: reqInputs,
 			Ref: metadata.Reference{
 				Name: node.Name().AsIdentifier().Text,
 				Node: node.AsNode(),
 			},
 		})
 	}
+	sort.SliceStable(analysis.Queries, func(i, j int) bool {
+		return analysis.Queries[i].First && !analysis.Queries[j].First
+	})
+	sort.SliceStable(analysis.ViewQueries, func(i, j int) bool {
+		return analysis.ViewQueries[i].First && !analysis.ViewQueries[j].First
+	})
 	return analysis, nil
 }
 
+func (h *ComponentDecoratorHandler) getMetadataReader() metadata.MetadataReader {
+	if h.scopeRegistry != nil {
+		return h.scopeRegistry.MetadataReader()
+	}
+	return h.metaRegistry
+}
+
 func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysisData any) (any, []ast.Diagnostic) {
+	reader := h.getMetadataReader()
 	analysis := analysisData.(*ComponentAnalysis)
 	resolution := &ComponentResolution{}
+	var scope *ngscope.CompilationScope
+	var bound render3.BoundTarget[directiveMetaAdapter]
 
 	if h.scopeRegistry != nil {
-		scope := h.scopeRegistry.GetCompilationScope(node.AsNode())
+		scope = h.scopeRegistry.GetCompilationScope(node.AsNode())
 		if scope != nil {
 			// 1. Read and parse template to AST
 			sourceFile := ast.GetSourceFileOfNode(node.AsNode())
@@ -635,7 +746,13 @@ func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysis
 					}
 				}
 			}
-			parsedTemplate := render3.ParseTemplate(templateStr, "", nil)
+			var parseOpts *render3.ParseTemplateOptions
+			if analysis.PreserveWhitespaces != nil {
+				parseOpts = &render3.ParseTemplateOptions{
+					PreserveWhitespaces: analysis.PreserveWhitespaces,
+				}
+			}
+			parsedTemplate := render3.ParseTemplate(templateStr, "", parseOpts)
 			analysis.ParsedTemplate = &parsedTemplate
 
 			// Deduplicate dependencies
@@ -679,8 +796,8 @@ func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysis
 			// Add imported NgModules verbatim. Standalone directives and pipes are added only
 			// when the template binder proves that the template actually consumes them.
 			for _, imp := range analysis.Imports {
-				if h.metaRegistry != nil {
-					if h.metaRegistry.GetDirectiveMetadata(imp.Decl.Node) != nil || h.metaRegistry.GetPipeMetadata(imp.Decl.Node) != nil {
+				if reader != nil {
+					if reader.GetDirectiveMetadata(imp.Decl.Node) != nil || reader.GetPipeMetadata(imp.Decl.Node) != nil {
 						continue
 					}
 				}
@@ -706,7 +823,7 @@ func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysis
 				matcher.AddSelectables(render3.CssSelectorParse(dir.Selector), []directiveMetaAdapter{{meta: dir}})
 			}
 			binder := render3.NewR3TargetBinder[directiveMetaAdapter](matcher, nil)
-			bound := binder.Bind(render3.Target[directiveMetaAdapter]{Template: parsedTemplate.Nodes})
+			bound = binder.Bind(render3.Target[directiveMetaAdapter]{Template: parsedTemplate.Nodes})
 			usedPipes := collectUsedPipes(parsedTemplate.Nodes)
 
 			importedDirectiveNodes := make(map[*ast.Node]bool)
@@ -742,7 +859,7 @@ func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysis
 					}
 					continue
 				}
-				if dirMeta := h.metaRegistry.GetDirectiveMetadata(imp.Decl.Node); dirMeta != nil {
+				if dirMeta := reader.GetDirectiveMetadata(imp.Decl.Node); dirMeta != nil {
 					for _, matchedDir := range matchedDirectives {
 						if matchedDir.meta == dirMeta || (matchedDir.meta.Selector != "" && matchedDir.meta.Selector == dirMeta.Selector) || directImportMatchesDirective(imp, matchedDir.meta) {
 							importedDirectiveNodes[imp.Decl.Node] = true
@@ -768,7 +885,7 @@ func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysis
 						}
 					}
 				}
-				if pipeMeta := h.metaRegistry.GetPipeMetadata(imp.Decl.Node); pipeMeta != nil && usedPipes[pipeMeta.Name] {
+				if pipeMeta := reader.GetPipeMetadata(imp.Decl.Node); pipeMeta != nil && usedPipes[pipeMeta.Name] {
 					importedPipeNodes[imp.Decl.Node] = true
 					addSemanticRefForRef(pipeMeta.Ref)
 					addDep(render3.R3TemplateDependency{
@@ -833,7 +950,241 @@ func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysis
 		}
 	}
 
-	return resolution, nil
+	var diagnostics []ast.Diagnostic
+
+	var decorator *reflection.Decorator
+	for _, dec := range h.host.GetDecoratorsOfDeclaration(node.AsNode()) {
+		if dec.Name == "Component" {
+			d := dec
+			decorator = &d
+			break
+		}
+	}
+
+	// 1. Standalone / Non-standalone import checks
+	if analysis.IsStandalone {
+		for _, imp := range analysis.Imports {
+			isNgModule := reader.GetNgModuleMetadata(imp.Decl.Node) != nil
+			dirMeta := reader.GetDirectiveMetadata(imp.Decl.Node)
+			pipeMeta := reader.GetPipeMetadata(imp.Decl.Node)
+
+			isStandaloneDirectiveOrPipe := false
+			if dirMeta != nil && dirMeta.Standalone {
+				isStandaloneDirectiveOrPipe = true
+			} else if pipeMeta != nil && pipeMeta.Standalone {
+				isStandaloneDirectiveOrPipe = true
+			}
+
+			if !isNgModule && !isStandaloneDirectiveOrPipe {
+				var importNode *ast.Node = analysis.DecoratorNode
+				if decorator != nil {
+					importsArrExpr := findComponentPropertyNode(decorator, "imports")
+					if importsArrExpr != nil && importsArrExpr.Kind == ast.KindArrayLiteralExpression {
+						for _, elem := range importsArrExpr.AsArrayLiteralExpression().Elements.Nodes {
+							if elem.Kind == ast.KindIdentifier && elem.AsIdentifier().Text == imp.Name {
+								importNode = elem
+								break
+							}
+						}
+					}
+				}
+
+				if dirMeta == nil && pipeMeta == nil && !isNgModule {
+					diagnostics = append(diagnostics, *ngdiagnostics.MakeDiagnostic(
+						ngdiagnostics.ErrorCode_COMPONENT_UNKNOWN_IMPORT,
+						importNode,
+						fmt.Sprintf("The class '%s' is not an NgModule, Component, Directive, or Pipe, and cannot be imported.", imp.Name),
+						nil,
+						tsdiagnostics.CategoryError,
+					))
+				} else {
+					diagnostics = append(diagnostics, *ngdiagnostics.MakeDiagnostic(
+						ngdiagnostics.ErrorCode_COMPONENT_IMPORT_NOT_STANDALONE,
+						importNode,
+						fmt.Sprintf("The imported class '%s' is not standalone and cannot be imported directly. It must be declared in an NgModule, and that NgModule must be imported instead.", imp.Name),
+						nil,
+						tsdiagnostics.CategoryError,
+					))
+				}
+			}
+		}
+	} else {
+		if decorator != nil {
+			importsExpr := findComponentPropertyNode(decorator, "imports")
+			if importsExpr != nil {
+				diagnostics = append(diagnostics, *ngdiagnostics.MakeDiagnostic(
+					ngdiagnostics.ErrorCode_COMPONENT_NOT_STANDALONE,
+					importsExpr,
+					fmt.Sprintf("The component %s is not standalone, but has an imports list. Only standalone components can specify imports.", node.Name().AsIdentifier().Text),
+					nil,
+					tsdiagnostics.CategoryError,
+				))
+			}
+		}
+	}
+
+	// 2. Duplicate inputs/outputs checks
+	seenInputs := make(map[string]string)
+	for propName, input := range analysis.Inputs {
+		if prevProp, exists := seenInputs[input.BindingPropertyName]; exists {
+			var propNode *ast.Node = node.AsNode()
+			if node.Members != nil {
+				for _, member := range node.Members.Nodes {
+					if member.Kind == ast.KindPropertyDeclaration {
+						pd := member.AsPropertyDeclaration()
+						if pd.Name() != nil && pd.Name().Kind == ast.KindIdentifier && pd.Name().AsIdentifier().Text == propName {
+							propNode = member
+							break
+						}
+					}
+				}
+			}
+			diagnostics = append(diagnostics, *ngdiagnostics.MakeDiagnostic(
+				ngdiagnostics.ErrorCode_DUPLICATE_BINDING_NAME,
+				propNode,
+				fmt.Sprintf("Duplicate input binding name '%s' (bound to '%s' and '%s').", input.BindingPropertyName, prevProp, propName),
+				nil,
+				tsdiagnostics.CategoryError,
+			))
+		}
+		seenInputs[input.BindingPropertyName] = propName
+	}
+
+	seenOutputs := make(map[string]string)
+	for propName, bindingName := range analysis.Outputs {
+		if prevProp, exists := seenOutputs[bindingName]; exists {
+			var propNode *ast.Node = node.AsNode()
+			if node.Members != nil {
+				for _, member := range node.Members.Nodes {
+					if member.Kind == ast.KindPropertyDeclaration {
+						pd := member.AsPropertyDeclaration()
+						if pd.Name() != nil && pd.Name().Kind == ast.KindIdentifier && pd.Name().AsIdentifier().Text == propName {
+							propNode = member
+							break
+						}
+					}
+				}
+			}
+			diagnostics = append(diagnostics, *ngdiagnostics.MakeDiagnostic(
+				ngdiagnostics.ErrorCode_DUPLICATE_BINDING_NAME,
+				propNode,
+				fmt.Sprintf("Duplicate output binding name '%s' (bound to '%s' and '%s').", bindingName, prevProp, propName),
+				nil,
+				tsdiagnostics.CategoryError,
+			))
+		}
+		seenOutputs[bindingName] = propName
+	}
+
+	// 3. Template validations (Syntax & Semantic Checks)
+	parsedTemplate := analysis.ParsedTemplate
+	if parsedTemplate == nil {
+		var parseOpts *render3.ParseTemplateOptions
+		if analysis.PreserveWhitespaces != nil {
+			parseOpts = &render3.ParseTemplateOptions{
+				PreserveWhitespaces: analysis.PreserveWhitespaces,
+			}
+		}
+		pt := render3.ParseTemplate(analysis.Template, "", parseOpts)
+		parsedTemplate = &pt
+	}
+
+	if parsedTemplate != nil {
+		// Syntax parser errors
+		for _, parseErr := range parsedTemplate.Errors {
+			templateNode := findComponentPropertyNode(decorator, "template")
+			if templateNode == nil {
+				templateNode = findComponentPropertyNode(decorator, "templateUrl")
+			}
+			var diagNode *ast.Node
+			if templateNode != nil {
+				cloned := *templateNode
+				if findComponentPropertyNode(decorator, "template") != nil && parseErr.Span != nil {
+					pos := templateNode.Pos() + 1 + parseErr.Span.Start.Offset
+					end := templateNode.Pos() + 1 + parseErr.Span.End.Offset
+					cloned.Loc = core.NewTextRange(pos, end)
+				}
+				diagNode = &cloned
+			} else {
+				diagNode = node.AsNode()
+			}
+			diagnostics = append(diagnostics, *ngdiagnostics.MakeDiagnostic(
+				ngdiagnostics.ErrorCode_TEMPLATE_PARSE_ERROR,
+				diagNode,
+				parseErr.Msg,
+				nil,
+				tsdiagnostics.CategoryError,
+			))
+		}
+
+		// Out-of-band checks
+		if scope != nil {
+			walker := &templateDiagnosticWalker{
+				diagnostics: diagnostics,
+				h:           h,
+				node:        node,
+				decorator:   decorator,
+				analysis:    analysis,
+				scope:       scope,
+				bound:       bound,
+			}
+
+			// Missing Pipe Check
+			usedPipes := collectUsedPipes(parsedTemplate.Nodes)
+			for pipeName := range usedPipes {
+				found := false
+				for _, pipe := range scope.Pipes {
+					if pipe.Name == pipeName {
+						found = true
+						break
+					}
+				}
+				if !found {
+					var commonPipes = map[string][2]string{
+						"async":      {"AsyncPipe", "@angular/common"},
+						"uppercase":  {"UpperCasePipe", "@angular/common"},
+						"lowercase":  {"LowerCasePipe", "@angular/common"},
+						"json":       {"JsonPipe", "@angular/common"},
+						"slice":      {"SlicePipe", "@angular/common"},
+						"number":     {"DecimalPipe", "@angular/common"},
+						"percent":    {"PercentPipe", "@angular/common"},
+						"titlecase":  {"TitleCasePipe", "@angular/common"},
+						"currency":   {"CurrencyPipe", "@angular/common"},
+						"date":       {"DatePipe", "@angular/common"},
+						"i18nPlural": {"I18nPluralPipe", "@angular/common"},
+						"i18nSelect": {"I18nSelectPipe", "@angular/common"},
+						"keyvalue":   {"KeyValuePipe", "@angular/common"},
+					}
+					msg := fmt.Sprintf("No pipe found with name '%s'.", pipeName)
+					if sugg, exists := commonPipes[pipeName]; exists {
+						className := sugg[0]
+						importPath := sugg[1]
+						if analysis.IsStandalone {
+							msg += fmt.Sprintf("\nTo fix this, import the \"%s\" class from \"%s\" and add it to the \"imports\" array of the component.", className, importPath)
+						} else {
+							msg += fmt.Sprintf("\nTo fix this, import the \"%s\" class from \"%s\" and add it to the \"imports\" array of the module declaring the component.", className, importPath)
+						}
+					}
+					var pipeSpan parse_util.ParseSourceSpan
+					for _, nodeVal := range parsedTemplate.Nodes {
+						if span, ok := findPipeSpan(nodeVal, pipeName); ok {
+							pipeSpan = span
+							break
+						}
+					}
+					if (pipeSpan.Start == nil || pipeSpan.Start.File == nil) && len(parsedTemplate.Nodes) > 0 {
+						pipeSpan = parsedTemplate.Nodes[0].GetSourceSpan()
+					}
+					walker.makeTemplateDiagnostic(pipeSpan, ngdiagnostics.ErrorCode_MISSING_PIPE, msg)
+				}
+			}
+
+			walker.walkNodes(parsedTemplate.Nodes)
+			diagnostics = walker.diagnostics
+		}
+	}
+
+	return resolution, diagnostics
 }
 
 func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, analysisData any, resolutionData any, pool *compiler.ConstantPool, importMgr *imports.ImportManager, factory *ast.NodeFactory) ([]transform.CompileResult, []ast.Diagnostic) {
@@ -882,7 +1233,13 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 	if analysis.ParsedTemplate != nil {
 		parsedTemplate = *analysis.ParsedTemplate
 	} else {
-		parsedTemplate = render3.ParseTemplate(analysis.Template, "", nil)
+		var parseOpts *render3.ParseTemplateOptions
+		if analysis.PreserveWhitespaces != nil {
+			parseOpts = &render3.ParseTemplateOptions{
+				PreserveWhitespaces: analysis.PreserveWhitespaces,
+			}
+		}
+		parsedTemplate = render3.ParseTemplate(analysis.Template, "", parseOpts)
 	}
 
 	className := ""
@@ -970,6 +1327,8 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 		}
 	}
 
+	inputsOrder, outputsOrder := getPropDeclarationOrder(node)
+
 	meta := render3.R3ComponentMetadata[render3.R3TemplateDependency]{
 		RawImports: analysis.RawImports,
 		R3DirectiveMetadata: render3.R3DirectiveMetadata{
@@ -977,13 +1336,16 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 			Type: render3.R3Reference{
 				Value: output.NewReadVarExpr(className, nil, nil, nil),
 			},
-			Selector:     &analysis.Selector,
-			IsStandalone: analysis.IsStandalone,
-			Inputs:       analysis.Inputs,
-			Outputs:      analysis.Outputs,
-			Host:         analysis.Host,
-			Queries:      analysis.Queries,
-			ViewQueries:  analysis.ViewQueries,
+			Selector:         &analysis.Selector,
+			IsStandalone:     analysis.IsStandalone,
+			Inputs:           analysis.Inputs,
+			InputProperties:  inputsOrder,
+			Outputs:          analysis.Outputs,
+			OutputProperties: outputsOrder,
+			Host:             analysis.Host,
+			Queries:          analysis.Queries,
+			ViewQueries:      analysis.ViewQueries,
+			Providers:        analysis.Providers,
 		},
 		Template: render3.Template{
 			Children: parsedTemplate.Nodes,
@@ -991,6 +1353,9 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 		Declarations:             eagerDeps,
 		Styles:                   analysis.Styles,
 		Animations:               analysis.Animations,
+		Encapsulation:            analysis.Encapsulation,
+		ChangeDetection:          analysis.ChangeDetection,
+		ViewProviders:            analysis.ViewProviders,
 		HasDirectiveDependencies: hasDirectiveDeps,
 		Defer: render3.R3ComponentDeferMetadata{
 			Mode:   render3.DeferBlockDepsEmitMode_PerBlock,
@@ -1016,6 +1381,9 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 			Template:            meta.Template,
 			Declarations:        metaDeps,
 			Styles:              meta.Styles,
+			Encapsulation:       meta.Encapsulation,
+			ChangeDetection:     meta.ChangeDetection,
+			ViewProviders:       meta.ViewProviders,
 		}
 		compiled = partial.CompileDeclareComponentFromMetadata(metaPartial, parsedTemplate, partial.DeclareComponentTemplateInfo{
 			Content:  analysis.Template,
@@ -1071,31 +1439,107 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 		decMapEntries = append(decMapEntries, output.NewLiteralMapPropertyAssignment("args", output.NewLiteralArrayExpr(decArgs, nil, nil, nil), false))
 	}
 
+	propNamesMap := make(map[string]bool)
+	for propName := range analysis.PropDecorators {
+		propNamesMap[propName] = true
+	}
+	for propName, inputMeta := range analysis.Inputs {
+		if inputMeta.IsSignal {
+			propNamesMap[propName] = true
+		}
+	}
+
+	var sortedPropNames []string
+	for propName := range propNamesMap {
+		sortedPropNames = append(sortedPropNames, propName)
+	}
+	if len(inputsOrder) > 0 {
+		orderMap := make(map[string]int)
+		for i, prop := range inputsOrder {
+			orderMap[prop] = i
+		}
+		sort.Slice(sortedPropNames, func(i, j int) bool {
+			idxI, okI := orderMap[sortedPropNames[i]]
+			idxJ, okJ := orderMap[sortedPropNames[j]]
+			if okI && okJ {
+				return idxI < idxJ
+			}
+			if okI {
+				return true
+			}
+			if okJ {
+				return false
+			}
+			return sortedPropNames[i] < sortedPropNames[j]
+		})
+	} else {
+		sort.Strings(sortedPropNames)
+	}
+
 	var propDecorators []output.LiteralMapEntry
-	for propName, decNodes := range analysis.PropDecorators {
+	for _, propName := range sortedPropNames {
 		var decExprs []output.Expression
-		for _, decNode := range decNodes {
-			callExpr := decNode.AsDecorator().Expression.AsCallExpression()
-			if callExpr != nil && callExpr.Expression.Kind == ast.KindIdentifier {
-				id := callExpr.Expression.AsIdentifier().Text
-				var pDecArgs []output.Expression
-				if callExpr.Arguments != nil {
-					for _, arg := range callExpr.Arguments.Nodes {
-						pDecArgs = append(pDecArgs, output.NewWrappedNodeExpr(arg, nil, nil, nil))
+
+		// 1. Process actual decorators
+		if decNodes, exists := analysis.PropDecorators[propName]; exists {
+			for _, decNode := range decNodes {
+				callExpr := decNode.AsDecorator().Expression.AsCallExpression()
+				if callExpr != nil && callExpr.Expression.Kind == ast.KindIdentifier {
+					id := callExpr.Expression.AsIdentifier().Text
+					var pDecArgs []output.Expression
+					if callExpr.Arguments != nil {
+						for _, arg := range callExpr.Arguments.Nodes {
+							pDecArgs = append(pDecArgs, output.NewWrappedNodeExpr(arg, nil, nil, nil))
+						}
 					}
+					pMap := []output.LiteralMapEntry{
+						output.NewLiteralMapPropertyAssignment("type", output.NewExternalExpr(output.ExternalReference{
+							ModuleName: &coreModule,
+							Name:       &id,
+						}, nil, nil, nil, nil), false),
+					}
+					if len(pDecArgs) > 0 {
+						pMap = append(pMap, output.NewLiteralMapPropertyAssignment("args", output.NewLiteralArrayExpr(pDecArgs, nil, nil, nil), false))
+					}
+					decExprs = append(decExprs, output.NewLiteralMapExpr(pMap, nil, nil, nil))
 				}
-				pMap := []output.LiteralMapEntry{
-					output.NewLiteralMapPropertyAssignment("type", output.NewExternalExpr(output.ExternalReference{
-						ModuleName: &coreModule,
-						Name:       &id,
-					}, nil, nil, nil, nil), false),
-				}
-				if len(pDecArgs) > 0 {
-					pMap = append(pMap, output.NewLiteralMapPropertyAssignment("args", output.NewLiteralArrayExpr(pDecArgs, nil, nil, nil), false))
-				}
-				decExprs = append(decExprs, output.NewLiteralMapExpr(pMap, nil, nil, nil))
 			}
 		}
+
+		// 2. Process virtual decorators for signal inputs/models
+		if inputMeta, exists := analysis.Inputs[propName]; exists && inputMeta.IsSignal {
+			inputDecName := "Input"
+			inputArgsMap := []output.LiteralMapEntry{
+				output.NewLiteralMapPropertyAssignment("isSignal", output.NewLiteralExpr(true, nil, nil, nil), false),
+				output.NewLiteralMapPropertyAssignment("alias", output.NewLiteralExpr(inputMeta.BindingPropertyName, nil, nil, nil), false),
+				output.NewLiteralMapPropertyAssignment("required", output.NewLiteralExpr(inputMeta.Required, nil, nil, nil), false),
+			}
+			inputDecExpr := output.NewLiteralMapExpr([]output.LiteralMapEntry{
+				output.NewLiteralMapPropertyAssignment("type", output.NewExternalExpr(output.ExternalReference{
+					ModuleName: &coreModule,
+					Name:       &inputDecName,
+				}, nil, nil, nil, nil), false),
+				output.NewLiteralMapPropertyAssignment("args", output.NewLiteralArrayExpr([]output.Expression{
+					output.NewLiteralMapExpr(inputArgsMap, nil, nil, nil),
+				}, nil, nil, nil), false),
+			}, nil, nil, nil)
+			decExprs = append(decExprs, inputDecExpr)
+
+			if outputName, ok := analysis.Outputs[propName]; ok {
+				outputDecName := "Output"
+				outputDecExpr := output.NewLiteralMapExpr([]output.LiteralMapEntry{
+					output.NewLiteralMapPropertyAssignment("type", output.NewExternalExpr(output.ExternalReference{
+						ModuleName: &coreModule,
+						Name:       &outputDecName,
+					}, nil, nil, nil, nil), false),
+					output.NewLiteralMapPropertyAssignment("args", output.NewLiteralArrayExpr([]output.Expression{
+						output.NewLiteralExpr(outputName, nil, nil, nil),
+					}, nil, nil, nil), false),
+				}, nil, nil, nil)
+				decExprs = append(decExprs, outputDecExpr)
+			}
+		}
+
 		if len(decExprs) > 0 {
 			propDecorators = append(propDecorators, output.NewLiteralMapPropertyAssignment(propName, output.NewLiteralArrayExpr(decExprs, nil, nil, nil), false))
 		}
@@ -1518,3 +1962,555 @@ func (h *ComponentDecoratorHandler) GetSemanticReferenceSymbols(node *ast.ClassD
 	}
 	return r.SemanticReferenceSymbols
 }
+
+func parseEncapsulation(node *ast.Node) int {
+	if node == nil {
+		return 0
+	}
+	if node.Kind == ast.KindNumericLiteral {
+		t := node.AsNumericLiteral().Text
+		if t == "2" {
+			return 2
+		} else if t == "3" {
+			return 3
+		} else if t == "4" {
+			return 4
+		} else if t == "0" {
+			return 0
+		}
+	}
+	if node.Kind == ast.KindPropertyAccessExpression {
+		pa := node.AsPropertyAccessExpression()
+		nameNode := pa.Name()
+		if nameNode != nil && nameNode.Kind == ast.KindIdentifier {
+			name := nameNode.AsIdentifier().Text
+			switch name {
+			case "Emulated":
+				return 0
+			case "None":
+				return 2
+			case "ShadowDom":
+				return 3
+			case "ExperimentalIsolatedShadowDom":
+				return 4
+			}
+		}
+	}
+	return 0 // default
+}
+
+func parseChangeDetection(node *ast.Node) output.Expression {
+	if node == nil {
+		return nil
+	}
+	if node.Kind == ast.KindNumericLiteral {
+		t := node.AsNumericLiteral().Text
+		if t == "0" {
+			return output.NewLiteralExpr(0, nil, nil, nil)
+		} else if t == "1" {
+			return output.NewLiteralExpr(1, nil, nil, nil)
+		}
+	}
+	if node.Kind == ast.KindPropertyAccessExpression {
+		pa := node.AsPropertyAccessExpression()
+		nameNode := pa.Name()
+		if nameNode != nil && nameNode.Kind == ast.KindIdentifier {
+			name := nameNode.AsIdentifier().Text
+			switch name {
+			case "OnPush":
+				return output.NewLiteralExpr(0, nil, nil, nil)
+			case "Default":
+				return output.NewLiteralExpr(1, nil, nil, nil)
+			}
+		}
+	}
+	return output.NewWrappedNodeExpr(node, nil, nil, nil)
+}
+
+func findComponentPropertyNode(decorator *reflection.Decorator, propName string) *ast.Node {
+	if len(decorator.Args) == 0 {
+		return nil
+	}
+	arg := decorator.Args[0]
+	if arg.Kind != ast.KindObjectLiteralExpression {
+		return nil
+	}
+	obj := arg.AsObjectLiteralExpression()
+	if obj.Properties == nil {
+		return nil
+	}
+	for _, prop := range obj.Properties.Nodes {
+		if prop.Kind != ast.KindPropertyAssignment {
+			continue
+		}
+		assign := prop.AsPropertyAssignment()
+		if assign.Name().Kind == ast.KindIdentifier {
+			if assign.Name().AsIdentifier().Text == propName {
+				return assign.Initializer
+			}
+		}
+	}
+	return nil
+}
+
+type templateDiagnosticWalker struct {
+	diagnostics []ast.Diagnostic
+	h           *ComponentDecoratorHandler
+	node        *ast.ClassDeclaration
+	decorator   *reflection.Decorator
+	analysis    *ComponentAnalysis
+	scope       *ngscope.CompilationScope
+	bound       render3.BoundTarget[directiveMetaAdapter]
+}
+
+func (w *templateDiagnosticWalker) walkNodes(nodes []render3.Node) {
+	for _, node := range nodes {
+		w.walkNode(node)
+	}
+}
+
+func (w *templateDiagnosticWalker) walkNode(node render3.Node) {
+	if node == nil {
+		return
+	}
+	switch n := node.(type) {
+	case *render3.Element:
+		w.checkElement(n)
+		w.walkNodes(n.Children)
+	case *render3.Template:
+		w.checkTemplate(n)
+		w.walkNodes(n.Children)
+	}
+}
+
+func (w *templateDiagnosticWalker) makeTemplateDiagnostic(span parse_util.ParseSourceSpan, code ngdiagnostics.ErrorCode, msg string) {
+	templateNode := findComponentPropertyNode(w.decorator, "template")
+	if templateNode == nil {
+		templateNode = findComponentPropertyNode(w.decorator, "templateUrl")
+	}
+	var diagNode *ast.Node
+	if templateNode != nil {
+		cloned := *templateNode
+		if findComponentPropertyNode(w.decorator, "template") != nil && span.Start != nil && span.Start.File != nil {
+			pos := templateNode.Pos() + 1 + span.Start.Offset
+			end := templateNode.Pos() + 1 + span.End.Offset
+			cloned.Loc = core.NewTextRange(pos, end)
+		}
+		diagNode = &cloned
+	} else {
+		diagNode = w.node.AsNode()
+	}
+	w.diagnostics = append(w.diagnostics, *ngdiagnostics.MakeDiagnostic(
+		code,
+		diagNode,
+		msg,
+		nil,
+		tsdiagnostics.CategoryError,
+	))
+}
+
+func (w *templateDiagnosticWalker) checkElement(n *render3.Element) {
+	directives := w.bound.GetDirectivesOfNode(n)
+
+	// 1. Unknown Element Check
+	isWebComponent := strings.Contains(n.Name, "-")
+	isStandardHtml := render3.ElementRegistry.HasElement(n.Name, nil)
+
+	if len(directives) == 0 && !isStandardHtml && n.Name != "ng-container" && n.Name != "ng-content" && n.Name != "ng-template" {
+		hostIsStandalone := w.analysis.IsStandalone
+		schemasText := "'@Component.schemas'"
+		if !hostIsStandalone {
+			schemasText = "'@NgModule.schemas'"
+		}
+		importsExplanation := "included in the '@Component.imports' of this component"
+		if !hostIsStandalone {
+			importsExplanation = "part of this module"
+		}
+		msg := fmt.Sprintf("'%s' is not a known element:\n", n.Name)
+		msg += fmt.Sprintf("1. If '%s' is an Angular component, then verify that it is %s.\n", n.Name, importsExplanation)
+		if isWebComponent {
+			msg += fmt.Sprintf("2. If '%s' is a Web Component then add 'CUSTOM_ELEMENTS_SCHEMA' to the %s of this component to suppress this message.", n.Name, schemasText)
+		} else {
+			msg += fmt.Sprintf("2. To allow any element add 'NO_ERRORS_SCHEMA' to the %s of this component.", schemasText)
+		}
+		w.makeTemplateDiagnostic(n.GetSourceSpan(), ngdiagnostics.ErrorCode_SCHEMA_INVALID_ELEMENT, msg)
+	}
+
+	// 2. Unknown Property / Attribute Binding Check
+	for _, prop := range n.Inputs {
+		if prop.Type == 4 || prop.Type == 6 {
+			continue
+		}
+		matched := false
+		for _, dir := range directives {
+			for _, bindingName := range dir.meta.Inputs {
+				if bindingName == prop.Name {
+					matched = true
+					break
+				}
+			}
+			if matched {
+				break
+			}
+		}
+		if matched {
+			continue
+		}
+
+		report := render3.ElementRegistry.ValidateProperty(prop.Name)
+		if report.Error {
+			w.makeTemplateDiagnostic(prop.SourceSpan, ngdiagnostics.ErrorCode_SCHEMA_INVALID_ATTRIBUTE, *report.Msg)
+			continue
+		}
+
+		if !render3.ElementRegistry.HasProperty(n.Name, prop.Name, nil) && n.Name != "ng-container" && n.Name != "ng-template" {
+			hostIsStandalone := w.analysis.IsStandalone
+			decorator := "@Component"
+			if !hostIsStandalone {
+				decorator = "@NgModule"
+			}
+			schemas := fmt.Sprintf("'%s.schemas'", decorator)
+			errorMsg := fmt.Sprintf("Can't bind to '%s' since it isn't a known property of '%s'.", prop.Name, n.Name)
+			if strings.HasPrefix(n.Name, "ng-") {
+				errorMsg += fmt.Sprintf("\n1. If '%s' is an Angular directive, then add 'CommonModule' to the '%s.imports' of this component.", prop.Name, decorator)
+				errorMsg += fmt.Sprintf("\n2. To allow any property add 'NO_ERRORS_SCHEMA' to the %s of this component.", schemas)
+			} else if strings.Contains(n.Name, "-") {
+				importsExplanation := "included in the '@Component.imports' of this component"
+				if !hostIsStandalone {
+					importsExplanation = "part of this module"
+				}
+				errorMsg += fmt.Sprintf("\n1. If '%s' is an Angular component and it has '%s' input, then verify that it is %s.", n.Name, prop.Name, importsExplanation)
+				errorMsg += fmt.Sprintf("\n2. If '%s' is a Web Component then add 'CUSTOM_ELEMENTS_SCHEMA' to the %s of this component to suppress this message.", n.Name, schemas)
+				errorMsg += fmt.Sprintf("\n3. To allow any property add 'NO_ERRORS_SCHEMA' to the %s of this component.", schemas)
+			}
+			w.makeTemplateDiagnostic(prop.SourceSpan, ngdiagnostics.ErrorCode_SCHEMA_INVALID_ATTRIBUTE, errorMsg)
+		}
+	}
+
+	// 3. Required Inputs Missing Check
+	for _, dir := range directives {
+		var missingInputs []string
+		for _, reqInput := range dir.meta.RequiredInputs {
+			bound := false
+			for _, input := range n.Inputs {
+				if input.Name == reqInput {
+					bound = true
+					break
+				}
+			}
+			if bound {
+				continue
+			}
+			for _, attr := range n.Attributes {
+				if attr.Name == reqInput {
+					bound = true
+					break
+				}
+			}
+			if bound {
+				continue
+			}
+			missingInputs = append(missingInputs, reqInput)
+		}
+
+		if len(missingInputs) > 0 {
+			var quoted []string
+			for _, mi := range missingInputs {
+				quoted = append(quoted, fmt.Sprintf("'%s'", mi))
+			}
+			pluralStr := ""
+			if len(missingInputs) > 1 {
+				pluralStr = "s"
+			}
+			dirKind := "directive"
+			if dir.meta.IsComponent {
+				dirKind = "component"
+			}
+			msg := fmt.Sprintf("Required input%s %s from %s %s must be specified.",
+				pluralStr,
+				strings.Join(quoted, ", "),
+				dirKind,
+				dir.meta.Name,
+			)
+			w.makeTemplateDiagnostic(n.GetSourceSpan(), ngdiagnostics.ErrorCode_MISSING_REQUIRED_INPUTS, msg)
+		}
+	}
+
+	// 4. Missing Reference Target Check
+	for _, ref := range n.References {
+		if ref.Value != "" {
+			found := false
+			for _, dir := range directives {
+				for _, exportAs := range dir.meta.ExportAs {
+					if exportAs == ref.Value {
+						found = true
+						break
+					}
+				}
+				if found {
+					break
+				}
+			}
+			if !found {
+				msg := fmt.Sprintf("No directive found with exportAs '%s'.", ref.Value)
+				w.makeTemplateDiagnostic(ref.SourceSpan, ngdiagnostics.ErrorCode_MISSING_REFERENCE_TARGET, msg)
+			}
+		}
+	}
+
+	// 5. Invalid Banana in Box Check
+	for _, event := range n.Outputs {
+		if strings.HasPrefix(event.Name, "[") && strings.HasSuffix(event.Name, "]") {
+			boundSyntax := event.SourceSpan.ToString()
+			expectedBoundSyntax := strings.ReplaceAll(boundSyntax, "("+event.Name+")", "[("+event.Name[1:len(event.Name)-1]+")]")
+			msg := fmt.Sprintf("In the two-way binding syntax the parentheses should be inside the brackets, ex. '%s'", expectedBoundSyntax)
+			w.makeTemplateDiagnostic(event.SourceSpan, ngdiagnostics.ErrorCode_INVALID_BANANA_IN_BOX, msg)
+		}
+	}
+}
+
+func (w *templateDiagnosticWalker) checkTemplate(n *render3.Template) {
+	directives := w.bound.GetDirectivesOfNode(n)
+
+	// 1. Unknown Property / Attribute Binding Check on ng-template
+	for _, prop := range n.Inputs {
+		matched := false
+		for _, dir := range directives {
+			for _, bindingName := range dir.meta.Inputs {
+				if bindingName == prop.Name {
+					matched = true
+					break
+				}
+			}
+			if matched {
+				break
+			}
+		}
+		if matched {
+			continue
+		}
+
+		report := render3.ElementRegistry.ValidateProperty(prop.Name)
+		if report.Error {
+			w.makeTemplateDiagnostic(prop.SourceSpan, ngdiagnostics.ErrorCode_SCHEMA_INVALID_ATTRIBUTE, *report.Msg)
+			continue
+		}
+
+		if !render3.ElementRegistry.HasProperty("ng-template", prop.Name, nil) {
+			hostIsStandalone := w.analysis.IsStandalone
+			decorator := "@Component"
+			if !hostIsStandalone {
+				decorator = "@NgModule"
+			}
+			schemas := fmt.Sprintf("'%s.schemas'", decorator)
+			errorMsg := fmt.Sprintf("Can't bind to '%s' since it isn't a known property of 'ng-template'.", prop.Name)
+			errorMsg += fmt.Sprintf("\n1. If '%s' is an Angular directive, then add 'CommonModule' to the '%s.imports' of this component.", prop.Name, decorator)
+			errorMsg += fmt.Sprintf("\n2. To allow any property add 'NO_ERRORS_SCHEMA' to the %s of this component.", schemas)
+			w.makeTemplateDiagnostic(prop.SourceSpan, ngdiagnostics.ErrorCode_SCHEMA_INVALID_ATTRIBUTE, errorMsg)
+		}
+	}
+
+	// 2. Required Inputs Missing Check
+	for _, dir := range directives {
+		var missingInputs []string
+		for _, reqInput := range dir.meta.RequiredInputs {
+			bound := false
+			for _, input := range n.Inputs {
+				if input.Name == reqInput {
+					bound = true
+					break
+				}
+			}
+			if bound {
+				continue
+			}
+			for _, attr := range n.Attributes {
+				if attr.Name == reqInput {
+					bound = true
+					break
+				}
+			}
+			if bound {
+				continue
+			}
+			missingInputs = append(missingInputs, reqInput)
+		}
+
+		if len(missingInputs) > 0 {
+			var quoted []string
+			for _, mi := range missingInputs {
+				quoted = append(quoted, fmt.Sprintf("'%s'", mi))
+			}
+			pluralStr := ""
+			if len(missingInputs) > 1 {
+				pluralStr = "s"
+			}
+			dirKind := "directive"
+			if dir.meta.IsComponent {
+				dirKind = "component"
+			}
+			msg := fmt.Sprintf("Required input%s %s from %s %s must be specified.",
+				pluralStr,
+				strings.Join(quoted, ", "),
+				dirKind,
+				dir.meta.Name,
+			)
+			w.makeTemplateDiagnostic(n.GetSourceSpan(), ngdiagnostics.ErrorCode_MISSING_REQUIRED_INPUTS, msg)
+		}
+	}
+
+	// 3. Missing Reference Target Check
+	for _, ref := range n.References {
+		if ref.Value != "" {
+			found := false
+			for _, dir := range directives {
+				for _, exportAs := range dir.meta.ExportAs {
+					if exportAs == ref.Value {
+						found = true
+						break
+					}
+				}
+				if found {
+					break
+				}
+			}
+			if !found {
+				msg := fmt.Sprintf("No directive found with exportAs '%s'.", ref.Value)
+				w.makeTemplateDiagnostic(ref.SourceSpan, ngdiagnostics.ErrorCode_MISSING_REFERENCE_TARGET, msg)
+			}
+		}
+	}
+
+	// 4. Invalid Banana in Box Check
+	for _, event := range n.Outputs {
+		if strings.HasPrefix(event.Name, "[") && strings.HasSuffix(event.Name, "]") {
+			boundSyntax := event.SourceSpan.ToString()
+			expectedBoundSyntax := strings.ReplaceAll(boundSyntax, "("+event.Name+")", "[("+event.Name[1:len(event.Name)-1]+")]")
+			msg := fmt.Sprintf("In the two-way binding syntax the parentheses should be inside the brackets, ex. '%s'", expectedBoundSyntax)
+			w.makeTemplateDiagnostic(event.SourceSpan, ngdiagnostics.ErrorCode_INVALID_BANANA_IN_BOX, msg)
+		}
+	}
+}
+
+type pipeSpanCollector struct {
+	expression_parser.RecursiveAstVisitor
+	targetName string
+	foundNode  *expression_parser.BindingPipe
+}
+
+func (c *pipeSpanCollector) VisitPipe(ast *expression_parser.BindingPipe, context any) any {
+	if ast.Name == c.targetName {
+		c.foundNode = ast
+		return nil
+	}
+	return c.RecursiveAstVisitor.VisitPipe(ast, context)
+}
+
+func findPipeSpan(node render3.Node, pipeName string) (parse_util.ParseSourceSpan, bool) {
+	collector := &pipeSpanCollector{targetName: pipeName}
+	switch n := node.(type) {
+	case *render3.BoundText:
+		collector.Visit(n.Value, nil)
+		if collector.foundNode != nil {
+			return n.GetSourceSpan(), true
+		}
+	case *render3.Element:
+		for _, input := range n.Inputs {
+			if input != nil {
+				collector.Visit(input.Value, nil)
+				if collector.foundNode != nil {
+					return input.GetSourceSpan(), true
+				}
+			}
+		}
+		for _, child := range n.Children {
+			if span, ok := findPipeSpan(child, pipeName); ok {
+				return span, true
+			}
+		}
+	case *render3.Template:
+		for _, attr := range n.TemplateAttrs {
+			if bound, ok := attr.(*render3.BoundAttribute); ok && bound != nil {
+				collector.Visit(bound.Value, nil)
+				if collector.foundNode != nil {
+					return bound.GetSourceSpan(), true
+				}
+			}
+		}
+		for _, input := range n.Inputs {
+			if input != nil {
+				collector.Visit(input.Value, nil)
+				if collector.foundNode != nil {
+					return input.GetSourceSpan(), true
+				}
+			}
+		}
+		for _, child := range n.Children {
+			if span, ok := findPipeSpan(child, pipeName); ok {
+				return span, true
+			}
+		}
+	}
+	return parse_util.ParseSourceSpan{}, false
+}
+
+func parseQueryPredicate(argNode *ast.Node) interface{} {
+	if argNode == nil {
+		return []string{""}
+	}
+	if argNode.Kind == ast.KindStringLiteral {
+		return []string{argNode.AsStringLiteral().Text}
+	}
+	if argNode.Kind == ast.KindIdentifier {
+		return render3.MaybeForwardRefExpression{
+			Expression: output.NewReadVarExpr(argNode.AsIdentifier().Text, nil, nil, nil),
+			ForwardRef: render3.ForwardRefHandlingNone,
+		}
+	}
+	if argNode.Kind == ast.KindCallExpression {
+		call := argNode.AsCallExpression()
+		if call.Expression.Kind == ast.KindIdentifier && call.Expression.AsIdentifier().Text == "forwardRef" {
+			if call.Arguments != nil && len(call.Arguments.Nodes) > 0 {
+				fnArg := call.Arguments.Nodes[0]
+				var returnExpr *ast.Node
+				if fnArg.Kind == ast.KindArrowFunction {
+					arrow := fnArg.AsArrowFunction()
+					if arrow.Body != nil {
+						if arrow.Body.Kind == ast.KindIdentifier {
+							returnExpr = arrow.Body
+						} else if arrow.Body.Kind == ast.KindBlock {
+							block := arrow.Body.AsBlock()
+							if block.Statements != nil && len(block.Statements.Nodes) > 0 {
+								stmt := block.Statements.Nodes[0]
+								if stmt.Kind == ast.KindReturnStatement {
+									returnExpr = stmt.AsReturnStatement().Expression
+								}
+							}
+						}
+					}
+				} else if fnArg.Kind == ast.KindFunctionExpression {
+					fn := fnArg.AsFunctionExpression()
+					if fn.Body != nil && fn.Body.Kind == ast.KindBlock {
+						block := fn.Body.AsBlock()
+						if block.Statements != nil && len(block.Statements.Nodes) > 0 {
+							stmt := block.Statements.Nodes[0]
+							if stmt.Kind == ast.KindReturnStatement {
+								returnExpr = stmt.AsReturnStatement().Expression
+							}
+						}
+					}
+				}
+
+				if returnExpr != nil && returnExpr.Kind == ast.KindIdentifier {
+					return render3.MaybeForwardRefExpression{
+						Expression: output.NewReadVarExpr(returnExpr.AsIdentifier().Text, nil, nil, nil),
+						ForwardRef: render3.ForwardRefHandlingWrapped,
+					}
+				}
+			}
+		}
+	}
+	return []string{""}
+}
+
+

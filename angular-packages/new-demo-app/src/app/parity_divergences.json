@@ -1,0 +1,30 @@
+[
+  {
+    "id": "DIV-001",
+    "name": "Dynamic Declarations",
+    "type": "unsupported Angular TestBed feature",
+    "description": "GoTestBed does not support declaring components dynamically in configureTestingModule via the declarations array. Components must be standalone compiled by go-ngc.",
+    "mitigation": "Convert components to standalone: true, or compile them beforehand and import them via the imports array."
+  },
+  {
+    "id": "DIV-002",
+    "name": "Dynamic Component Overrides",
+    "type": "unsupported Angular TestBed feature",
+    "description": "GoTestBed does not support overrideTemplate(), overrideComponent(), or overrideDirective() APIs at runtime. All transformations must be resolved at compile time.",
+    "mitigation": "Use dependency injection provider overrides via overrideProvider(), or compile distinct mock components in separate test suites."
+  },
+  {
+    "id": "DIV-003",
+    "name": "Zone-less change detection checkNoChanges checks",
+    "type": "runtime harness bug",
+    "description": "Direct synchronous mutations of component properties in tests followed by manual detectChanges() can sometimes trigger ExpressionChangedAfterItHasBeenCheckedError in standard TestBed when running in zone-less mode, while GoTestBed's simpler fixture architecture is more permissive.",
+    "mitigation": "Use componentRef.setInput() to safely propagate input changes, or dispatch real DOM events (like Event('input')) to let Angular forms process changes naturally."
+  },
+  {
+    "id": "DIV-004",
+    "name": "Implicit microtask / macrotask tracking",
+    "type": "jsdom/browser limitation",
+    "description": "Standard TestBed works with zone.js to track asynchronous tasks (like setTimeout or native Promises) automatically during whenStable(). GoTestBed is zone-less by default and checks isStable, which may require manual triggers or ticks for non-Angular async tasks.",
+    "mitigation": "Use standard promises, async/await, or manual time mocking (e.g. vi.useFakeTimers()) in Vitest instead of zone-based wait utilities."
+  }
+]

@@ -1,6 +1,7 @@
 package src
 
 import (
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/perf"
 	"github.com/microsoft/typescript-go/internal/ast"
 )
 
@@ -221,3 +222,14 @@ func (c *NgCompiler) setup() {
 	// c.IgnoreForDiagnostics = new Set(...)
 	// c.IgnoreForEmit = c.adapter.ignoreForEmit
 }
+
+func (c *NgCompiler) GetPerfResults() map[string]int64 {
+	if c.livePerfRecorder != nil {
+		if rec, ok := c.livePerfRecorder.(*perf.ActivePerfRecorder); ok {
+			res := rec.Finalize()
+			return res.Phases
+		}
+	}
+	return nil
+}
+

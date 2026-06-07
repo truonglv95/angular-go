@@ -35,6 +35,7 @@ type DirectiveMeta struct {
 	Standalone   bool
 	IsComponent  bool
 	Imports      []Reference
+	RequiredInputs []string
 }
 
 // NgModuleMeta represents metadata collected for an NgModule.
@@ -45,6 +46,7 @@ type NgModuleMeta struct {
 	Imports      []Reference
 	Exports      []Reference
 	Bootstrap    []Reference
+	Schemas      []Reference
 }
 
 // PipeMeta represents metadata collected for a Pipe.

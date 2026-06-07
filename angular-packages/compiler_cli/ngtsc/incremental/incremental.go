@@ -281,3 +281,19 @@ func (c *IncrementalCompilation) RecordDependencyAnalysisFailure(file any) any {
 	c.State.DepGraph.RecordDependencyAnalysisFailure(file)
 	return nil
 }
+
+func (c *IncrementalCompilation) IsFileAffected(fileName string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.affectedFiles == nil {
+		return true
+	}
+	return c.affectedFiles[fileName]
+}
+
+func (c *IncrementalCompilation) AffectedFiles() map[string]bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.affectedFiles
+}
+

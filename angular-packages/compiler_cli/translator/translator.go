@@ -6,6 +6,7 @@ import (
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/imports"
 	"github.com/microsoft/typescript-go/internal/ast"
 	"reflect"
+	"strconv"
 	"strings"
 )
 
@@ -253,7 +254,7 @@ func (v *ExpressionTranslatorVisitor) VisitLiteralExpr(astNode *output.LiteralEx
 		// Go allows creating a NumericLiteral directly with a string
 		return v.factory.NewNumericLiteral(fmt.Sprintf("%d", val), 0)
 	case float64:
-		return v.factory.NewNumericLiteral(fmt.Sprintf("%f", val), 0)
+		return v.factory.NewNumericLiteral(strconv.FormatFloat(val, 'f', -1, 64), 0)
 	case bool:
 		if val {
 			return v.factory.NewToken(ast.KindTrueKeyword)

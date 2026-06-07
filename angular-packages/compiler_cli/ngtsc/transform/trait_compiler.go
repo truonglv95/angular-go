@@ -101,8 +101,15 @@ func (tc *TraitCompiler) AnalyzeSync(sf *ast.SourceFile) {
 	}
 	tc.recordFileImports(sf)
 
+	isAffected := false
+	if tc.DepTracker != nil {
+		if comp, ok := tc.DepTracker.(interface{ IsFileAffected(string) bool }); ok {
+			isAffected = comp.IsFileAffected(sf.FileName())
+		}
+	}
+
 	tc.mu.Lock()
-	if tc.oldTc != nil && tc.oldTc.files[sf] {
+	if !isAffected && tc.oldTc != nil && tc.oldTc.files[sf] {
 		reused := false
 		sf.AsNode().ForEachChild(func(node *ast.Node) bool {
 			if node.Kind == ast.KindClassDeclaration {
@@ -228,8 +235,15 @@ func (tc *TraitCompiler) AnalyzeSyncLocal(sf *ast.SourceFile) {
 	}
 	tc.recordFileImports(sf)
 
+	isAffected := false
+	if tc.DepTracker != nil {
+		if comp, ok := tc.DepTracker.(interface{ IsFileAffected(string) bool }); ok {
+			isAffected = comp.IsFileAffected(sf.FileName())
+		}
+	}
+
 	tc.mu.Lock()
-	if tc.oldTc != nil && tc.oldTc.files[sf] {
+	if !isAffected && tc.oldTc != nil && tc.oldTc.files[sf] {
 		reused := false
 		sf.AsNode().ForEachChild(func(node *ast.Node) bool {
 			if node.Kind == ast.KindClassDeclaration {
@@ -542,6 +556,10 @@ func (tc *TraitCompiler) UpdateSourceFile(sf *ast.SourceFile, factory *ast.NodeF
 			}
 			tc.mu.Unlock()
 
+			if transformClassProperties(classDecl, factory) {
+				hasTransformedClass = true
+			}
+
 			traits := tc.classes[classDecl]
 
 			var additionalMembers []*ast.Node
@@ -654,6 +672,23 @@ func (tc *TraitCompiler) UpdateSourceFile(sf *ast.SourceFile, factory *ast.NodeF
 						}
 					}
 					classDecl.Modifiers().Nodes = newMods
+					classDecl.Modifiers().ModifierFlags = ast.ModifiersToFlags(newMods)
+				}
+
+				// Strip decorators from class members (like @Input, @Output, @ViewChild, @ContentChild, etc.)
+				if classDecl.Members != nil {
+					for _, member := range classDecl.Members.Nodes {
+						if member.Modifiers() != nil {
+							var newMemberMods []*ast.Node
+							for _, mod := range member.Modifiers().Nodes {
+								if mod.Kind != ast.KindDecorator {
+									newMemberMods = append(newMemberMods, mod)
+								}
+							}
+							member.Modifiers().Nodes = newMemberMods
+							member.Modifiers().ModifierFlags = ast.ModifiersToFlags(newMemberMods)
+						}
+					}
 				}
 
 				// Fix missing parent pointers in the newly generated AST nodes
@@ -936,6 +971,12 @@ func (tc *TraitCompiler) GetDepGraph() *incremental.FileDependencyGraph {
 	return incremental.NewFileDependencyGraph()
 }
 
+func (tc *TraitCompiler) GetClasses() map[*ast.ClassDeclaration][]*Trait {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return tc.classes
+}
+
 func (tc *TraitCompiler) GetDiagnostics() map[string][]ast.Diagnostic {
 	tc.mu.RLock()
 	defer tc.mu.RUnlock()
@@ -955,3 +996,154 @@ func (tc *TraitCompiler) GetDiagnostics() map[string][]ast.Diagnostic {
 	}
 	return fileDiags
 }
+
+func transformClassProperties(classDecl *ast.ClassDeclaration, factory *ast.NodeFactory) bool {
+	if classDecl.Members == nil {
+		return false
+	}
+	transformed := false
+	for _, member := range classDecl.Members.Nodes {
+		if member.Kind != ast.KindPropertyDeclaration {
+			continue
+		}
+		prop := member.AsPropertyDeclaration()
+		propName := ""
+		if prop.Name() != nil && prop.Name().Kind == ast.KindIdentifier {
+			propName = prop.Name().AsIdentifier().Text
+		}
+		if propName == "" || prop.Initializer == nil {
+			continue
+		}
+		initNode := (*ast.Node)(prop.Initializer)
+		if initNode.Kind != ast.KindCallExpression {
+			continue
+		}
+		callExpr := initNode.AsCallExpression()
+		expr := callExpr.Expression
+
+		isSignal := false
+		isModel := false
+		isRequired := false
+
+		if expr.Kind == ast.KindIdentifier {
+			text := expr.AsIdentifier().Text
+			if text == "input" {
+				isSignal = true
+			} else if text == "model" {
+				isModel = true
+			}
+		} else if expr.Kind == ast.KindPropertyAccessExpression {
+			pae := expr.AsPropertyAccessExpression()
+			if pae.Expression.Kind == ast.KindIdentifier {
+				text := pae.Expression.AsIdentifier().Text
+				if text == "input" {
+					isSignal = true
+					if pae.Name() != nil && pae.Name().AsIdentifier().Text == "required" {
+						isRequired = true
+					}
+				} else if text == "model" {
+					isModel = true
+					if pae.Name() != nil && pae.Name().AsIdentifier().Text == "required" {
+						isRequired = true
+					}
+				}
+			}
+		}
+
+		if !isSignal && !isModel {
+			continue
+		}
+
+		numArgs := 0
+		if callExpr.Arguments != nil {
+			numArgs = len(callExpr.Arguments.Nodes)
+		}
+
+		if numArgs == 0 {
+			var condExpr *ast.Node
+			if isRequired {
+				obj := factory.NewObjectLiteralExpression(factory.NewNodeList([]*ast.Node{
+					factory.NewPropertyAssignment(nil, (*ast.PropertyName)(factory.NewIdentifier("debugName")), nil, nil, (*ast.Expression)(factory.NewStringLiteral(propName, 0))),
+				}), false)
+				arrTrue := factory.NewArrayLiteralExpression(factory.NewNodeList([]*ast.Node{obj.AsNode()}), false)
+				arrFalse := factory.NewIdentifier("/* istanbul ignore next */ []").AsNode()
+				condExpr = factory.NewConditionalExpression(
+					(*ast.Expression)(factory.NewIdentifier("ngDevMode")),
+					(*ast.QuestionToken)(factory.NewToken(ast.KindQuestionToken)),
+					(*ast.Expression)(arrTrue.AsNode()),
+					(*ast.ColonToken)(factory.NewToken(ast.KindColonToken)),
+					(*ast.Expression)(arrFalse),
+				).AsNode()
+			} else {
+				obj := factory.NewObjectLiteralExpression(factory.NewNodeList([]*ast.Node{
+					factory.NewPropertyAssignment(nil, (*ast.PropertyName)(factory.NewIdentifier("debugName")), nil, nil, (*ast.Expression)(factory.NewStringLiteral(propName, 0))),
+				}), false)
+				arrTrue := factory.NewArrayLiteralExpression(factory.NewNodeList([]*ast.Node{
+					factory.NewIdentifier("undefined").AsNode(),
+					obj.AsNode(),
+				}), false)
+				arrFalse := factory.NewIdentifier("/* istanbul ignore next */ []").AsNode()
+				condExpr = factory.NewConditionalExpression(
+					(*ast.Expression)(factory.NewIdentifier("ngDevMode")),
+					(*ast.QuestionToken)(factory.NewToken(ast.KindQuestionToken)),
+					(*ast.Expression)(arrTrue.AsNode()),
+					(*ast.ColonToken)(factory.NewToken(ast.KindColonToken)),
+					(*ast.Expression)(arrFalse),
+				).AsNode()
+			}
+			condExpr = factory.NewParenthesizedExpression((*ast.Expression)(condExpr))
+			spread := factory.NewSpreadElement((*ast.Expression)(condExpr))
+			callExpr.Arguments = (*ast.NodeList)(factory.NewNodeList([]*ast.Node{spread.AsNode()}))
+			transformed = true
+		} else {
+			var optionsNode *ast.Node
+			if isRequired {
+				optionsNode = callExpr.Arguments.Nodes[0]
+			} else if numArgs > 1 {
+				optionsNode = callExpr.Arguments.Nodes[1]
+			}
+
+			if optionsNode != nil && optionsNode.Kind == ast.KindObjectLiteralExpression {
+				objTrue := factory.NewObjectLiteralExpression(factory.NewNodeList([]*ast.Node{
+					factory.NewPropertyAssignment(nil, (*ast.PropertyName)(factory.NewIdentifier("debugName")), nil, nil, (*ast.Expression)(factory.NewStringLiteral(propName, 0))),
+				}), false)
+				objFalse := factory.NewIdentifier("/* istanbul ignore next */ {}").AsNode()
+				cond := factory.NewConditionalExpression(
+					(*ast.Expression)(factory.NewIdentifier("ngDevMode")),
+					(*ast.QuestionToken)(factory.NewToken(ast.KindQuestionToken)),
+					(*ast.Expression)(objTrue.AsNode()),
+					(*ast.ColonToken)(factory.NewToken(ast.KindColonToken)),
+					(*ast.Expression)(objFalse),
+				)
+				condParenthesized := factory.NewParenthesizedExpression((*ast.Expression)(cond.AsNode()))
+				spread := factory.NewSpreadAssignment((*ast.Expression)(condParenthesized))
+				
+				objExpr := optionsNode.AsObjectLiteralExpression()
+				var newProps []*ast.Node
+				newProps = append(newProps, spread.AsNode())
+				newProps = append(newProps, objExpr.Properties.Nodes...)
+				objExpr.Properties = (*ast.NodeList)(factory.NewNodeList(newProps))
+				transformed = true
+			} else if !isRequired && numArgs == 1 {
+				obj := factory.NewObjectLiteralExpression(factory.NewNodeList([]*ast.Node{
+					factory.NewPropertyAssignment(nil, (*ast.PropertyName)(factory.NewIdentifier("debugName")), nil, nil, (*ast.Expression)(factory.NewStringLiteral(propName, 0))),
+				}), false)
+				arrTrue := factory.NewArrayLiteralExpression(factory.NewNodeList([]*ast.Node{obj.AsNode()}), false)
+				arrFalse := factory.NewIdentifier("/* istanbul ignore next */ []").AsNode()
+				condExpr := factory.NewConditionalExpression(
+					(*ast.Expression)(factory.NewIdentifier("ngDevMode")),
+					(*ast.QuestionToken)(factory.NewToken(ast.KindQuestionToken)),
+					(*ast.Expression)(arrTrue.AsNode()),
+					(*ast.ColonToken)(factory.NewToken(ast.KindColonToken)),
+					(*ast.Expression)(arrFalse),
+				).AsNode()
+				condExpr = factory.NewParenthesizedExpression((*ast.Expression)(condExpr))
+				spread := factory.NewSpreadElement((*ast.Expression)(condExpr))
+				callExpr.Arguments.Nodes = append(callExpr.Arguments.Nodes, spread.AsNode())
+				transformed = true
+			}
+		}
+	}
+	return transformed
+}
+

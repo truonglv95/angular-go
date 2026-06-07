@@ -5,19 +5,27 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 
+	"github.com/microsoft/typescript-go/angular-packages/compiler/render3"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/annotations"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/annotations_local"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/incremental"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/incremental/semantic_graph"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/metadata"
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/perf"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/scope"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/transform"
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/typecheck"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/reflection"
 	"github.com/microsoft/typescript-go/internal/ast"
+	"github.com/microsoft/typescript-go/internal/binder"
 	"github.com/microsoft/typescript-go/internal/checker"
 	"github.com/microsoft/typescript-go/internal/compiler"
+	"github.com/microsoft/typescript-go/internal/core"
+	"github.com/microsoft/typescript-go/internal/parser"
+	"github.com/microsoft/typescript-go/internal/tspath"
 )
 
 type NgCompiler struct {
@@ -38,6 +46,8 @@ type NgCompiler struct {
 	analyzed bool
 	resolved bool
 	prepared bool
+
+	perfRecorder *perf.ActivePerfRecorder
 }
 
 func NewNgCompiler(tsProgram *compiler.Program, options NgCompilerOptions, oldCompiler *NgCompiler) (*NgCompiler, error) {
@@ -108,6 +118,14 @@ func NewNgCompiler(tsProgram *compiler.Program, options NgCompilerOptions, oldCo
 	}
 	traitCompiler.DepTracker = incrementalComp
 
+	var affectedFiles map[string]bool
+	if incrementalComp != nil && incrementalComp.AffectedFiles() != nil {
+		affectedFiles = make(map[string]bool)
+		for k, v := range incrementalComp.AffectedFiles() {
+			affectedFiles[k] = v
+		}
+	}
+
 	return &NgCompiler{
 		tsProgram:              tsProgram,
 		checker:                chk,
@@ -115,6 +133,7 @@ func NewNgCompiler(tsProgram *compiler.Program, options NgCompilerOptions, oldCo
 		handlers:               handlers,
 		traitCompiler:          traitCompiler,
 		incrementalCompilation: incrementalComp,
+		affectedFiles:          affectedFiles,
 		metaRegistry:           localMetaRegistry,
 		scopeRegistry:          scopeRegistry,
 		compilationMode:        options.CompilationMode,
@@ -125,6 +144,10 @@ func NewNgCompiler(tsProgram *compiler.Program, options NgCompilerOptions, oldCo
 // AnalyzeSync scans all source files and runs decorator detection + analysis.
 // B#1 FIX: Both global and local modes now run in parallel using a worker pool.
 func (c *NgCompiler) AnalyzeSync() []*ast.Diagnostic {
+	if c.perfRecorder != nil {
+		c.perfRecorder.Phase(perf.PerfPhase_Analysis)
+		defer c.perfRecorder.Phase(perf.PerfPhase_Unaccounted)
+	}
 	if c.analyzed {
 		return nil
 	}
@@ -196,6 +219,10 @@ func (c *NgCompiler) AnalyzeSync() []*ast.Diagnostic {
 }
 
 func (c *NgCompiler) Resolve() []*ast.Diagnostic {
+	if c.perfRecorder != nil {
+		c.perfRecorder.Phase(perf.PerfPhase_Resolve)
+		defer c.perfRecorder.Phase(perf.PerfPhase_Unaccounted)
+	}
 	if c.resolved {
 		return nil
 	}
@@ -209,17 +236,66 @@ func (c *NgCompiler) Resolve() []*ast.Diagnostic {
 		c.mergeSemanticAffectedFiles(res)
 	}
 
+	var finalDiags []*ast.Diagnostic
+	var tcbDiags map[string][]*ast.Diagnostic
+	if c.options.StrictTemplates {
+		tcbDiags = c.runTemplateTypeChecking()
+	}
+
+	// Map of all diagnostics per file
+	fileDiagsMap := make(map[string][]*ast.Diagnostic)
+	traitDiags := c.traitCompiler.GetDiagnostics()
+
+	for _, sf := range c.tsProgram.SourceFiles() {
+		fileName := sf.FileName()
+		if c.isFileAffected(fileName) {
+			var dList []*ast.Diagnostic
+			if fd, ok := traitDiags[fileName]; ok {
+				for i := range fd {
+					dList = append(dList, &fd[i])
+				}
+			}
+			if tcbDiags != nil {
+				if td, ok := tcbDiags[fileName]; ok {
+					dList = append(dList, td...)
+				}
+			}
+			fileDiagsMap[fileName] = dList
+		} else {
+			if c.incrementalCompilation != nil {
+				prior := c.incrementalCompilation.PriorTypeCheckingResultsFor(sf)
+				if prior != nil {
+					if pd, ok := prior.([]ast.Diagnostic); ok {
+						var dList []*ast.Diagnostic
+						for i := range pd {
+							dList = append(dList, &pd[i])
+						}
+						fileDiagsMap[fileName] = dList
+					}
+				}
+			}
+		}
+	}
+
+	// Flatten all diagnostics to finalDiags
+	for _, diags := range fileDiagsMap {
+		finalDiags = append(finalDiags, diags...)
+	}
+
 	if c.incrementalCompilation != nil {
-		fileDiags := c.traitCompiler.GetDiagnostics()
 		res := make(map[string]any)
-		for file, diags := range fileDiags {
-			res[file] = diags
+		for file, diags := range fileDiagsMap {
+			var astDiags []ast.Diagnostic
+			for _, d := range diags {
+				astDiags = append(astDiags, *d)
+			}
+			res[file] = astDiags
 		}
 		c.incrementalCompilation.RecordSuccessfulTypeCheck(res)
 	}
 
 	c.resolved = true
-	return nil
+	return finalDiags
 }
 
 func (c *NgCompiler) mergeSemanticAffectedFiles(res semantic_graph.SemanticDependencyResult) {
@@ -235,6 +311,10 @@ func (c *NgCompiler) mergeSemanticAffectedFiles(res semantic_graph.SemanticDepen
 }
 
 func (c *NgCompiler) PrepareEmit() []*ast.Diagnostic {
+	if c.perfRecorder != nil {
+		c.perfRecorder.Phase(perf.PerfPhase_Compile)
+		defer c.perfRecorder.Phase(perf.PerfPhase_Unaccounted)
+	}
 	if c.prepared {
 		return nil
 	}
@@ -290,6 +370,10 @@ func (c *NgCompiler) PrepareEmit() []*ast.Diagnostic {
 	return nil
 }
 
+func (c *NgCompiler) AffectedFiles() map[string]bool {
+	return c.affectedFiles
+}
+
 func (c *NgCompiler) GetHmrUpdate(componentId string) string {
 	if c.traitCompiler != nil {
 		return c.traitCompiler.GetHmrUpdate(componentId)
@@ -312,3 +396,244 @@ func getFileVersions(tsProgram *compiler.Program) map[string]string {
 	}
 	return versions
 }
+
+type directiveMetaAdapter struct {
+	meta *metadata.DirectiveMeta
+}
+
+func (d directiveMetaAdapter) GetName() string { return d.meta.Name }
+func (d directiveMetaAdapter) GetRefKey() string {
+	if d.meta.Ref.OwningModule != "" {
+		return d.meta.Ref.OwningModule + "#" + d.meta.Ref.Name
+	}
+	return d.meta.Ref.Name
+}
+func (d directiveMetaAdapter) GetSelector() *string {
+	if d.meta.Selector == "" {
+		return nil
+	}
+	return &d.meta.Selector
+}
+func (d directiveMetaAdapter) IsComponent() bool { return d.meta.IsComponent }
+func (d directiveMetaAdapter) GetInputs() any {
+	obj := make(map[string]interface{}, len(d.meta.Inputs))
+	for className, bindingName := range d.meta.Inputs {
+		obj[className] = bindingName
+	}
+	return render3.ClassPropertyMappingFromMappedObject(obj)
+}
+func (d directiveMetaAdapter) GetOutputs() any {
+	obj := make(map[string]interface{}, len(d.meta.Outputs))
+	for className, bindingName := range d.meta.Outputs {
+		obj[className] = bindingName
+	}
+	return render3.ClassPropertyMappingFromMappedObject(obj)
+}
+func (d directiveMetaAdapter) GetExportAs() []string { return d.meta.ExportAs }
+func (d directiveMetaAdapter) IsStructural() bool    { return strings.HasPrefix(d.meta.Selector, "[") }
+func (d directiveMetaAdapter) GetNgContentSelectors() []string {
+	return nil
+}
+func (d directiveMetaAdapter) GetPreserveWhitespaces() bool { return false }
+func (d directiveMetaAdapter) GetAnimationTriggerNames() *render3.LegacyAnimationTriggerNames {
+	return nil
+}
+func (d directiveMetaAdapter) GetMatchSource() render3.MatchSource {
+	return render3.MatchSourceSelector
+}
+
+func (c *NgCompiler) isFileAffected(fileName string) bool {
+	if c.incrementalCompilation == nil {
+		return true
+	}
+	if c.affectedFiles == nil {
+		return true
+	}
+	return c.affectedFiles[fileName]
+}
+
+func (c *NgCompiler) runTemplateTypeChecking() map[string][]*ast.Diagnostic {
+	res := make(map[string][]*ast.Diagnostic)
+
+	classesMap := c.traitCompiler.GetClasses()
+	for classDecl, traits := range classesMap {
+		var compTrait *transform.Trait
+		for _, trait := range traits {
+			if trait.Handler.Name() == "ComponentDecoratorHandler" {
+				compTrait = trait
+				break
+			}
+		}
+		if compTrait == nil {
+			continue
+		}
+
+		sf := ast.GetSourceFileOfNode(classDecl.AsNode())
+		if sf == nil {
+			continue
+		}
+		if !c.isFileAffected(sf.FileName()) {
+			continue
+		}
+
+		analysis, ok := compTrait.Analysis.(*annotations.ComponentAnalysis)
+		if !ok || analysis == nil || analysis.ParsedTemplate == nil {
+			continue
+		}
+
+		className := ""
+		if classDecl.Name() != nil && classDecl.Name().AsIdentifier() != nil {
+			className = classDecl.Name().AsIdentifier().Text
+		}
+		if className == "" {
+			continue
+		}
+
+		scope := c.scopeRegistry.GetCompilationScope(classDecl.AsNode())
+
+		pipes := make(map[string]string)
+		var getDirectives func(node render3.Node) []string
+
+		if scope != nil {
+			for _, pipe := range scope.Pipes {
+				pipes[pipe.Name] = pipe.Ref.Name
+			}
+
+			matcher := render3.NewSelectorMatcher[[]directiveMetaAdapter]()
+			for i := range scope.Directives {
+				dir := &scope.Directives[i]
+				if dir.Selector == "" {
+					continue
+				}
+				matcher.AddSelectables(render3.CssSelectorParse(dir.Selector), []directiveMetaAdapter{{meta: dir}})
+			}
+			binderObj := render3.NewR3TargetBinder[directiveMetaAdapter](matcher, nil)
+			bound := binderObj.Bind(render3.Target[directiveMetaAdapter]{Template: analysis.ParsedTemplate.Nodes})
+
+			getDirectives = func(node render3.Node) []string {
+				var result []string
+				if dirOwner, ok := node.(render3.DirectiveOwner); ok {
+					matched := bound.GetDirectivesOfNode(dirOwner)
+					for _, m := range matched {
+						result = append(result, m.meta.Ref.Name)
+					}
+				}
+				return result
+			}
+		} else {
+			getDirectives = func(node render3.Node) []string {
+				return nil
+			}
+		}
+
+		tcbCode, lineSpans := typecheck.GenerateTcb(className, analysis.ParsedTemplate, getDirectives, pipes)
+		if tcbCode == "" {
+			continue
+		}
+		originalFiles := c.tsProgram.SourceFiles()
+		originalFilesByPath := c.tsProgram.FilesByPath()
+
+		fileIdx := -1
+		for idx, f := range originalFiles {
+			if f == sf {
+				fileIdx = idx
+				break
+			}
+		}
+		if fileIdx == -1 {
+			continue
+		}
+
+		text := sf.Text() + "\n" + tcbCode
+		opts := ast.SourceFileParseOptions{
+			FileName: sf.FileName(),
+			Path:     sf.Path(),
+		}
+		parsedFile := parser.ParseSourceFile(opts, text, sf.ScriptKind)
+		if parsedFile == nil {
+			continue
+		}
+
+		binder.BindSourceFile(parsedFile)
+		originalFiles[fileIdx] = parsedFile
+		originalFilesByPath[sf.Path()] = parsedFile
+
+		freshChecker := c.checker
+		if freshChecker == nil {
+			freshChecker, _ = checker.NewChecker(c.tsProgram, nil)
+		}
+		checkerDiags := freshChecker.GetDiagnostics(context.TODO(), parsedFile)
+
+		originalFiles[fileIdx] = sf
+		originalFilesByPath[sf.Path()] = sf
+		binder.BindSourceFile(sf)
+
+		for _, d := range checkerDiags {
+			if d.Pos() >= len(sf.Text())+1 {
+				tcbOffset := d.Pos() - (len(sf.Text()) + 1)
+				tcbLines := strings.Split(tcbCode, "\n")
+				charOffset := 0
+				diagnosticLine := 1
+				for idx, line := range tcbLines {
+					lineLen := len(line) + 1
+					if tcbOffset >= charOffset && tcbOffset < charOffset+lineLen {
+						diagnosticLine = idx + 1
+						break
+					}
+					charOffset += lineLen
+				}
+
+				if span, ok := lineSpans[diagnosticLine]; ok && span.Start != nil {
+					mappedDiag := d.Clone()
+					startOffset := span.Start.Offset
+					endOffset := span.End.Offset
+
+					if analysis.TemplateUrl == "" {
+						templateStart := strings.Index(sf.Text(), analysis.Template)
+						if templateStart != -1 {
+							mappedDiag.SetFile(sf)
+							mappedDiag.SetLocation(core.NewTextRange(templateStart+startOffset, templateStart+endOffset))
+						} else {
+							mappedDiag.SetFile(sf)
+							mappedDiag.SetLocation(core.NewTextRange(classDecl.Pos(), classDecl.End()))
+						}
+					} else {
+						templatePath := span.Start.File.Url
+						templateContent := span.Start.File.Content
+						templateSf := parser.ParseSourceFile(ast.SourceFileParseOptions{
+							FileName: templatePath,
+							Path:     tspath.Path(templatePath),
+						}, templateContent, core.ScriptKindJS)
+						if templateSf != nil {
+							mappedDiag.SetFile(templateSf)
+							mappedDiag.SetLocation(core.NewTextRange(startOffset, endOffset))
+						} else {
+							mappedDiag.SetFile(sf)
+							mappedDiag.SetLocation(core.NewTextRange(classDecl.Pos(), classDecl.End()))
+						}
+					}
+					res[sf.FileName()] = append(res[sf.FileName()], mappedDiag)
+				}
+			}
+		}
+	}
+
+	return res
+}
+
+func (c *NgCompiler) SetPerfRecorder(rec *perf.ActivePerfRecorder) {
+	c.perfRecorder = rec
+}
+
+func (c *NgCompiler) PerfRecorder() *perf.ActivePerfRecorder {
+	return c.perfRecorder
+}
+
+func (c *NgCompiler) GetPerfResults() map[string]int64 {
+	if c.perfRecorder != nil {
+		res := c.perfRecorder.Finalize()
+		return res.Phases
+	}
+	return nil
+}
+

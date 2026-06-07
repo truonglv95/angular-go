@@ -794,35 +794,7 @@ func (p *parseAST) parsePipe() AST {
 }
 
 func (p *parseAST) parseExpression() AST {
-	start := p.inputIndex()
-	result := p.parseConditional()
-
-	if p.consumeOptionalOperator("=") {
-		if (p.parseFlags & ParseFlagsAction) == 0 {
-			p.error("Bindings cannot contain assignments", start)
-		}
-		value := p.parseConditional()
-
-		if pr, ok := result.(*PropertyRead); ok {
-			return &PropertyWrite{
-				ASTNodeBase: ASTNodeBase{SpanData: p.span(start), SourceSpan: p.sourceSpan(start)},
-				Receiver:    pr.Receiver,
-				Name:        pr.Name,
-				Value:       value,
-			}
-		} else if kr, ok := result.(*KeyedRead); ok {
-			return &KeyedWrite{
-				ASTNodeBase: ASTNodeBase{SpanData: p.span(start), SourceSpan: p.sourceSpan(start)},
-				Receiver:    kr.Receiver,
-				Key:         kr.Key,
-				Value:       value,
-			}
-		} else {
-			p.error("Parse error: expected assignable expression", start)
-		}
-	}
-
-	return result
+	return p.parseConditional()
 }
 
 func (p *parseAST) parseConditional() AST {

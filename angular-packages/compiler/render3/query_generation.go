@@ -130,13 +130,13 @@ func CreateViewQueriesFunction(viewQueries []R3QueryMetadata, constantPool Const
 	for _, query := range viewQueries {
 		params := getQueryCreateParameters(query, constantPool, nil)
 
+		var callExpr output.Expression
 		if query.IsSignal {
-			call := ImportExpr(*Identifiers.ViewQuerySignal).CallFn(params, nil, false, nil)
-			createStatements = append(createStatements, output.NewExpressionStatement(call, nil, nil))
+			callExpr = ImportExpr(*Identifiers.ViewQuerySignal).CallFn(params, nil, false, nil)
 		} else {
-			call := ImportExpr(*Identifiers.ViewQuery).CallFn(params, nil, false, nil)
-			createStatements = append(createStatements, output.NewExpressionStatement(call, nil, nil))
+			callExpr = ImportExpr(*Identifiers.ViewQuery).CallFn(params, nil, false, nil)
 		}
+		createStatements = append(createStatements, output.NewExpressionStatement(callExpr, nil, nil))
 
 		if query.IsSignal {
 			updateStatements = append(updateStatements, queryAdvancePlaceholder)
@@ -187,13 +187,13 @@ func CreateContentQueriesFunction(queries []R3QueryMetadata, constantPool Consta
 	for _, query := range queries {
 		params := getQueryCreateParameters(query, constantPool, []output.Expression{output.NewReadVarExpr("dirIndex", nil, nil, nil)})
 
+		var callExpr output.Expression
 		if query.IsSignal {
-			call := ImportExpr(*Identifiers.ContentQuerySignal).CallFn(params, nil, false, nil)
-			createStatements = append(createStatements, output.NewExpressionStatement(call, nil, nil))
+			callExpr = ImportExpr(*Identifiers.ContentQuerySignal).CallFn(params, nil, false, nil)
 		} else {
-			call := ImportExpr(*Identifiers.ContentQuery).CallFn(params, nil, false, nil)
-			createStatements = append(createStatements, output.NewExpressionStatement(call, nil, nil))
+			callExpr = ImportExpr(*Identifiers.ContentQuery).CallFn(params, nil, false, nil)
 		}
+		createStatements = append(createStatements, output.NewExpressionStatement(callExpr, nil, nil))
 
 		if query.IsSignal {
 			updateStatements = append(updateStatements, queryAdvancePlaceholder)

@@ -1,7 +1,7 @@
 package annotations
 
 import (
-	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/microsoft/typescript-go/angular-packages/compiler"
@@ -34,6 +34,7 @@ type DirectiveAnalysis struct {
 	Host           render3.R3HostMetadata
 	DecoratorNode  *ast.Node
 	PropDecorators map[string][]*ast.Node
+	Providers      output.Expression
 }
 
 type DirectiveResolution struct {
@@ -98,6 +99,9 @@ func (h *DirectiveDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 					if initVal := member.Initializer(); initVal != nil {
 						if meta, ok := parseSignalInput(initVal, propName); ok {
 							analysis.Inputs[propName] = meta
+						} else if meta, ok := parseModelInput(initVal, propName); ok {
+							analysis.Inputs[propName] = meta
+							analysis.Outputs[propName] = meta.BindingPropertyName + "Change"
 						}
 					}
 				}
@@ -113,14 +117,39 @@ func (h *DirectiveDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 									id := callExpr.Expression.AsIdentifier()
 									if id.Text == "Input" {
 										alias := propName
+										required := false
 										if callExpr.Arguments != nil && len(callExpr.Arguments.Nodes) > 0 {
-											if callExpr.Arguments.Nodes[0].Kind == ast.KindStringLiteral {
-												alias = callExpr.Arguments.Nodes[0].AsStringLiteral().Text
+											arg := callExpr.Arguments.Nodes[0]
+											if arg.Kind == ast.KindStringLiteral {
+												alias = arg.AsStringLiteral().Text
+											} else if arg.Kind == ast.KindObjectLiteralExpression {
+												obj := arg.AsObjectLiteralExpression()
+												if obj.Properties != nil {
+													for _, prop := range obj.Properties.Nodes {
+														if prop.Kind == ast.KindPropertyAssignment {
+															pa := prop.AsPropertyAssignment()
+															propNameText := ""
+															if pa.Name() != nil {
+																if pa.Name().Kind == ast.KindIdentifier {
+																	propNameText = pa.Name().AsIdentifier().Text
+																} else if pa.Name().Kind == ast.KindStringLiteral {
+																	propNameText = pa.Name().AsStringLiteral().Text
+																}
+															}
+															if propNameText == "alias" && pa.Initializer != nil && pa.Initializer.Kind == ast.KindStringLiteral {
+																alias = pa.Initializer.AsStringLiteral().Text
+															} else if propNameText == "required" && pa.Initializer != nil && pa.Initializer.Kind == ast.KindTrueKeyword {
+																required = true
+															}
+														}
+													}
+												}
 											}
 										}
 										analysis.Inputs[propName] = render3.R3InputMetadata{
 											BindingPropertyName: alias,
 											ClassPropertyName:   propName,
+											Required:            required,
 										}
 									} else if id.Text == "Output" {
 										alias := propName
@@ -162,11 +191,9 @@ func (h *DirectiveDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 										isView := id.Text == "ViewChild" || id.Text == "ViewChildren"
 										isFirst := id.Text == "ViewChild" || id.Text == "ContentChild"
 
-										predicate := ""
+										var predicate interface{} = []string{""}
 										if callExpr.Arguments != nil && len(callExpr.Arguments.Nodes) > 0 {
-											if callExpr.Arguments.Nodes[0].Kind == ast.KindStringLiteral {
-												predicate = callExpr.Arguments.Nodes[0].AsStringLiteral().Text
-											}
+											predicate = parseQueryPredicate(callExpr.Arguments.Nodes[0])
 										}
 										isStatic := false
 										if callExpr.Arguments != nil && len(callExpr.Arguments.Nodes) > 1 && callExpr.Arguments.Nodes[1].Kind == ast.KindObjectLiteralExpression {
@@ -185,8 +212,8 @@ func (h *DirectiveDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 										meta := render3.R3QueryMetadata{
 											PropertyName:            propName,
 											First:                   isFirst,
-											Predicate:               []string{predicate},
-											Descendants:             isView || id.Text == "ContentChildren", // ViewChild/Children and ContentChildren are descendants: true by default
+											Predicate:               predicate,
+											Descendants:             isView || id.Text == "ContentChild",
 											Static:                  isStatic,
 											EmitDistinctChangesOnly: true,
 										}
@@ -259,6 +286,46 @@ func (h *DirectiveDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 			} else if assign.Initializer.Kind == ast.KindNoSubstitutionTemplateLiteral {
 				analysis.Template = assign.Initializer.AsNoSubstitutionTemplateLiteral().Text
 			}
+		case "inputs":
+			if assign.Initializer.Kind == ast.KindArrayLiteralExpression {
+				arr := assign.Initializer.AsArrayLiteralExpression()
+				if arr.Elements != nil {
+					for _, elem := range arr.Elements.Nodes {
+						if elem.Kind == ast.KindStringLiteral {
+							strVal := elem.AsStringLiteral().Text
+							parts := strings.Split(strVal, ":")
+							classProp := strings.TrimSpace(parts[0])
+							bindingProp := classProp
+							if len(parts) > 1 {
+								bindingProp = strings.TrimSpace(parts[1])
+							}
+							analysis.Inputs[classProp] = render3.R3InputMetadata{
+								ClassPropertyName:   classProp,
+								BindingPropertyName: bindingProp,
+								Required:            false,
+							}
+						}
+					}
+				}
+			}
+		case "outputs":
+			if assign.Initializer.Kind == ast.KindArrayLiteralExpression {
+				arr := assign.Initializer.AsArrayLiteralExpression()
+				if arr.Elements != nil {
+					for _, elem := range arr.Elements.Nodes {
+						if elem.Kind == ast.KindStringLiteral {
+							strVal := elem.AsStringLiteral().Text
+							parts := strings.Split(strVal, ":")
+							classProp := strings.TrimSpace(parts[0])
+							bindingProp := classProp
+							if len(parts) > 1 {
+								bindingProp = strings.TrimSpace(parts[1])
+							}
+							analysis.Outputs[classProp] = bindingProp
+						}
+					}
+				}
+			}
 		case "imports":
 			if assign.Initializer.Kind == ast.KindArrayLiteralExpression {
 				arr := assign.Initializer.AsArrayLiteralExpression()
@@ -276,6 +343,8 @@ func (h *DirectiveDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 					}
 				}
 			}
+		case "providers":
+			analysis.Providers = output.NewWrappedNodeExpr(assign.Initializer, nil, nil, nil)
 		case "host":
 			if assign.Initializer.Kind == ast.KindObjectLiteralExpression {
 				hostMap := make(map[string]interface{})
@@ -342,8 +411,12 @@ func (h *DirectiveDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 			metaImports = append(metaImports, metadata.Reference{Name: imp.Name, Node: imp.Decl.Node, OwningModule: imp.Decl.ViaModule})
 		}
 		metaInputs := make(map[string]string, len(analysis.Inputs))
+		var reqInputs []string
 		for prop, input := range analysis.Inputs {
 			metaInputs[prop] = input.BindingPropertyName
+			if input.Required {
+				reqInputs = append(reqInputs, input.BindingPropertyName)
+			}
 		}
 		h.metaRegistry.RegisterDirective(node.AsNode(), &metadata.DirectiveMeta{
 			Name:        node.Name().AsIdentifier().Text,
@@ -354,12 +427,19 @@ func (h *DirectiveDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 			Inputs:      metaInputs,
 			Outputs:     analysis.Outputs,
 			ExportAs:    analysis.ExportAs,
+			RequiredInputs: reqInputs,
 			Ref: metadata.Reference{
 				Name: node.Name().AsIdentifier().Text,
 				Node: node.AsNode(),
 			},
 		})
 	}
+	sort.SliceStable(analysis.Queries, func(i, j int) bool {
+		return analysis.Queries[i].First && !analysis.Queries[j].First
+	})
+	sort.SliceStable(analysis.ViewQueries, func(i, j int) bool {
+		return analysis.ViewQueries[i].First && !analysis.ViewQueries[j].First
+	})
 	return analysis, nil
 }
 
@@ -387,6 +467,8 @@ func (h *DirectiveDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 		className = node.Name().AsIdentifier().Text
 	}
 
+	inputsOrder, outputsOrder := getPropDeclarationOrder(node)
+
 	meta := render3.R3DirectiveMetadata{
 		Name: className,
 		Type: render3.R3Reference{
@@ -396,11 +478,14 @@ func (h *DirectiveDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 		TypeSourceSpan:    nil,
 		Selector:          &analysis.Selector,
 		Inputs:            analysis.Inputs,
+		InputProperties:   inputsOrder,
 		Outputs:           analysis.Outputs,
+		OutputProperties:  outputsOrder,
 		Host:              analysis.Host,
 		Queries:           analysis.Queries,
 		ViewQueries:       analysis.ViewQueries,
 		IsStandalone:      analysis.IsStandalone,
+		Providers:         analysis.Providers,
 	}
 
 	compiled := render3.CompileDirectiveFromMetadata(meta, pool, nil)
@@ -451,31 +536,107 @@ func (h *DirectiveDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 		decMapEntries = append(decMapEntries, output.NewLiteralMapPropertyAssignment("args", output.NewLiteralArrayExpr(decArgs, nil, nil, nil), false))
 	}
 
+	propNamesMap := make(map[string]bool)
+	for propName := range analysis.PropDecorators {
+		propNamesMap[propName] = true
+	}
+	for propName, inputMeta := range analysis.Inputs {
+		if inputMeta.IsSignal {
+			propNamesMap[propName] = true
+		}
+	}
+
+	var sortedPropNames []string
+	for propName := range propNamesMap {
+		sortedPropNames = append(sortedPropNames, propName)
+	}
+	if len(inputsOrder) > 0 {
+		orderMap := make(map[string]int)
+		for i, prop := range inputsOrder {
+			orderMap[prop] = i
+		}
+		sort.Slice(sortedPropNames, func(i, j int) bool {
+			idxI, okI := orderMap[sortedPropNames[i]]
+			idxJ, okJ := orderMap[sortedPropNames[j]]
+			if okI && okJ {
+				return idxI < idxJ
+			}
+			if okI {
+				return true
+			}
+			if okJ {
+				return false
+			}
+			return sortedPropNames[i] < sortedPropNames[j]
+		})
+	} else {
+		sort.Strings(sortedPropNames)
+	}
+
 	var propDecorators []output.LiteralMapEntry
-	for propName, decNodes := range analysis.PropDecorators {
+	for _, propName := range sortedPropNames {
 		var decExprs []output.Expression
-		for _, decNode := range decNodes {
-			callExpr := decNode.AsDecorator().Expression.AsCallExpression()
-			if callExpr != nil && callExpr.Expression.Kind == ast.KindIdentifier {
-				id := callExpr.Expression.AsIdentifier().Text
-				var pDecArgs []output.Expression
-				if callExpr.Arguments != nil {
-					for _, arg := range callExpr.Arguments.Nodes {
-						pDecArgs = append(pDecArgs, output.NewWrappedNodeExpr(arg, nil, nil, nil))
+
+		// 1. Process actual decorators
+		if decNodes, exists := analysis.PropDecorators[propName]; exists {
+			for _, decNode := range decNodes {
+				callExpr := decNode.AsDecorator().Expression.AsCallExpression()
+				if callExpr != nil && callExpr.Expression.Kind == ast.KindIdentifier {
+					id := callExpr.Expression.AsIdentifier().Text
+					var pDecArgs []output.Expression
+					if callExpr.Arguments != nil {
+						for _, arg := range callExpr.Arguments.Nodes {
+							pDecArgs = append(pDecArgs, output.NewWrappedNodeExpr(arg, nil, nil, nil))
+						}
 					}
+					pMap := []output.LiteralMapEntry{
+						output.NewLiteralMapPropertyAssignment("type", output.NewExternalExpr(output.ExternalReference{
+							ModuleName: &coreModule,
+							Name:       &id,
+						}, nil, nil, nil, nil), false),
+					}
+					if len(pDecArgs) > 0 {
+						pMap = append(pMap, output.NewLiteralMapPropertyAssignment("args", output.NewLiteralArrayExpr(pDecArgs, nil, nil, nil), false))
+					}
+					decExprs = append(decExprs, output.NewLiteralMapExpr(pMap, nil, nil, nil))
 				}
-				pMap := []output.LiteralMapEntry{
-					output.NewLiteralMapPropertyAssignment("type", output.NewExternalExpr(output.ExternalReference{
-						ModuleName: &coreModule,
-						Name:       &id,
-					}, nil, nil, nil, nil), false),
-				}
-				if len(pDecArgs) > 0 {
-					pMap = append(pMap, output.NewLiteralMapPropertyAssignment("args", output.NewLiteralArrayExpr(pDecArgs, nil, nil, nil), false))
-				}
-				decExprs = append(decExprs, output.NewLiteralMapExpr(pMap, nil, nil, nil))
 			}
 		}
+
+		// 2. Process virtual decorators for signal inputs/models
+		if inputMeta, exists := analysis.Inputs[propName]; exists && inputMeta.IsSignal {
+			inputDecName := "Input"
+			inputArgsMap := []output.LiteralMapEntry{
+				output.NewLiteralMapPropertyAssignment("isSignal", output.NewLiteralExpr(true, nil, nil, nil), false),
+				output.NewLiteralMapPropertyAssignment("alias", output.NewLiteralExpr(inputMeta.BindingPropertyName, nil, nil, nil), false),
+				output.NewLiteralMapPropertyAssignment("required", output.NewLiteralExpr(inputMeta.Required, nil, nil, nil), false),
+			}
+			inputDecExpr := output.NewLiteralMapExpr([]output.LiteralMapEntry{
+				output.NewLiteralMapPropertyAssignment("type", output.NewExternalExpr(output.ExternalReference{
+					ModuleName: &coreModule,
+					Name:       &inputDecName,
+				}, nil, nil, nil, nil), false),
+				output.NewLiteralMapPropertyAssignment("args", output.NewLiteralArrayExpr([]output.Expression{
+					output.NewLiteralMapExpr(inputArgsMap, nil, nil, nil),
+				}, nil, nil, nil), false),
+			}, nil, nil, nil)
+			decExprs = append(decExprs, inputDecExpr)
+
+			if outputName, ok := analysis.Outputs[propName]; ok {
+				outputDecName := "Output"
+				outputDecExpr := output.NewLiteralMapExpr([]output.LiteralMapEntry{
+					output.NewLiteralMapPropertyAssignment("type", output.NewExternalExpr(output.ExternalReference{
+						ModuleName: &coreModule,
+						Name:       &outputDecName,
+					}, nil, nil, nil, nil), false),
+					output.NewLiteralMapPropertyAssignment("args", output.NewLiteralArrayExpr([]output.Expression{
+						output.NewLiteralExpr(outputName, nil, nil, nil),
+					}, nil, nil, nil), false),
+				}, nil, nil, nil)
+				decExprs = append(decExprs, outputDecExpr)
+			}
+		}
+
 		if len(decExprs) > 0 {
 			propDecorators = append(propDecorators, output.NewLiteralMapPropertyAssignment(propName, output.NewLiteralArrayExpr(decExprs, nil, nil, nil), false))
 		}
@@ -500,61 +661,6 @@ func (h *DirectiveDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 		if astStmt != nil {
 			if n, ok := astStmt.(*ast.Node); ok {
 				classMetadataNode = n
-			}
-		}
-	}
-
-	// Class Debug Info
-	var classDebugInfoNode *ast.Node
-
-	// get file path and line number
-	filePath := ""
-	lineNum := 0
-	if node.AsNode().Parent != nil && node.AsNode().Parent.Kind == ast.KindSourceFile {
-		sf := node.AsNode().Parent.AsSourceFile()
-		rawPath := sf.FileName()
-
-		// Attempt to make path relative
-		if rel, err := filepath.Rel(".", rawPath); err == nil && !strings.HasPrefix(rel, "..") {
-			filePath = rel
-		} else {
-			// fallback: find "src/" and cut from there
-			if idx := strings.Index(rawPath, "src/"); idx != -1 {
-				filePath = rawPath[idx:]
-			} else {
-				filePath = rawPath
-			}
-		}
-
-		// Compute line number (0-based internally, we output what ngc does)
-		// Usually ngc outputs the line where the class is declared, wait. If we just count \n up to node.Pos()
-		var targetPos int
-		if node.Name() != nil {
-			targetPos = node.Name().Pos()
-		} else {
-			targetPos = node.AsNode().Pos()
-		}
-		if targetPos > 0 {
-			text := sf.Text()
-			if targetPos <= len(text) {
-				lineNum = strings.Count(text[:targetPos], "\n")
-			}
-		}
-	}
-
-	classDebugExpr := render3.CompileClassDebugInfo(render3.R3ClassDebugInfo{
-		Type:       output.NewReadVarExpr(className, nil, nil, nil),
-		ClassName:  output.NewLiteralExpr(className, nil, nil, nil),
-		FilePath:   output.NewLiteralExpr(filePath, nil, nil, nil),
-		LineNumber: output.NewLiteralExpr(lineNum, nil, nil, nil),
-	})
-
-	if classDebugExpr != nil {
-		stmt := classDebugExpr.ToStmt(nil)
-		astStmt := stmt.VisitStatement(visitor, translator.Context{IsStatementMode: true})
-		if astStmt != nil {
-			if n, ok := astStmt.(*ast.Node); ok {
-				classDebugInfoNode = n
 			}
 		}
 	}
@@ -613,9 +719,7 @@ func (h *DirectiveDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 	if classMetadataNode != nil {
 		extraStatements = append(extraStatements, classMetadataNode)
 	}
-	if classDebugInfoNode != nil {
-		extraStatements = append(extraStatements, classDebugInfoNode)
-	}
+
 
 	return []transform.CompileResult{
 		{
@@ -747,4 +851,30 @@ func (h *DirectiveDecoratorHandler) GetSemanticSymbol(node *ast.ClassDeclaration
 		Imports:        imps,
 		TypeParameters: tps,
 	}
+}
+
+func getPropDeclarationOrder(node *ast.ClassDeclaration) ([]string, []string) {
+	var inputs []string
+	var outputs []string
+	if node.Members != nil {
+		for _, member := range node.Members.Nodes {
+			if member.Kind == ast.KindPropertyDeclaration || member.Kind == ast.KindMethodDeclaration {
+				propName := ""
+				var nameNode *ast.Node
+				if member.Kind == ast.KindPropertyDeclaration {
+					nameNode = member.AsPropertyDeclaration().Name()
+				} else {
+					nameNode = member.AsMethodDeclaration().Name()
+				}
+				if nameNode != nil && nameNode.Kind == ast.KindIdentifier {
+					propName = nameNode.AsIdentifier().Text
+				}
+				if propName != "" {
+					inputs = append(inputs, propName)
+					outputs = append(outputs, propName)
+				}
+			}
+		}
+	}
+	return inputs, outputs
 }

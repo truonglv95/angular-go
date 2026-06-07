@@ -162,9 +162,9 @@ func (r *DtsMetadataReader) GetDirectiveMetadata(classNode *ast.Node) *Directive
 			}
 
 			// Parse Standalone
-			standalone := false
+			standalone := true
 			if len(typeArgs) > 7 {
-				standalone = literalTypeBool(typeArgs[7], false)
+				standalone = literalTypeBool(typeArgs[7], true)
 			}
 
 			className := classNameOf(classDecl)
@@ -255,12 +255,12 @@ func (r *DtsMetadataReader) GetPipeMetadata(classNode *ast.Node) *PipeMeta {
 
 			// Parse Pure & Standalone
 			pure := true
-			standalone := false
+			standalone := true
 			if len(typeArgs) > 2 {
 				pure = literalTypeBool(typeArgs[2], true)
 			}
 			if len(typeArgs) > 3 {
-				standalone = literalTypeBool(typeArgs[3], false)
+				standalone = literalTypeBool(typeArgs[3], true)
 			}
 
 			className := classNameOf(classDecl)

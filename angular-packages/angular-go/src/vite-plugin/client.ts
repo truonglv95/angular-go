@@ -6,6 +6,7 @@ export interface CreateContextOptions {
   project: string;
   compilationMode?: 'global' | 'local';
   hmr?: boolean;
+  preserveImports?: boolean;
 }
 
 export interface GoNgcClient {

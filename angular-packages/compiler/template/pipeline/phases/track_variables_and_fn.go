@@ -18,7 +18,6 @@ func GenerateTrackVariables(job compilation.CompilationJob) {
 				continue
 			}
 
-			// Get varNames.
 			varNames, ok := repeater.VarNames.(struct {
 				Index    map[string]bool
 				Implicit string

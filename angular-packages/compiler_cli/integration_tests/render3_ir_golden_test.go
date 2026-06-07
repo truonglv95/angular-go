@@ -117,7 +117,7 @@ func TestRender3IRGolden(t *testing.T) {
 			files: []string{
 				"out/app/app.component.js",
 			},
-			failNormalized: false,
+			failNormalized: true,
 		},
 		{
 			name:  "parity_pipes",
@@ -126,6 +126,21 @@ func TestRender3IRGolden(t *testing.T) {
 		},
 		{
 			name:  "parity_animations",
+			files: []string{"out/app/app.component.js"},
+			failNormalized: true,
+		},
+		{
+			name:  "parity_component_metadata",
+			files: []string{"out/app/app.component.js"},
+			failNormalized: true,
+		},
+		{
+			name:  "parity_conditional",
+			files: []string{"out/app/app.component.js"},
+			failNormalized: true,
+		},
+		{
+			name:  "parity_repeater",
 			files: []string{"out/app/app.component.js"},
 			failNormalized: true,
 		},
@@ -166,6 +181,20 @@ func TestRender3IRGolden(t *testing.T) {
 			files: []string{
 				"out/app/deferred.js",
 				"out/app/heavy.component.js",
+				"out/app/app.component.js",
+			},
+			failNormalized: true,
+		},
+		{
+			name: "parity_signal_inputs",
+			files: []string{
+				"out/app/app.component.js",
+			},
+			failNormalized: true,
+		},
+		{
+			name: "parity_model_inputs",
+			files: []string{
 				"out/app/app.component.js",
 			},
 			failNormalized: true,

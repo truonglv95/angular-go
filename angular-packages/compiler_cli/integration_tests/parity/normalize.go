@@ -25,6 +25,8 @@ var (
 	hmrLoadPattern              = regexp.MustCompile(`(?s)\n?\(\(\) => \{ const id = ".*?_HmrLoad\(d\.timestamp\)\)\); \}\)\(\);\n?`)
 	hmrUpdatePattern            = regexp.MustCompile(`(?s)\n?function [a-zA-Z0-9_$]+_UpdateMetadata\(.*?\}\);\s*\}\n?`)
 	componentImportPattern      = regexp.MustCompile(`(?m)^import\s+\{.*?\}\s+from\s+['"]@angular/core['"];?\n?`)
+	debugNameArgPattern         = regexp.MustCompile(`,\s*\.\.\.\(ngDevMode \? \[\{\s*debugName:\s*["'][a-zA-Z0-9_$]+["']\s*\}\] : /\* istanbul ignore next \*/ \[\]\)`)
+	debugNamePropPattern        = regexp.MustCompile(`\.\.\.\(ngDevMode \? \{\s*debugName:\s*["'][a-zA-Z0-9_$]+["']\s*\} : /\* istanbul ignore next \*/ \{\}\)(,\s*)?`)
 	render3JSNormalizationRules = []jsNormalizationRule{
 		{
 			// Temporary: strip HMR load blocks
@@ -45,6 +47,18 @@ var (
 			name: "component-import",
 			apply: func(text string) string {
 				return componentImportPattern.ReplaceAllString(text, "")
+			},
+		},
+		{
+			name: "debug-names-arg",
+			apply: func(text string) string {
+				return debugNameArgPattern.ReplaceAllString(text, "")
+			},
+		},
+		{
+			name: "debug-names-prop",
+			apply: func(text string) string {
+				return debugNamePropPattern.ReplaceAllString(text, "")
 			},
 		},
 		{
@@ -142,7 +156,7 @@ func NormalizeGoldenJS(text string) string {
 // It skips temporary rules like class-metadata removal.
 func NormalizeGoldenJSStrict(text string) string {
 	for _, rule := range render3JSNormalizationRules {
-		if rule.name == "line-endings" || rule.name == "class-debug-file-path" || rule.name == "trim-final-newline" || rule.name == "class-metadata-spacing" || rule.name == "component-import" || rule.name == "hmr-load" || rule.name == "hmr-update" || rule.name == "namespaced-metadata-type" || rule.name == "namespace-imports" || rule.name == "namespaced-dependencies" {
+		if rule.name == "line-endings" || rule.name == "class-debug-file-path" || rule.name == "trim-final-newline" || rule.name == "class-metadata-spacing" || rule.name == "component-import" || rule.name == "hmr-load" || rule.name == "hmr-update" || rule.name == "namespaced-metadata-type" || rule.name == "namespace-imports" || rule.name == "namespaced-dependencies" || rule.name == "debug-names-arg" || rule.name == "debug-names-prop" {
 			text = rule.apply(text)
 		}
 	}

@@ -12,6 +12,7 @@ const project = process.env.GO_NGC_BENCH_TSCONFIG || 'tsconfig.app.json';
 const runs = Number.parseInt(process.env.GO_NGC_BENCH_RUNS || '3', 10);
 const goNgc = process.env.GO_NGC || path.join(ROOT, 'go-ngc');
 const outDir = process.env.GO_NGC_BENCH_OUT_DIR || path.join(projectDir, 'out-tsc');
+const preserveImports = process.env.GO_NGC_BENCH_PRESERVE_IMPORTS !== '0';
 const reportDir = path.join(ROOT, '.tmp', 'bench');
 
 fs.mkdirSync(reportDir, { recursive: true });
@@ -33,6 +34,14 @@ function runProcess(args, options = {}) {
     throw new Error(`go-ngc ${args.join(' ')} failed\n${result.stderr || result.stdout}`);
   }
   return { durationMs, stdout: result.stdout };
+}
+
+function compileArgs(extraArgs = []) {
+  const args = ['-p', project, ...extraArgs];
+  if (preserveImports && !args.includes('--preserve-imports')) {
+    args.push('--preserve-imports');
+  }
+  return args;
 }
 
 function summarize(samples) {
@@ -119,18 +128,18 @@ function startDaemon() {
 }
 
 async function measureDaemonBuilds() {
-  const daemon = startDaemon();
-  const contextId = `bench_${Date.now()}`;
-  try {
-    await daemon.request('hello');
-    await daemon.request('create_context', {
-      contextId,
-      project,
-      compilationMode: process.env.GO_NGC_BENCH_COMPILATION_MODE || 'global',
-      hmr: false,
-    });
-
-    const initial = await measure('server initial build', async () => {
+  const initial = await measure('server initial build', async () => {
+    const daemon = startDaemon();
+    const contextId = `bench_initial_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    try {
+      await daemon.request('hello');
+      await daemon.request('create_context', {
+        contextId,
+        project,
+        compilationMode: process.env.GO_NGC_BENCH_COMPILATION_MODE || 'global',
+        hmr: false,
+        preserveImports,
+      });
       rm(outDir);
       const started = performance.now();
       await daemon.request('build', {
@@ -138,10 +147,33 @@ async function measureDaemonBuilds() {
         project,
         compilationMode: process.env.GO_NGC_BENCH_COMPILATION_MODE || 'global',
         hmr: false,
+        preserveImports,
       });
       return performance.now() - started;
-    });
+    } finally {
+      await daemon.close();
+    }
+  });
 
+  const daemon = startDaemon();
+  const contextId = `bench_rebuild_${Date.now()}`;
+  try {
+    await daemon.request('hello');
+    await daemon.request('create_context', {
+      contextId,
+      project,
+      compilationMode: process.env.GO_NGC_BENCH_COMPILATION_MODE || 'global',
+      hmr: false,
+      preserveImports,
+    });
+    rm(outDir);
+    await daemon.request('build', {
+      contextId,
+      project,
+      compilationMode: process.env.GO_NGC_BENCH_COMPILATION_MODE || 'global',
+      hmr: false,
+      preserveImports,
+    });
     const rebuild = await measure('server rebuild no-change', async () => {
       const started = performance.now();
       await daemon.request('build', {
@@ -149,6 +181,7 @@ async function measureDaemonBuilds() {
         project,
         compilationMode: process.env.GO_NGC_BENCH_COMPILATION_MODE || 'global',
         hmr: false,
+        preserveImports,
       });
       return performance.now() - started;
     });
@@ -170,13 +203,13 @@ const report = {
 
 report.benchmarks.disk = await measure(
   'one-shot disk',
-  async () => runProcess(['-p', project, '--write=true']).durationMs,
+  async () => runProcess(compileArgs(['--write=true'])).durationMs,
   () => rm(outDir),
 );
 
 report.benchmarks.memory = await measure(
   'one-shot memory',
-  async () => runProcess(['-p', project, '--write=false', '--format=json']).durationMs,
+  async () => runProcess(compileArgs(['--write=false', '--format=json'])).durationMs,
   () => rm(outDir),
 );
 

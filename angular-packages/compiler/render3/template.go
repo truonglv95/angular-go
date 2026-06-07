@@ -181,6 +181,10 @@ func (s *schemaRegistryAdapter) HasElement(name string, schemaCtx []string) bool
 	return s.registry.HasElement(name, nil)
 }
 
+func (s *schemaRegistryAdapter) HasProperty(tagName string, propName string, schemaMetas []core.SchemaMetadata) bool {
+	return s.registry.HasProperty(tagName, propName, schemaMetas)
+}
+
 func (s *schemaRegistryAdapter) SecurityContext(name string, propName string, isAttribute bool) core.SecurityContext {
 	return s.registry.SecurityContext(name, propName, isAttribute)
 }

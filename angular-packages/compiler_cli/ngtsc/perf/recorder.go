@@ -82,10 +82,47 @@ func (r *ActivePerfRecorder) Finalize() PerfResults {
 		Memory: make(map[string]int64),
 	}
 
-	// Wait, we need the string names for enum values. We can just use string formatting if we didn't generate stringer.
-	// For now we'll mock them with fmt.Sprintf
-	// In Go we usually generate a String() method for enums using stringer.
-	// We'll leave it out for simplicity in this port.
+	phaseNames := map[PerfPhase]string{
+		PerfPhase_Unaccounted:             "Unaccounted",
+		PerfPhase_Setup:                   "Setup",
+		PerfPhase_TypeScriptProgramCreate: "TypeScriptProgramCreate",
+		PerfPhase_Reconciliation:          "Reconciliation",
+		PerfPhase_ResourceUpdate:          "ResourceUpdate",
+		PerfPhase_TypeScriptDiagnostics:   "TypeScriptDiagnostics",
+		PerfPhase_Analysis:                "Analysis",
+		PerfPhase_Resolve:                 "Resolve",
+		PerfPhase_CycleDetection:          "CycleDetection",
+		PerfPhase_TcbGeneration:           "TcbGeneration",
+		PerfPhase_TcbUpdateProgram:        "TcbUpdateProgram",
+		PerfPhase_TypeScriptEmit:          "TypeScriptEmit",
+		PerfPhase_Compile:                 "Compile",
+		PerfPhase_Linker:                  "Linker",
+	}
+
+	for phase, name := range phaseNames {
+		if int(phase) < len(r.phaseTime) {
+			results.Phases[name] = r.phaseTime[phase]
+		}
+	}
+
+	checkpointNames := map[PerfCheckpoint]string{
+		PerfCheckpoint_Initial:                 "Initial",
+		PerfCheckpoint_TypeScriptProgramCreate: "TypeScriptProgramCreate",
+		PerfCheckpoint_PreAnalysis:             "PreAnalysis",
+		PerfCheckpoint_Analysis:                "Analysis",
+		PerfCheckpoint_Resolve:                 "Resolve",
+		PerfCheckpoint_TtcGeneration:           "TtcGeneration",
+		PerfCheckpoint_TtcUpdateProgram:        "TtcUpdateProgram",
+		PerfCheckpoint_PreEmit:                 "PreEmit",
+		PerfCheckpoint_Emit:                    "Emit",
+	}
+
+	for cp, name := range checkpointNames {
+		if int(cp) < len(r.bytes) {
+			results.Memory[name] = r.bytes[cp]
+		}
+	}
+
 	return results
 }
 

@@ -4,9 +4,12 @@ import (
 	"context"
 
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/core"
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/perf"
 	"github.com/microsoft/typescript-go/internal/ast"
 	"github.com/microsoft/typescript-go/internal/compiler"
+	tscCore "github.com/microsoft/typescript-go/internal/core"
 	"github.com/microsoft/typescript-go/internal/tsoptions"
+	"github.com/microsoft/typescript-go/internal/tspath"
 )
 
 type NgtscProgram struct {
@@ -21,12 +24,44 @@ func NewNgtscProgram(
 	options core.NgCompilerOptions,
 	oldProgram *NgtscProgram,
 ) (*NgtscProgram, error) {
-	// Create the TypeScript program inside NgtscProgram
-	tsProgram := compiler.NewProgram(compiler.ProgramOptions{
-		Config: tsConfig,
-		Host:   delegateHost,
-	})
+	var rec *perf.ActivePerfRecorder
+	if oldProgram != nil && oldProgram.compiler != nil && oldProgram.compiler.PerfRecorder() != nil {
+		rec = oldProgram.compiler.PerfRecorder()
+		rec.Reset()
+	} else {
+		rec = perf.ActivePerfRecorderZeroedToNow()
+	}
 
+	rec.Phase(perf.PerfPhase_TypeScriptProgramCreate)
+	
+	var tsProgram *compiler.Program
+	if oldProgram != nil && oldProgram.tsProgram != nil && len(options.InvalidatedFiles) > 0 {
+		tsProgram = oldProgram.tsProgram
+		var ok bool
+		for file := range options.InvalidatedFiles {
+			absPath := tspath.GetNormalizedAbsolutePath(file, delegateHost.GetCurrentDirectory())
+			canonicalPath := tspath.GetCanonicalFileName(absPath, delegateHost.FS().UseCaseSensitiveFileNames())
+			if tsProgram.GetSourceFileByPath(tspath.Path(canonicalPath)) == nil {
+				continue
+			}
+			tsProgram, ok = tsProgram.UpdateProgram(tspath.Path(canonicalPath), delegateHost, nil)
+			if !ok {
+				tsProgram = nil
+				break
+			}
+		}
+	}
+
+	if tsProgram == nil {
+		// Create the TypeScript program inside NgtscProgram
+		tsProgram = compiler.NewProgram(compiler.ProgramOptions{
+			Config:         tsConfig,
+			Host:           delegateHost,
+			SingleThreaded: tscCore.TSFalse,
+		})
+	}
+
+	rec.Phase(perf.PerfPhase_Setup)
 	var oldCompiler *core.NgCompiler
 	if oldProgram != nil {
 		oldCompiler = oldProgram.compiler
@@ -35,6 +70,7 @@ func NewNgtscProgram(
 	if err != nil {
 		return nil, err
 	}
+	ngCompiler.SetPerfRecorder(rec)
 
 	return &NgtscProgram{
 		compiler:  ngCompiler,
@@ -61,7 +97,19 @@ func (p *NgtscProgram) GetNgDiagnostics() []*ast.Diagnostic {
 
 func (p *NgtscProgram) Emit(ctx context.Context, opts compiler.EmitOptions) *compiler.EmitResult {
 	p.compiler.PrepareEmit()
+	rec := p.compiler.PerfRecorder()
+	if rec != nil {
+		rec.Phase(perf.PerfPhase_TypeScriptEmit)
+		defer rec.Phase(perf.PerfPhase_Unaccounted)
+	}
 	return p.tsProgram.Emit(ctx, opts)
+}
+
+func (p *NgtscProgram) GetAffectedFiles() map[string]bool {
+	if p.compiler != nil {
+		return p.compiler.AffectedFiles()
+	}
+	return nil
 }
 
 func (p *NgtscProgram) GetHmrUpdate(componentId string) string {
@@ -77,3 +125,18 @@ func (p *NgtscProgram) GetHmrComponentIds() []string {
 	}
 	return nil
 }
+
+func (p *NgtscProgram) GetPerfResults() map[string]int64 {
+	if p.compiler != nil {
+		return p.compiler.GetPerfResults()
+	}
+	return nil
+}
+
+func (p *NgtscProgram) PerfRecorder() *perf.ActivePerfRecorder {
+	if p.compiler != nil {
+		return p.compiler.PerfRecorder()
+	}
+	return nil
+}
+

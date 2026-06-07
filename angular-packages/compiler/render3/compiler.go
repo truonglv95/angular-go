@@ -125,7 +125,35 @@ func baseDirectiveFields(
 
 	if len(meta.Inputs) > 0 {
 		var inputProps []output.LiteralMapEntry
-		for classPropName, inputMeta := range meta.Inputs {
+		var sortedKeys []string
+		for k := range meta.Inputs {
+			sortedKeys = append(sortedKeys, k)
+		}
+		if len(meta.InputProperties) > 0 {
+			orderMap := make(map[string]int)
+			for i, prop := range meta.InputProperties {
+				orderMap[prop] = i
+			}
+			sort.Slice(sortedKeys, func(i, j int) bool {
+				idxI, okI := orderMap[sortedKeys[i]]
+				idxJ, okJ := orderMap[sortedKeys[j]]
+				if okI && okJ {
+					return idxI < idxJ
+				}
+				if okI {
+					return true
+				}
+				if okJ {
+					return false
+				}
+				return sortedKeys[i] < sortedKeys[j]
+			})
+		} else {
+			sort.Strings(sortedKeys)
+		}
+
+		for _, classPropName := range sortedKeys {
+			inputMeta := meta.Inputs[classPropName]
 			var valueExpr output.Expression
 
 			flags := 0 // Default InputFlags.None for standard @Input
@@ -135,12 +163,16 @@ func baseDirectiveFields(
 			if inputMeta.TransformFunction != nil {
 				flags |= 2 // InputFlags.HasTransform
 			}
-			if inputMeta.Required {
-				flags |= 4 // InputFlags.IsRequired
-			}
 
-			if classPropName == inputMeta.BindingPropertyName && flags == 0 {
-				valueExpr = LiteralExpr(classPropName)
+			if classPropName == inputMeta.BindingPropertyName {
+				if flags == 0 {
+					valueExpr = LiteralExpr(classPropName)
+				} else {
+					valueExpr = LiteralArr([]output.Expression{
+						LiteralExpr(flags),
+						LiteralExpr(inputMeta.BindingPropertyName),
+					})
+				}
 			} else {
 				valueExpr = LiteralArr([]output.Expression{
 					LiteralExpr(flags),
@@ -157,7 +189,35 @@ func baseDirectiveFields(
 
 	if len(meta.Outputs) > 0 {
 		var outputProps []output.LiteralMapEntry
-		for classPropName, bindingPropName := range meta.Outputs {
+		var sortedKeys []string
+		for k := range meta.Outputs {
+			sortedKeys = append(sortedKeys, k)
+		}
+		if len(meta.OutputProperties) > 0 {
+			orderMap := make(map[string]int)
+			for i, prop := range meta.OutputProperties {
+				orderMap[prop] = i
+			}
+			sort.Slice(sortedKeys, func(i, j int) bool {
+				idxI, okI := orderMap[sortedKeys[i]]
+				idxJ, okJ := orderMap[sortedKeys[j]]
+				if okI && okJ {
+					return idxI < idxJ
+				}
+				if okI {
+					return true
+				}
+				if okJ {
+					return false
+				}
+				return sortedKeys[i] < sortedKeys[j]
+			})
+		} else {
+			sort.Strings(sortedKeys)
+		}
+
+		for _, classPropName := range sortedKeys {
+			bindingPropName := meta.Outputs[classPropName]
 			outputProps = append(outputProps, output.NewLiteralMapPropertyAssignment(classPropName, LiteralExpr(bindingPropName), false))
 		}
 		definitionMap.Set("outputs", output.NewLiteralMapExpr(outputProps, nil, nil, nil))
@@ -423,7 +483,14 @@ func CompileComponentFromMetadata(
 	}
 
 	if meta.ChangeDetection != nil {
-		definitionMap.Set("changeDetection", LiteralExpr(meta.ChangeDetection))
+		switch cd := meta.ChangeDetection.(type) {
+		case int:
+			definitionMap.Set("changeDetection", output.NewLiteralExpr(cd, nil, nil, nil))
+		case output.Expression:
+			definitionMap.Set("changeDetection", cd)
+		default:
+			definitionMap.Set("changeDetection", output.NewLiteralExpr(cd, nil, nil, nil))
+		}
 	}
 
 	expression := ImportExpr(*Identifiers.DefineComponent).CallFn([]output.Expression{
@@ -570,6 +637,10 @@ func createHostBindingsFunction(
 	var bindingParser *template_parser.BindingParser
 	if bindingParserAny != nil {
 		bindingParser = bindingParserAny.(*template_parser.BindingParser)
+	} else {
+		lexer := expression_parser.Lexer{}
+		exprParser := expression_parser.NewParser(lexer, false)
+		bindingParser = template_parser.NewBindingParser(exprParser, ElementRegistry, nil)
 	}
 
 	var sourceSpan expression_parser.ParseSourceSpan

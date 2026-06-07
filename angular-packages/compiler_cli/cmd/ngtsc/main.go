@@ -3,8 +3,10 @@ package main
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"runtime/pprof"
+	"sort"
 
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli"
 	"github.com/microsoft/typescript-go/internal/diagnosticwriter"
@@ -25,6 +27,8 @@ func main() {
 	writeFlag := flag.Bool("write", true, "Write outputs to disk")
 	formatFlag := flag.String("format", "text", "Output format: text or json")
 	serverFlag := flag.Bool("server", false, "Run in daemon mode via JSON-RPC over stdin/stdout")
+	perfReportFlag := flag.Bool("perf-report", false, "Print performance phase timings to os.Stderr")
+	preserveImportsFlag := flag.Bool("preserve-imports", false, "Preserve ES imports during emit by enabling verbatimModuleSyntax")
 	flag.Parse()
 
 	if *serverFlag {
@@ -67,6 +71,9 @@ func main() {
 	config.EnableHmr = *hmrFlag
 	config.DiscardOutput = *discardOutput
 	config.Write = *writeFlag
+	if *preserveImportsFlag {
+		compiler_cli.EnablePreserveImports(config)
+	}
 
 	formatOpts := &diagnosticwriter.FormattingOptions{
 		NewLine: "\n",
@@ -86,6 +93,19 @@ func main() {
 		result = compiler_cli.PerformCompilation(config)
 	}
 
+	if *perfReportFlag && result.PerfPhases != nil && len(result.PerfPhases) > 0 {
+		os.Stderr.WriteString("--- Performance Report ---\n")
+		var keys []string
+		for k := range result.PerfPhases {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Fprintf(os.Stderr, "%-30s: %d µs\n", k, result.PerfPhases[k])
+		}
+		os.Stderr.WriteString("--------------------------\n")
+	}
+
 	if *formatFlag == "json" {
 		type DiagnosticMessage struct {
 			Category string `json:"category"`
@@ -97,6 +117,7 @@ func main() {
 			Outputs     []compiler_cli.OutputFile `json:"outputs"`
 			Diagnostics []DiagnosticMessage       `json:"diagnostics"`
 			Status      int                       `json:"status"`
+			PerfPhases  map[string]int64          `json:"perfPhases,omitempty"`
 		}
 
 		var diags []DiagnosticMessage
@@ -125,6 +146,7 @@ func main() {
 			Outputs:     result.Outputs,
 			Diagnostics: diags,
 			Status:      int(result.Status),
+			PerfPhases:  result.PerfPhases,
 		})
 		os.Stdout.Write(outBytes)
 		os.Stdout.WriteString("\n")

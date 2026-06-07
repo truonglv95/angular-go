@@ -11,7 +11,7 @@ import { resolveGoNgcPath } from '../compiler-path.js';
 
 export interface OutputFile {
   path: string;
-  text: string;
+  text?: string;
   hash?: string;
   kind?: 'js' | 'map' | 'dts' | 'other';
 }
@@ -79,6 +79,12 @@ export interface AngularGoCompileOptions extends AngularGoBaseOptions {
    * - 'default': go-ngc is invoked once and outputs are written to disk.
    */
   mode?: 'server' | 'default';
+  /**
+   * Preserve ES imports during TypeScript emit. Defaults to true because Vite/Rollup
+   * handle tree-shaking and import elision more cheaply than the TypeScript emit
+   * resolver for large Angular projects.
+   */
+  preserveImports?: boolean;
 }
 
 export interface AngularGoLinkerOptions extends AngularGoBaseOptions {
@@ -308,6 +314,7 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
   let lastCompileKey = '';
   let projectInputsCache: Set<string> | null = null;
   const recompileOnChange = options.recompileOnChange !== false;
+  const preserveImports = options.preserveImports !== false;
   let enableHmr = false;
 
   // B#2 FIX: Read mode from options (defaults to 'server').
@@ -680,6 +687,9 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
       if (!compileArgs.find(arg => arg.startsWith('--compilationMode'))) {
         compileArgs.push(`--compilationMode=${compilationMode}`);
       }
+      if (preserveImports && !compileArgs.some(arg => arg === '--preserve-imports')) {
+        compileArgs.push('--preserve-imports');
+      }
 
       if (enableHmr) {
         if (!compileArgs.includes('--hmr')) {
@@ -794,6 +804,7 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
           compilationMode: options.compilationMode || 'global',
           // C3 FIX: Only enable HMR when explicitly requested in serve mode.
           hmr: enableHmr,
+          preserveImports,
         });
 
         // M1 FIX: Register SIGINT/SIGTERM handlers so the daemon is cleanly shut down
@@ -955,12 +966,24 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
       const mapPath = jsPath + '.map';
       if (pluginMode === 'server' || pluginMode === 'memory') {
         const memOut = memoryOutputs.get(jsPath);
-        if (memOut) {
+        if (memOut && typeof memOut.text === 'string') {
           code = memOut.text;
+        } else if (pluginMode === 'server' && sharedDaemonClient) {
+          const output = await sharedDaemonClient.getOutput(sharedDaemonContextId, jsPath);
+          if (output && typeof output.text === 'string') {
+            memoryOutputs.set(jsPath, output);
+            code = output.text;
+          }
         }
         const memMap = memoryOutputs.get(mapPath);
-        if (memMap) {
+        if (memMap && typeof memMap.text === 'string') {
           map = JSON.parse(memMap.text);
+        } else if (pluginMode === 'server' && sharedDaemonClient) {
+          const output = await sharedDaemonClient.getOutput(sharedDaemonContextId, mapPath);
+          if (output && typeof output.text === 'string') {
+            memoryOutputs.set(mapPath, output);
+            map = JSON.parse(output.text);
+          }
         }
       }
 

@@ -1,13 +1,14 @@
 package annotations
 
 import (
-	"path/filepath"
+	"fmt"
 	"strings"
 
 	"github.com/microsoft/typescript-go/angular-packages/compiler"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/output"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/render3"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/imports"
+	ngdiagnostics "github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/diagnostics"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/incremental/semantic_graph"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/metadata"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/scope"
@@ -15,16 +16,23 @@ import (
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/reflection"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/translator"
 	"github.com/microsoft/typescript-go/internal/ast"
+	tsdiagnostics "github.com/microsoft/typescript-go/internal/diagnostics"
 )
 
 type NgModuleAnalysis struct {
-	Declarations  []render3.R3Reference
-	Imports       []render3.R3Reference
-	Exports       []render3.R3Reference
-	Bootstrap     []render3.R3Reference
-	ProvidersExpr output.Expression
-	ImportsExpr   output.Expression
-	DecoratorNode *ast.Node
+	Declarations     []render3.R3Reference
+	Imports          []render3.R3Reference
+	Exports          []render3.R3Reference
+	Bootstrap        []render3.R3Reference
+	Schemas          []render3.R3Reference
+	DeclarationNodes []*ast.Node
+	ImportNodes      []*ast.Node
+	ExportNodes      []*ast.Node
+	BootstrapNodes   []*ast.Node
+	SchemaNodes      []*ast.Node
+	ProvidersExpr    output.Expression
+	ImportsExpr      output.Expression
+	DecoratorNode    *ast.Node
 }
 
 type NgModuleResolution struct {
@@ -81,6 +89,19 @@ func extractR3References(expr *ast.Expression) []render3.R3Reference {
 		}
 	}
 	return refs
+}
+
+func extractASTNodes(expr *ast.Expression) []*ast.Node {
+	var nodes []*ast.Node
+	if expr.Kind == ast.KindArrayLiteralExpression {
+		arr := expr.AsArrayLiteralExpression()
+		if arr.Elements != nil {
+			for _, elem := range arr.Elements.Nodes {
+				nodes = append(nodes, elem)
+			}
+		}
+	}
+	return nodes
 }
 
 func topLevelClassByName(sourceFile *ast.SourceFile) map[string]*ast.Node {
@@ -144,13 +165,20 @@ func (h *NgModuleDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorator
 		switch name {
 		case "declarations":
 			analysis.Declarations = extractR3References(initExpr)
+			analysis.DeclarationNodes = extractASTNodes(initExpr)
 		case "imports":
 			analysis.Imports = extractR3References(initExpr)
+			analysis.ImportNodes = extractASTNodes(initExpr)
 			analysis.ImportsExpr = output.NewWrappedNodeExpr(initExpr, nil, nil, nil)
 		case "exports":
 			analysis.Exports = extractR3References(initExpr)
+			analysis.ExportNodes = extractASTNodes(initExpr)
 		case "bootstrap":
 			analysis.Bootstrap = extractR3References(initExpr)
+			analysis.BootstrapNodes = extractASTNodes(initExpr)
+		case "schemas":
+			analysis.Schemas = extractR3References(initExpr)
+			analysis.SchemaNodes = extractASTNodes(initExpr)
 		case "providers":
 			analysis.ProvidersExpr = output.NewWrappedNodeExpr(initExpr, nil, nil, nil)
 		}
@@ -159,16 +187,43 @@ func (h *NgModuleDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorator
 	// Register module metadata
 	if h.metaRegistry != nil {
 		classes := topLevelClassByName(ast.GetSourceFileOfNode(node.AsNode()))
-		var decls, imps, exps []metadata.Reference
-		for _, d := range analysis.Declarations {
-			decls = append(decls, referenceFromR3(d, classes))
+
+		resolveRefNode := func(elem *ast.Node) metadata.Reference {
+			if elem == nil {
+				return metadata.Reference{}
+			}
+			if elem.Kind == ast.KindIdentifier {
+				decl := h.host.GetDeclarationOfIdentifier(elem)
+				if decl != nil && decl.Node != nil {
+					return metadata.Reference{
+						Name:         elem.AsIdentifier().Text,
+						Node:         decl.Node,
+						OwningModule: decl.ViaModule,
+					}
+				}
+				// Fallback to same-file class decl
+				name := elem.AsIdentifier().Text
+				if cNode, ok := classes[name]; ok {
+					return metadata.Reference{Name: name, Node: cNode}
+				}
+			}
+			return metadata.Reference{}
 		}
-		for _, i := range analysis.Imports {
-			imps = append(imps, referenceFromR3(i, classes))
+
+		var decls, imps, exps, schemas []metadata.Reference
+		for _, d := range analysis.DeclarationNodes {
+			decls = append(decls, resolveRefNode(d))
 		}
-		for _, e := range analysis.Exports {
-			exps = append(exps, referenceFromR3(e, classes))
+		for _, i := range analysis.ImportNodes {
+			imps = append(imps, resolveRefNode(i))
 		}
+		for _, e := range analysis.ExportNodes {
+			exps = append(exps, resolveRefNode(e))
+		}
+		for _, s := range analysis.SchemaNodes {
+			schemas = append(schemas, resolveRefNode(s))
+		}
+
 		h.metaRegistry.RegisterNgModule(node.AsNode(), &metadata.NgModuleMeta{
 			Name: node.Name().AsIdentifier().Text,
 			Ref: metadata.Reference{
@@ -178,14 +233,38 @@ func (h *NgModuleDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorator
 			Declarations: decls,
 			Imports:      imps,
 			Exports:      exps,
+			Schemas:      schemas,
 		})
 	}
 
 	// Register components declared in this module
 	if h.scopeRegistry != nil {
 		classes := topLevelClassByName(ast.GetSourceFileOfNode(node.AsNode()))
-		for _, decl := range analysis.Declarations {
-			ref := referenceFromR3(decl, classes)
+
+		resolveRefNode := func(elem *ast.Node) metadata.Reference {
+			if elem == nil {
+				return metadata.Reference{}
+			}
+			if elem.Kind == ast.KindIdentifier {
+				decl := h.host.GetDeclarationOfIdentifier(elem)
+				if decl != nil && decl.Node != nil {
+					return metadata.Reference{
+						Name:         elem.AsIdentifier().Text,
+						Node:         decl.Node,
+						OwningModule: decl.ViaModule,
+					}
+				}
+				// Fallback to same-file class decl
+				name := elem.AsIdentifier().Text
+				if cNode, ok := classes[name]; ok {
+					return metadata.Reference{Name: name, Node: cNode}
+				}
+			}
+			return metadata.Reference{}
+		}
+
+		for _, decl := range analysis.DeclarationNodes {
+			ref := resolveRefNode(decl)
 			if ref.Node != nil {
 				h.scopeRegistry.RegisterComponentDeclaration(ref.Node, node.AsNode())
 			}
@@ -196,7 +275,145 @@ func (h *NgModuleDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorator
 }
 
 func (h *NgModuleDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysisData any) (any, []ast.Diagnostic) {
-	return &NgModuleResolution{}, nil
+	analysis := analysisData.(*NgModuleAnalysis)
+	var diagnostics []ast.Diagnostic
+
+	// 1. Validate declarations
+	seenDecls := make(map[*ast.Node]bool)
+	classes := topLevelClassByName(ast.GetSourceFileOfNode(node.AsNode()))
+
+	resolveRefNode := func(elem *ast.Node) metadata.Reference {
+		if elem == nil {
+			return metadata.Reference{}
+		}
+		if elem.Kind == ast.KindIdentifier {
+			decl := h.host.GetDeclarationOfIdentifier(elem)
+			if decl != nil && decl.Node != nil {
+				return metadata.Reference{
+					Name:         elem.AsIdentifier().Text,
+					Node:         decl.Node,
+					OwningModule: decl.ViaModule,
+				}
+			}
+			name := elem.AsIdentifier().Text
+			if cNode, ok := classes[name]; ok {
+				return metadata.Reference{Name: name, Node: cNode}
+			}
+		}
+		return metadata.Reference{}
+	}
+
+	for _, declExpr := range analysis.DeclarationNodes {
+		ref := resolveRefNode(declExpr)
+		if ref.Node == nil {
+			diagnostics = append(diagnostics, *ngdiagnostics.MakeDiagnostic(
+				ngdiagnostics.ErrorCode_NGMODULE_INVALID_DECLARATION,
+				declExpr,
+				fmt.Sprintf("Declaration is not a valid class/type."),
+				nil,
+				tsdiagnostics.CategoryError,
+			))
+			continue
+		}
+
+		if seenDecls[ref.Node] {
+			diagnostics = append(diagnostics, *ngdiagnostics.MakeDiagnostic(
+				ngdiagnostics.ErrorCode_NGMODULE_INVALID_DECLARATION,
+				declExpr,
+				fmt.Sprintf("Type %s is declared multiple times in this NgModule.", ref.Name),
+				nil,
+				tsdiagnostics.CategoryError,
+			))
+		}
+		seenDecls[ref.Node] = true
+
+		dirMeta := h.metaRegistry.GetDirectiveMetadata(ref.Node)
+		pipeMeta := h.metaRegistry.GetPipeMetadata(ref.Node)
+		isStandalone := false
+		if dirMeta != nil && dirMeta.Standalone {
+			isStandalone = true
+		} else if pipeMeta != nil && pipeMeta.Standalone {
+			isStandalone = true
+		}
+		if isStandalone {
+			diagnostics = append(diagnostics, *ngdiagnostics.MakeDiagnostic(
+				ngdiagnostics.ErrorCode_NGMODULE_DECLARATION_IS_STANDALONE,
+				declExpr,
+				fmt.Sprintf("The component/directive/pipe '%s' is standalone and cannot be declared in an NgModule.", ref.Name),
+				nil,
+				tsdiagnostics.CategoryError,
+			))
+		}
+
+		if h.scopeRegistry != nil {
+			if modules := h.scopeRegistry.GetComponentModules(ref.Node); len(modules) > 1 {
+				var moduleNames []string
+				for _, m := range modules {
+					if name := getClassName(m); name != "" {
+						moduleNames = append(moduleNames, name)
+					}
+				}
+				diagnostics = append(diagnostics, *ngdiagnostics.MakeDiagnostic(
+					ngdiagnostics.ErrorCode_NGMODULE_DECLARATION_NOT_UNIQUE,
+					declExpr,
+					fmt.Sprintf("The component/directive/pipe '%s' is declared in multiple NgModules: %s", ref.Name, strings.Join(moduleNames, ", ")),
+					nil,
+					tsdiagnostics.CategoryError,
+				))
+			}
+		}
+	}
+
+	// 2. Validate imports
+	for _, impExpr := range analysis.ImportNodes {
+		ref := resolveRefNode(impExpr)
+		if ref.Node == nil {
+			diagnostics = append(diagnostics, *ngdiagnostics.MakeDiagnostic(
+				ngdiagnostics.ErrorCode_NGMODULE_INVALID_IMPORT,
+				impExpr,
+				fmt.Sprintf("Import is not a valid class/type."),
+				nil,
+				tsdiagnostics.CategoryError,
+			))
+			continue
+		}
+
+		isNgModule := h.metaRegistry.GetNgModuleMetadata(ref.Node) != nil
+		dirMeta := h.metaRegistry.GetDirectiveMetadata(ref.Node)
+		pipeMeta := h.metaRegistry.GetPipeMetadata(ref.Node)
+
+		isStandaloneDirectiveOrPipe := false
+		if dirMeta != nil && dirMeta.Standalone {
+			isStandaloneDirectiveOrPipe = true
+		} else if pipeMeta != nil && pipeMeta.Standalone {
+			isStandaloneDirectiveOrPipe = true
+		}
+
+		if !isNgModule && !isStandaloneDirectiveOrPipe {
+			diagnostics = append(diagnostics, *ngdiagnostics.MakeDiagnostic(
+				ngdiagnostics.ErrorCode_NGMODULE_INVALID_IMPORT,
+				impExpr,
+				fmt.Sprintf("The imported class '%s' is not standalone and cannot be imported directly. It must be declared in an NgModule, and that NgModule must be imported instead.", ref.Name),
+				nil,
+				tsdiagnostics.CategoryError,
+			))
+		}
+	}
+
+	return &NgModuleResolution{}, diagnostics
+}
+
+func getClassName(node *ast.Node) string {
+	if node == nil {
+		return ""
+	}
+	if node.Kind == ast.KindClassDeclaration {
+		decl := node.AsClassDeclaration()
+		if decl.Name() != nil && decl.Name().Kind == ast.KindIdentifier {
+			return decl.Name().AsIdentifier().Text
+		}
+	}
+	return ""
 }
 
 func (h *NgModuleDecoratorHandler) CompileFull(node *ast.ClassDeclaration, analysisData any, resolutionData any, pool *compiler.ConstantPool, importMgr *imports.ImportManager, factory *ast.NodeFactory) ([]transform.CompileResult, []ast.Diagnostic) {
@@ -217,6 +434,7 @@ func (h *NgModuleDecoratorHandler) CompileFull(node *ast.ClassDeclaration, analy
 				Value: output.NewReadVarExpr(className, nil, nil, nil),
 			},
 			SelectorScopeMode: render3.R3SelectorScopeModeInline,
+			Schemas:           analysis.Schemas,
 		},
 		Declarations: analysis.Declarations,
 		Imports:      analysis.Imports,
@@ -306,61 +524,9 @@ func (h *NgModuleDecoratorHandler) CompileFull(node *ast.ClassDeclaration, analy
 		}
 	}
 
-	// Class Debug Info
-	var classDebugInfoNode *ast.Node
-	filePath := ""
-	lineNum := 0
-	if node.AsNode().Parent != nil && node.AsNode().Parent.Kind == ast.KindSourceFile {
-		sf := node.AsNode().Parent.AsSourceFile()
-		rawPath := sf.FileName()
-
-		if rel, err := filepath.Rel(".", rawPath); err == nil && !strings.HasPrefix(rel, "..") {
-			filePath = rel
-		} else {
-			if idx := strings.Index(rawPath, "src/"); idx != -1 {
-				filePath = rawPath[idx:]
-			} else {
-				filePath = rawPath
-			}
-		}
-
-		var targetPos int
-		if node.Name() != nil {
-			targetPos = node.Name().Pos()
-		} else {
-			targetPos = node.AsNode().Pos()
-		}
-		if targetPos > 0 {
-			text := sf.Text()
-			if targetPos <= len(text) {
-				lineNum = strings.Count(text[:targetPos], "\n")
-			}
-		}
-	}
-
-	classDebugExpr := render3.CompileClassDebugInfo(render3.R3ClassDebugInfo{
-		Type:       output.NewReadVarExpr(className, nil, nil, nil),
-		ClassName:  output.NewLiteralExpr(className, nil, nil, nil),
-		FilePath:   output.NewLiteralExpr(filePath, nil, nil, nil),
-		LineNumber: output.NewLiteralExpr(lineNum, nil, nil, nil),
-	})
-
-	if classDebugExpr != nil {
-		stmt := classDebugExpr.ToStmt(nil)
-		astStmt := stmt.VisitStatement(visitor, translator.Context{IsStatementMode: true})
-		if astStmt != nil {
-			if n, ok := astStmt.(*ast.Node); ok {
-				classDebugInfoNode = n
-			}
-		}
-	}
-
 	var extraStatements []*ast.Node
 	if classMetadataNode != nil {
 		extraStatements = append(extraStatements, classMetadataNode)
-	}
-	if classDebugInfoNode != nil {
-		extraStatements = append(extraStatements, classDebugInfoNode)
 	}
 
 	return []transform.CompileResult{

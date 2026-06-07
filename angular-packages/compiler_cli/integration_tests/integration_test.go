@@ -8,6 +8,8 @@ import (
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/annotations/ng_module"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/annotations/pipe"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsctest"
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/annotations"
+	ngdiagnostics "github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/diagnostics"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/metadata"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/scope"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/partial_evaluator"
@@ -200,4 +202,110 @@ func TestIntegration_AngularAppCompilation(t *testing.T) {
 	assert.True(t, foundHighlight, "HighlightDirective should be visible in compilation scope")
 	assert.True(t, foundComponent, "AppComponent should be visible in compilation scope")
 	assert.True(t, foundTruncate, "TruncatePipe should be visible in compilation scope")
+}
+
+func TestIntegration_NgModuleDiagnostics(t *testing.T) {
+	if !bundled.Embedded {
+		t.Skip("bundled files are not embedded, skipping integration test that requires type checker")
+	}
+
+	result := ngtsctest.MakeProgram(t, []ngtsctest.ProgramFile{
+		{
+			Name: "/node_modules/@angular/core/index.d.ts",
+			Contents: `
+				export const Component: any;
+				export const Directive: any;
+				export const Pipe: any;
+				export const NgModule: any;
+			`,
+		},
+		{
+			Name: "/app.component.ts",
+			Contents: `
+				import {Component} from '@angular/core';
+				@Component({
+					selector: 'app-root',
+					standalone: true,
+					template: '<h1>Hello Standalone!</h1>'
+				})
+				export class StandaloneComponent {}
+
+				@Component({
+					selector: 'app-non-standalone',
+					standalone: false,
+					template: '<h1>Hello Non-Standalone!</h1>'
+				})
+				export class NonStandaloneComponent {}
+			`,
+		},
+		{
+			Name: "/app.module.ts",
+			Contents: `
+				import {NgModule} from '@angular/core';
+				import {StandaloneComponent, NonStandaloneComponent} from './app.component';
+
+				@NgModule({
+					declarations: [StandaloneComponent, NonStandaloneComponent, NonStandaloneComponent],
+					imports: [NonStandaloneComponent]
+				})
+				export class AppModule {}
+			`,
+		},
+	})
+	defer result.Release()
+
+	host := reflection.NewTypeScriptReflectionHost(result.Checker)
+	metaRegistry := metadata.NewLocalMetadataRegistry()
+	scopeRegistry := scope.NewLocalModuleScopeRegistry(metaRegistry)
+
+	compHandler := annotations.NewComponentDecoratorHandler(host, false, metaRegistry, scopeRegistry, false)
+	moduleHandler := annotations.NewNgModuleDecoratorHandler(host, metaRegistry, scopeRegistry)
+
+	sfComponent := ngtsctest.RequireSourceFile(t, result, "/app.component.ts")
+	classStandalone := ngtsctest.FindNamedClassDeclaration(sfComponent, "StandaloneComponent")
+	classNonStandalone := ngtsctest.FindNamedClassDeclaration(sfComponent, "NonStandaloneComponent")
+
+	sfModule := ngtsctest.RequireSourceFile(t, result, "/app.module.ts")
+	classModule := ngtsctest.FindNamedClassDeclaration(sfModule, "AppModule")
+
+	// 1. Analyze components
+	standaloneDec := compHandler.Detect(classStandalone.AsClassDeclaration(), host.GetDecoratorsOfDeclaration(classStandalone))
+	_, diags := compHandler.Analyze(classStandalone.AsClassDeclaration(), standaloneDec)
+	require.Empty(t, diags)
+
+	nonStandaloneDec := compHandler.Detect(classNonStandalone.AsClassDeclaration(), host.GetDecoratorsOfDeclaration(classNonStandalone))
+	_, diags = compHandler.Analyze(classNonStandalone.AsClassDeclaration(), nonStandaloneDec)
+	require.Empty(t, diags)
+
+	// 2. Analyze NgModule
+	moduleDec := moduleHandler.Detect(classModule.AsClassDeclaration(), host.GetDecoratorsOfDeclaration(classModule))
+	analysis, diags := moduleHandler.Analyze(classModule.AsClassDeclaration(), moduleDec)
+	require.Empty(t, diags)
+
+	// 3. Resolve NgModule
+	_, diags = moduleHandler.Resolve(classModule.AsClassDeclaration(), analysis)
+
+	// Expect diagnostics errors:
+	// - StandaloneComponent is standalone but declared in NgModule (6008)
+	// - NonStandaloneComponent is declared multiple times in this NgModule (6001)
+	// - NonStandaloneComponent is imported but not standalone/NgModule (6002)
+	assert.NotEmpty(t, diags)
+
+	found6008 := false
+	found6001 := false
+	found6002 := false
+	for _, diag := range diags {
+		if diag.Code() == int32(ngdiagnostics.NgErrorCode(ngdiagnostics.ErrorCode_NGMODULE_DECLARATION_IS_STANDALONE)) {
+			found6008 = true
+		}
+		if diag.Code() == int32(ngdiagnostics.NgErrorCode(ngdiagnostics.ErrorCode_NGMODULE_INVALID_DECLARATION)) {
+			found6001 = true
+		}
+		if diag.Code() == int32(ngdiagnostics.NgErrorCode(ngdiagnostics.ErrorCode_NGMODULE_INVALID_IMPORT)) {
+			found6002 = true
+		}
+	}
+	assert.True(t, found6008, "Should report ErrorCode_NGMODULE_DECLARATION_IS_STANDALONE (6008)")
+	assert.True(t, found6001, "Should report ErrorCode_NGMODULE_INVALID_DECLARATION (6001) for duplicate declarations")
+	assert.True(t, found6002, "Should report ErrorCode_NGMODULE_INVALID_IMPORT (6002) for non-standalone imported directive")
 }

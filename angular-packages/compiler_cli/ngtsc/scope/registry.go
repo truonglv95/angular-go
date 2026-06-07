@@ -13,13 +13,19 @@ type LocalModuleScopeRegistry struct {
 	mu                sync.RWMutex
 	metaReader        metadata.MetadataReader
 	componentToModule map[*ast.Node]*ast.Node // Component Node -> NgModule Node
+	declarationsOf    map[*ast.Node][]*ast.Node // Component Node -> NgModule Nodes
 }
 
 func NewLocalModuleScopeRegistry(metaReader metadata.MetadataReader) *LocalModuleScopeRegistry {
 	return &LocalModuleScopeRegistry{
 		metaReader:        metaReader,
 		componentToModule: make(map[*ast.Node]*ast.Node),
+		declarationsOf:    make(map[*ast.Node][]*ast.Node),
 	}
+}
+
+func (r *LocalModuleScopeRegistry) MetadataReader() metadata.MetadataReader {
+	return r.metaReader
 }
 
 // Ensure interface implementation
@@ -31,6 +37,23 @@ func (r *LocalModuleScopeRegistry) RegisterComponentDeclaration(component *ast.N
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.componentToModule[component] = module
+
+	exists := false
+	for _, m := range r.declarationsOf[component] {
+		if m == module {
+			exists = true
+			break
+		}
+	}
+	if !exists {
+		r.declarationsOf[component] = append(r.declarationsOf[component], module)
+	}
+}
+
+func (r *LocalModuleScopeRegistry) GetComponentModules(component *ast.Node) []*ast.Node {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.declarationsOf[component]
 }
 
 // GetCompilationScope resolves the compilation scope (visible directives, components, pipes) for a component.

@@ -263,7 +263,14 @@ func NewBindingParser(exprParser *expression_parser.Parser, schemaRegistry Eleme
 
 func (b *BindingParser) CreateBoundHostProperties(properties HostProperties, sourceSpan expression_parser.ParseSourceSpan) []ParsedProperty {
 	boundProps := []ParsedProperty{}
-	for propName, expression := range properties {
+	var sortedKeys []string
+	for propName := range properties {
+		sortedKeys = append(sortedKeys, propName)
+	}
+	sort.Strings(sortedKeys)
+
+	for _, propName := range sortedKeys {
+		expression := properties[propName]
 		b.ParsePropertyBinding(
 			propName,
 			expression,
@@ -282,7 +289,14 @@ func (b *BindingParser) CreateBoundHostProperties(properties HostProperties, sou
 
 func (b *BindingParser) CreateDirectiveHostEventAsts(hostListeners HostListeners, sourceSpan expression_parser.ParseSourceSpan) []ParsedEvent {
 	targetEvents := []ParsedEvent{}
-	for propName, expression := range hostListeners {
+	var sortedKeys []string
+	for propName := range hostListeners {
+		sortedKeys = append(sortedKeys, propName)
+	}
+	sort.Strings(sortedKeys)
+
+	for _, propName := range sortedKeys {
+		expression := hostListeners[propName]
 		b.ParseEvent(
 			propName,
 			expression,

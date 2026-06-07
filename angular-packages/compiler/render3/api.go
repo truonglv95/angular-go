@@ -33,7 +33,9 @@ type R3DirectiveMetadata struct {
 		UsesOnChanges bool
 	}
 	Inputs          map[string]R3InputMetadata
+	InputProperties   []string
 	Outputs         map[string]string
+	OutputProperties  []string
 	UsesInheritance bool
 	ControlCreate   *struct {
 		PassThroughInput *string

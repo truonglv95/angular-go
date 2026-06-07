@@ -63,6 +63,7 @@ type BuildResult struct {
 	Outputs     []OutputFile        `json:"outputs"`
 	Diagnostics []DiagnosticMessage `json:"diagnostics"`
 	Status      int                 `json:"status"`
+	PerfPhases  map[string]int64    `json:"perfPhases,omitempty"`
 }
 
 type BuildParams struct {
@@ -70,6 +71,7 @@ type BuildParams struct {
 	CompilationMode string `json:"compilationMode"`
 	Hmr             bool   `json:"hmr"`
 	ContextId       string `json:"contextId"`
+	PreserveImports bool   `json:"preserveImports"`
 }
 
 // B#6 FIX: ContextState now tracks per-file invalidation instead of full cache clear.
@@ -80,6 +82,10 @@ type ContextState struct {
 
 	// H1 FIX: Cache last build outputs indexed by absolute path for get_output.
 	outputs map[string]*OutputFile
+	// Output manifest returned by build. Text is intentionally omitted so the
+	// daemon does not serialize every compiled file on each build response.
+	outputManifest []OutputFile
+	lastPerfPhases map[string]int64
 
 	// Map of files that have been invalidated since the last compilation.
 	invalidatedFiles map[string]bool
@@ -133,6 +139,9 @@ func getOrCreateContext(params BuildParams) *ContextState {
 		config.CompilationMode = "global"
 	}
 	config.EnableHmr = params.Hmr
+	if params.PreserveImports {
+		EnablePreserveImports(config)
+	}
 	config.Write = false
 	sys := newSystem(config.DiscardOutput)
 	host := CreateCompilerHost(sys)
@@ -250,6 +259,7 @@ func handleRequest(ctx context.Context, req RpcRequest) {
 			Project         string `json:"project"`
 			CompilationMode string `json:"compilationMode"`
 			Hmr             bool   `json:"hmr"`
+			PreserveImports bool   `json:"preserveImports"`
 		}
 		if err := json.Unmarshal(req.Params, &params); err != nil {
 			sendError(req.Id, "InvalidParams", err.Error())
@@ -266,6 +276,9 @@ func handleRequest(ctx context.Context, req RpcRequest) {
 				config.CompilationMode = "global"
 			}
 			config.EnableHmr = params.Hmr
+			if params.PreserveImports {
+				EnablePreserveImports(config)
+			}
 			config.Write = false
 			sys := newSystem(config.DiscardOutput)
 			host := CreateCompilerHost(sys)
@@ -295,6 +308,16 @@ func handleRequest(ctx context.Context, req RpcRequest) {
 
 		invalidated := state.invalidatedFiles
 		state.invalidatedFiles = nil
+
+		if state.NgProgram != nil && len(invalidated) == 0 && state.outputManifest != nil {
+			sendResult(req.Id, BuildResult{
+				Outputs:     state.outputManifest,
+				Diagnostics: nil,
+				Status:      int(tsc.ExitStatusSuccess),
+				PerfPhases:  state.lastPerfPhases,
+			})
+			return
+		}
 
 		result := &PerformCompilationResult{
 			Diagnostics: state.Config.Errors,
@@ -329,17 +352,33 @@ func handleRequest(ctx context.Context, req RpcRequest) {
 		}
 
 		// H1 FIX: Index outputs by path so get_output can serve them.
-		newOutputs := make(map[string]*OutputFile, len(result.Outputs))
+		if state.outputs == nil {
+			state.outputs = make(map[string]*OutputFile)
+		}
 		for i := range result.Outputs {
 			o := &result.Outputs[i]
-			newOutputs[o.Path] = o
+			state.outputs[o.Path] = o
+			absPath := o.Path
+			if !filepath.IsAbs(absPath) {
+				absPath = filepath.Join(state.Host.GetCurrentDirectory(), absPath)
+			}
+			state.outputs[filepath.Clean(absPath)] = o
 		}
-		state.outputs = newOutputs
+		state.outputManifest = make([]OutputFile, len(result.Outputs))
+		for i, output := range result.Outputs {
+			state.outputManifest[i] = OutputFile{
+				Path: output.Path,
+				Hash: output.Hash,
+				Kind: output.Kind,
+			}
+		}
+		state.lastPerfPhases = result.PerfPhases
 
 		sendResult(req.Id, BuildResult{
-			Outputs:     result.Outputs,
+			Outputs:     state.outputManifest,
 			Diagnostics: diags,
 			Status:      int(result.Status),
+			PerfPhases:  result.PerfPhases,
 		})
 
 	case "get_hmr_update":
@@ -427,7 +466,14 @@ func handleRequest(ctx context.Context, req RpcRequest) {
 			return
 		}
 		state.mu.RLock()
-		output := state.outputs[params.Path]
+		cleanPath := filepath.Clean(params.Path)
+		output := state.outputs[cleanPath]
+		if output == nil {
+			output = state.outputs[params.Path]
+		}
+		if output == nil && !filepath.IsAbs(cleanPath) {
+			output = state.outputs[filepath.Join(state.Host.GetCurrentDirectory(), cleanPath)]
+		}
 		state.mu.RUnlock()
 		if output == nil {
 			sendResult(req.Id, nil)

@@ -183,6 +183,11 @@ const (
 	PerfPhase_LSSemanticClassification
 
 	/**
+	 * Time spent performing the Angular linker transform on emitted JS files.
+	 */
+	PerfPhase_Linker
+
+	/**
 	 * Tracks the number of `PerfPhase`s, and must appear at the end of the list.
 	 */
 	PerfPhase_LAST

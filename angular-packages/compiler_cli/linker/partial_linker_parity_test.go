@@ -55,7 +55,7 @@ Dir.ɵdir = i0.ɵɵngDeclareDirective({
 	assertContains(t, text, `selectors: [["", "dir", ""]]`)
 	assertContains(t, text, `value: "value"`)
 	assertContains(t, text, `flag: "flag"`)
-	assertContains(t, text, `signalValue: [1, "signalValue", "signalValue"]`)
+	assertContains(t, text, `signalValue: [1, "signalValue"]`)
 	assertContains(t, text, "hostBindings")
 }
 

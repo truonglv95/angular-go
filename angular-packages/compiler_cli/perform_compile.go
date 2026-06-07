@@ -3,10 +3,12 @@ package compiler_cli
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -16,11 +18,13 @@ import (
 	_ "github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline/ingest"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc"
 	ngtsc_core "github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/core"
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/perf"
 
 	"github.com/microsoft/typescript-go/internal/ast"
 	"github.com/microsoft/typescript-go/internal/bundled"
 	"github.com/microsoft/typescript-go/internal/compiler"
 	"github.com/microsoft/typescript-go/internal/core"
+	"github.com/microsoft/typescript-go/internal/diagnostics"
 	"github.com/microsoft/typescript-go/internal/execute/tsc"
 	"github.com/microsoft/typescript-go/internal/locale"
 	"github.com/microsoft/typescript-go/internal/tsoptions"
@@ -41,6 +45,12 @@ type ParsedConfiguration struct {
 	DiscardOutput   bool
 	Write           bool
 	Format          string
+}
+
+func EnablePreserveImports(config *ParsedConfiguration) {
+	if config != nil && config.Options != nil {
+		config.Options.VerbatimModuleSyntax = core.TSTrue
+	}
 }
 
 type osSys struct {
@@ -156,7 +166,7 @@ func ReadConfiguration(project string) *ParsedConfiguration {
 
 type OutputFile struct {
 	Path string `json:"path"`
-	Text string `json:"text"`
+	Text string `json:"text,omitempty"`
 	Hash string `json:"hash,omitempty"`
 	Kind string `json:"kind"`
 }
@@ -165,6 +175,7 @@ type PerformCompilationResult struct {
 	Diagnostics []*ast.Diagnostic
 	Status      tsc.ExitStatus
 	Outputs     []OutputFile
+	PerfPhases  map[string]int64 `json:"perfPhases,omitempty"`
 }
 
 func PerformCompilation(config *ParsedConfiguration) *PerformCompilationResult {
@@ -308,7 +319,18 @@ func PerformCompilationWithHost(config *ParsedConfiguration, host compiler.Compi
 
 	func() {
 		diags = append(diags, ngProgram.GetTsProgram().GetConfigFileParsingDiagnostics()...)
-		diags = append(diags, ngProgram.GetTsProgram().GetSyntacticDiagnostics(nil, nil)...)
+		if len(invalidatedFiles) > 0 {
+			for file := range invalidatedFiles {
+				absPath := tspath.GetNormalizedAbsolutePath(file, host.GetCurrentDirectory())
+				canonicalPath := tspath.GetCanonicalFileName(absPath, host.FS().UseCaseSensitiveFileNames())
+				sf := ngProgram.GetTsProgram().GetSourceFileByPath(tspath.Path(canonicalPath))
+				if sf != nil {
+					diags = append(diags, ngProgram.GetTsProgram().GetSyntacticDiagnostics(ctx, sf)...)
+				}
+			}
+		} else {
+			diags = append(diags, ngProgram.GetTsProgram().GetSyntacticDiagnostics(ctx, nil)...)
+		}
 	}()
 
 	if len(diags) > 0 {
@@ -322,38 +344,120 @@ func PerformCompilationWithHost(config *ParsedConfiguration, host compiler.Compi
 	var outputs []OutputFile
 	var outputsMutex sync.Mutex
 
-	func() {
+	type PendingFile struct {
+		FileName string
+		Text     string
+	}
+	var pendingFiles []PendingFile
+	var pendingFilesMutex sync.Mutex
 
-		// Throttle concurrent file writes to avoid disk thrashing
-		writeSemaphore := make(chan struct{}, 16)
-
-		emitResult = ngProgram.Emit(ctx, compiler.EmitOptions{
-			WriteFile: func(fileName string, text string, data *compiler.WriteFileData) error {
-				writeSemaphore <- struct{}{}
-				defer func() { <-writeSemaphore }()
-
-				var linkErr error
+	affected := ngProgram.GetAffectedFiles()
+	if oldProgram != nil {
+		// Warm rebuild
+		var skippedEmit bool = false
+		if len(invalidatedFiles) > 0 && affected != nil {
+			for file := range affected {
+				absPath := tspath.GetNormalizedAbsolutePath(file, host.GetCurrentDirectory())
+				canonicalPath := tspath.GetCanonicalFileName(absPath, host.FS().UseCaseSensitiveFileNames())
+				sf := ngProgram.GetTsProgram().GetSourceFileByPath(tspath.Path(canonicalPath))
+				if sf == nil {
+					continue
+				}
+				var singleEmitResult *compiler.EmitResult
 				func() {
-					var linkedText string
-					var changed bool
-					linkedText, changed, linkErr = linkPartialDeclarationsInEmittedJavaScript(fileName, text)
-					if linkErr != nil {
+					singleEmitResult = ngProgram.Emit(ctx, compiler.EmitOptions{
+						TargetSourceFile: sf,
+						EmitOnly:         compiler.EmitOnlyJs,
+						WriteFile: func(fileName string, text string, data *compiler.WriteFileData) error {
+							pendingFilesMutex.Lock()
+							pendingFiles = append(pendingFiles, PendingFile{FileName: fileName, Text: text})
+							pendingFilesMutex.Unlock()
+							return nil
+						},
+					})
+				}()
+				if singleEmitResult != nil {
+					diags = append(diags, singleEmitResult.Diagnostics...)
+					if singleEmitResult.EmitSkipped {
+						skippedEmit = true
+					}
+				}
+			}
+		}
+		emitResult = &compiler.EmitResult{EmitSkipped: skippedEmit}
+	} else {
+		// Cold start: emit everything
+		func() {
+			emitResult = ngProgram.Emit(ctx, compiler.EmitOptions{
+				WriteFile: func(fileName string, text string, data *compiler.WriteFileData) error {
+					pendingFilesMutex.Lock()
+					pendingFiles = append(pendingFiles, PendingFile{FileName: fileName, Text: text})
+					pendingFilesMutex.Unlock()
+					return nil
+				},
+			})
+		}()
+		if emitResult != nil {
+			diags = append(diags, emitResult.Diagnostics...)
+		}
+	}
+
+	if !emitResult.EmitSkipped && len(diags) == 0 {
+		// Run Linker in parallel
+		rec := ngProgram.PerfRecorder()
+		var prevPhase perf.PerfPhase
+		if rec != nil {
+			prevPhase = rec.Phase(perf.PerfPhase_Linker)
+		}
+
+		var wg sync.WaitGroup
+		errs := make(chan error, len(pendingFiles))
+		outputs = make([]OutputFile, len(pendingFiles))
+
+		numWorkers := runtime.NumCPU()
+		if numWorkers > 16 {
+			numWorkers = 16
+		}
+		if numWorkers < 1 {
+			numWorkers = 1
+		}
+		workerSem := make(chan struct{}, numWorkers)
+
+		for i, f := range pendingFiles {
+			wg.Add(1)
+			go func(idx int, file PendingFile) {
+				defer wg.Done()
+				workerSem <- struct{}{}
+				defer func() { <-workerSem }()
+
+				var text = file.Text
+				var linkErr error
+				var linkedText string
+				var changed bool
+
+				linkedText, changed, linkErr = linkPartialDeclarationsInEmittedJavaScript(file.FileName, text)
+				if linkErr != nil {
+					errs <- linkErr
+					return
+				}
+				if changed {
+					text = linkedText
+				}
+
+				if config.Write {
+					writeErr := host.FS().WriteFile(file.FileName, text)
+					if writeErr != nil {
+						errs <- writeErr
 						return
 					}
-					if changed {
-						text = linkedText
-					}
-				}()
-				if linkErr != nil {
-					return linkErr
 				}
 
 				kind := "other"
-				if strings.HasSuffix(fileName, ".js") {
+				if strings.HasSuffix(file.FileName, ".js") {
 					kind = "js"
-				} else if strings.HasSuffix(fileName, ".d.ts") {
+				} else if strings.HasSuffix(file.FileName, ".d.ts") {
 					kind = "dts"
-				} else if strings.HasSuffix(fileName, ".map") {
+				} else if strings.HasSuffix(file.FileName, ".map") {
 					kind = "map"
 				}
 
@@ -361,23 +465,29 @@ func PerformCompilationWithHost(config *ParsedConfiguration, host compiler.Compi
 				hashStr := fmt.Sprintf("%x", hash)
 
 				outputsMutex.Lock()
-				outputs = append(outputs, OutputFile{
-					Path: fileName,
+				outputs[idx] = OutputFile{
+					Path: file.FileName,
 					Text: text,
 					Hash: hashStr,
 					Kind: kind,
-				})
-				outputsMutex.Unlock()
-
-				if config.Write {
-					return host.FS().WriteFile(fileName, text)
 				}
-				return nil
-			},
-		})
-	}()
+				outputsMutex.Unlock()
+			}(i, f)
+		}
 
-	diags = append(diags, emitResult.Diagnostics...)
+		wg.Wait()
+		close(errs)
+
+		if rec != nil {
+			rec.Phase(prevPhase)
+		}
+
+		for err := range errs {
+			if err != nil {
+				diags = append(diags, ast.NewCompilerDiagnostic(diagnostics.Could_not_write_file_0_Colon_1, "", err.Error()))
+			}
+		}
+	}
 
 	status := tsc.ExitStatusSuccess
 	if emitResult.EmitSkipped || len(diags) > 0 {
@@ -388,8 +498,11 @@ func PerformCompilationWithHost(config *ParsedConfiguration, host compiler.Compi
 		Diagnostics: diags,
 		Status:      status,
 		Outputs:     outputs,
+		PerfPhases:  ngProgram.GetPerfResults(),
 	}, ngProgram
 }
+
+var linkerCache sync.Map // Thread-safe global cache mapping unlinked text hash to linked text string.
 
 func linkPartialDeclarationsInEmittedJavaScript(fileName string, text string) (string, bool, error) {
 	if !isJavaScriptOutput(fileName) {
@@ -400,7 +513,27 @@ func linkPartialDeclarationsInEmittedJavaScript(fileName string, text string) (s
 	if err != nil {
 		absFileName = fileName
 	}
-	return LinkJavaScriptText(absFileName, text, core.ScriptKindJS)
+
+	// Check cache by input unlinked text hash to avoid redundant parses
+	hash := sha256.Sum256([]byte(text))
+	key := hex.EncodeToString(hash[:])
+	if val, ok := linkerCache.Load(key); ok {
+		cachedStr := val.(string)
+		return cachedStr, cachedStr != text, nil
+	}
+
+	linkedText, changed, linkErr := LinkJavaScriptText(absFileName, text, core.ScriptKindJS)
+	if linkErr != nil {
+		return text, false, linkErr
+	}
+
+	if changed {
+		linkerCache.Store(key, linkedText)
+	} else {
+		linkerCache.Store(key, text)
+	}
+
+	return linkedText, changed, nil
 }
 
 func isJavaScriptOutput(fileName string) bool {
