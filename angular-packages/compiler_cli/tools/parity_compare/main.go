@@ -223,11 +223,11 @@ func compareRender3Fixture(repoRoot string, opts options, fixture string) (repor
 		return report{}, err
 	}
 
-	goFiles, err := collectJS(goOut)
+	goFiles, err := collectEmitFiles(goOut)
 	if err != nil {
 		return report{}, err
 	}
-	ngtscFiles, err := collectJS(ngtscOut)
+	ngtscFiles, err := collectEmitFiles(ngtscOut)
 	if err != nil {
 		return report{}, err
 	}
@@ -259,8 +259,17 @@ func compareRender3Fixture(repoRoot string, opts options, fixture string) (repor
 			if string(goText) == string(ngtscText) {
 				fr.Status = statusExact
 			} else {
-				goNormalized := parity.NormalizeGoldenJSWithRules(string(goText))
-				ngtscNormalized := parity.NormalizeGoldenJSWithRules(string(ngtscText))
+				var goNormalized parity.NormalizedJS
+				var ngtscNormalized parity.NormalizedJS
+				if strings.HasSuffix(rel, ".d.ts") {
+					goNormText := strings.ReplaceAll(string(goText), "\r\n", "\n")
+					ngtscNormText := strings.ReplaceAll(string(ngtscText), "\r\n", "\n")
+					goNormalized = parity.NormalizedJS{Text: goNormText, Rules: []string{"line-endings"}}
+					ngtscNormalized = parity.NormalizedJS{Text: ngtscNormText, Rules: []string{"line-endings"}}
+				} else {
+					goNormalized = parity.NormalizeGoldenJSWithRules(string(goText))
+					ngtscNormalized = parity.NormalizeGoldenJSWithRules(string(ngtscText))
+				}
 				fr.Normalizations = parity.MergeRuleNames(goNormalized.Rules, ngtscNormalized.Rules)
 				writeText(filepath.Join(baseOut, "normalized", "go", rel), goNormalized.Text)
 				writeText(filepath.Join(baseOut, "normalized", "ngtsc", rel), ngtscNormalized.Text)
@@ -497,7 +506,7 @@ func runCommand(cwd string, name string, args ...string) commandResult {
 	return commandResult{stdout: stdout.String(), stderr: stderr.String(), err: err}
 }
 
-func collectJS(root string) (map[string]string, error) {
+func collectEmitFiles(root string) (map[string]string, error) {
 	files := map[string]string{}
 	if _, err := os.Stat(root); err != nil {
 		if os.IsNotExist(err) {
@@ -509,7 +518,10 @@ func collectJS(root string) (map[string]string, error) {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() || !strings.HasSuffix(path, ".js") {
+		if d.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(path, ".js") && !strings.HasSuffix(path, ".d.ts") {
 			return nil
 		}
 		rel, err := filepath.Rel(root, path)
