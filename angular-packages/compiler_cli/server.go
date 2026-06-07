@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -217,6 +218,13 @@ func RunServer() {
 }
 
 func handleRequest(ctx context.Context, req RpcRequest) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(os.Stderr, "go-ngc server panic while handling %s: %v\n%s\n", req.Method, r, debug.Stack())
+			sendError(req.Id, "InternalError", fmt.Sprintf("go-ngc server panic while handling %s: %v", req.Method, r))
+		}
+	}()
+
 	// C4 FIX: Check if shutdown is in progress before doing heavy work.
 	// Handlers that hold write locks will still finish — they just skip sending
 	// the result if context is already done (stdout may be closed).

@@ -453,7 +453,7 @@ func TestTemplateTransform(t *testing.T) {
 
 		t.Run("should parse text nodes", func(t *testing.T) {
 			assertTransform(t, "a", [][]any{
-				{"BoundText", ""},
+				{"Text", "a"},
 			})
 		})
 
@@ -466,14 +466,14 @@ func TestTemplateTransform(t *testing.T) {
 
 		t.Run("should parse ngContent", func(t *testing.T) {
 			assertTransform(t, "<ng-content select=\"a\"></ng-content>", [][]any{
-				{"Content", ""},
+				{"Content", "a"},
 				{"TextAttribute", "select", "a"},
 			})
 		})
 
 		t.Run("should parse ngContent when it contains WS only", func(t *testing.T) {
 			assertTransform(t, "<ng-content select=\"a\">    \n   </ng-content>", [][]any{
-				{"Content", ""},
+				{"Content", "a"},
 				{"TextAttribute", "select", "a"},
 			})
 		})
@@ -481,7 +481,7 @@ func TestTemplateTransform(t *testing.T) {
 		t.Run("should parse ngContent regardless the namespace", func(t *testing.T) {
 			assertTransform(t, "<svg><ng-content select=\"a\"></ng-content></svg>", [][]any{
 				{"Element", ":svg:svg"},
-				{"Content", ""},
+				{"Content", "a"},
 				{"TextAttribute", "select", "a"},
 			})
 		})
@@ -957,43 +957,43 @@ func TestTemplateTransform(t *testing.T) {
 	t.Run("ng-content", func(t *testing.T) {
 		t.Run("should parse ngContent without selector", func(t *testing.T) {
 			assertTransform(t, "<ng-content></ng-content>", [][]any{
-				{"Content", ""},
+				{"Content", "*"},
 			})
 		})
 
 		t.Run("should parse ngContent with a specific selector", func(t *testing.T) {
 			assertTransform(t, "<ng-content select=\"tag[attribute]\"></ng-content>", [][]any{
-				{"Content", ""},
+				{"Content", "tag[attribute]"},
 				{"TextAttribute", "select", "tag[attribute]"},
 			})
 		})
 
 		t.Run("should parse ngContent with a selector", func(t *testing.T) {
 			assertTransform(t, "<ng-content select=\"a\"></ng-content><ng-content></ng-content><ng-content select=\"b\"></ng-content>", [][]any{
-				{"Content", ""},
+				{"Content", "a"},
 				{"TextAttribute", "select", "a"},
-				{"Content", ""},
-				{"Content", ""},
+				{"Content", "*"},
+				{"Content", "b"},
 				{"TextAttribute", "select", "b"},
 			})
 		})
 
 		t.Run("should parse ngProjectAs as an attribute", func(t *testing.T) {
 			assertTransform(t, "<ng-content ngProjectAs=\"a\"></ng-content>", [][]any{
-				{"Content", ""},
+				{"Content", "*"},
 				{"TextAttribute", "ngProjectAs", "a"},
 			})
 		})
 
 		t.Run("should parse ngContent with children", func(t *testing.T) {
 			assertTransform(t, "<ng-content><section>Root <div>Parent <span>Child</span></div></section></ng-content>", [][]any{
-				{"Content", ""},
+				{"Content", "*"},
 				{"Element", "section"},
-				{"BoundText", ""},
+				{"Text", "Root "},
 				{"Element", "div"},
-				{"BoundText", ""},
+				{"Text", "Parent "},
 				{"Element", "span"},
-				{"BoundText", ""},
+				{"Text", "Child"},
 			})
 		})
 	})
@@ -1034,13 +1034,13 @@ func TestTemplateTransform(t *testing.T) {
 	t.Run("Ignored elements", func(t *testing.T) {
 		t.Run("should ignore <script> elements", func(t *testing.T) {
 			assertTransform(t, "<script></script>a", [][]any{
-				{"BoundText", ""},
+				{"Text", "a"},
 			})
 		})
 
 		t.Run("should ignore <style> elements", func(t *testing.T) {
 			assertTransform(t, "<style></style>a", [][]any{
-				{"BoundText", ""},
+				{"Text", "a"},
 			})
 		})
 	})
@@ -1115,7 +1115,7 @@ func TestTemplateTransform(t *testing.T) {
 		t.Run("should parse a simple deferred block", func(t *testing.T) {
 			assertTransform(t, "@defer{hello}", [][]any{
 				{"DeferredBlock"},
-				{"BoundText", ""},
+				{"Text", "hello"},
 			})
 		})
 
@@ -1123,7 +1123,7 @@ func TestTemplateTransform(t *testing.T) {
 			assertTransform(t, "@defer (when isVisible() && loaded){hello}", [][]any{
 				{"DeferredBlock"},
 				{"BoundDeferredTrigger", "isVisible() && loaded"},
-				{"BoundText", ""},
+				{"Text", "hello"},
 			})
 		})
 	})
@@ -1141,17 +1141,17 @@ func TestTemplateTransform(t *testing.T) {
 				{"SwitchBlock", "cond.kind"},
 				{"SwitchBlockCaseGroup"},
 				{"SwitchBlockCase", "x()"},
-				{"BoundText", ""},
+				{"Text", " X case "},
 				{"SwitchBlockCaseGroup"},
 				{"SwitchBlockCase", "'hello'"},
 				{"Element", "button"},
-				{"BoundText", ""},
+				{"Text", "Y case"},
 				{"SwitchBlockCaseGroup"},
 				{"SwitchBlockCase", "42"},
-				{"BoundText", ""},
+				{"Text", " Z case "},
 				{"SwitchBlockCaseGroup"},
 				{"SwitchBlockCase", nil},
-				{"BoundText", ""},
+				{"Text", " No case matched "},
 			})
 		})
 
@@ -1186,7 +1186,7 @@ func TestTemplateTransform(t *testing.T) {
 				{"Variable", "$count", "$count"},
 				{"BoundText", " item "},
 				{"ForLoopBlockEmpty"},
-				{"BoundText", ""},
+				{"Text", " There were no items in the list. "},
 			})
 		})
 	})
@@ -1200,7 +1200,7 @@ func TestTemplateTransform(t *testing.T) {
       `, [][]any{
 				{"IfBlock"},
 				{"IfBlockBranch", "expr"},
-				{"BoundText", ""},
+				{"Text", " hello "},
 			})
 		})
 	})

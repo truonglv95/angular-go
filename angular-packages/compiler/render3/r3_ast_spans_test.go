@@ -481,7 +481,7 @@ func TestR3AstSpans(t *testing.T) {
 	t.Run("nodes without binding", func(t *testing.T) {
 		t.Run("is correct for text nodes", func(t *testing.T) {
 			assert.Equal(t, [][]string{
-				{"BoundText", "a"},
+				{"Text", "a"},
 			}, expectFromHtml("a", false))
 		})
 
@@ -853,11 +853,11 @@ func TestR3AstSpans(t *testing.T) {
 				{"Element", "<calendar-cmp [date]=\"current\"/>", "<calendar-cmp [date]=\"current\"/>", "<calendar-cmp [date]=\"current\"/>"},
 				{"BoundAttribute", "[date]=\"current\"", "date", "current"},
 				{"DeferredBlockPlaceholder", "@placeholder (minimum 500) {Placeholder content!}", "@placeholder (minimum 500) {", "}"},
-				{"BoundText", "Placeholder content!"},
+				{"Text", "Placeholder content!"},
 				{"DeferredBlockLoading", "@loading (minimum 1s; after 100ms) {Loading...}", "@loading (minimum 1s; after 100ms) {", "}"},
-				{"BoundText", "Loading..."},
+				{"Text", "Loading..."},
 				{"DeferredBlockError", "@error {Loading failed :(}", "@error {", "}"},
-				{"BoundText", "Loading failed :("},
+				{"Text", "Loading failed :("},
 			}, expectFromHtml(html, false))
 		})
 	})
@@ -875,16 +875,16 @@ func TestR3AstSpans(t *testing.T) {
 				{"SwitchBlock", html, "@switch (cond.kind) {", "}"},
 				{"SwitchBlockCaseGroup", "@case (x()) {X case}", "@case (x()) {"},
 				{"SwitchBlockCase", "@case (x()) {X case}", "@case (x()) {"},
-				{"BoundText", "X case"},
+				{"Text", "X case"},
 				{"SwitchBlockCaseGroup", "@case ('hello') {Y case}", "@case ('hello') {"},
 				{"SwitchBlockCase", "@case ('hello') {Y case}", "@case ('hello') {"},
-				{"BoundText", "Y case"},
+				{"Text", "Y case"},
 				{"SwitchBlockCaseGroup", "@case (42) {Z case}", "@case (42) {"},
 				{"SwitchBlockCase", "@case (42) {Z case}", "@case (42) {"},
-				{"BoundText", "Z case"},
+				{"Text", "Z case"},
 				{"SwitchBlockCaseGroup", "@default {No case matched}", "@default {"},
 				{"SwitchBlockCase", "@default {No case matched}", "@default {"},
-				{"BoundText", "No case matched"},
+				{"Text", "No case matched"},
 			}, expectFromHtml(html, false))
 		})
 
@@ -899,10 +899,10 @@ func TestR3AstSpans(t *testing.T) {
 				{"SwitchBlockCaseGroup", "@case (x()) @case ('hello') {X case}", "@case (x()) @case ('hello') {"},
 				{"SwitchBlockCase", "@case (x()) ", "@case (x()) "},
 				{"SwitchBlockCase", "@case ('hello') {X case}", "@case ('hello') {"},
-				{"BoundText", "X case"},
+				{"Text", "X case"},
 				{"SwitchBlockCaseGroup", "@default {No case matched}", "@default {"},
 				{"SwitchBlockCase", "@default {No case matched}", "@default {"},
-				{"BoundText", "No case matched"},
+				{"Text", "No case matched"},
 			}, expectFromHtml(html, false))
 		})
 
@@ -913,7 +913,7 @@ func TestR3AstSpans(t *testing.T) {
 				{"SwitchBlock", html, "@switch (cond.kind) {", "}"},
 				{"SwitchBlockCaseGroup", "@case (x()) {X case}", "@case (x()) {"},
 				{"SwitchBlockCase", "@case (x()) {X case}", "@case (x()) {"},
-				{"BoundText", "X case"},
+				{"Text", "X case"},
 				{"SwitchExhaustiveCheck", "@default never;", "@default never;"},
 			}, expectFromHtml(html, false))
 		})
@@ -938,7 +938,7 @@ func TestR3AstSpans(t *testing.T) {
 				{"Element", "<h1>{{ item }}</h1>", "<h1>", "</h1>"},
 				{"BoundText", "{{ item }}"},
 				{"ForLoopBlockEmpty", "@empty {There were no items in the list.}", "@empty {"},
-				{"BoundText", "There were no items in the list."},
+				{"Text", "There were no items in the list."},
 			}, expectFromHtml(html, false))
 		})
 	})
@@ -953,11 +953,11 @@ func TestR3AstSpans(t *testing.T) {
 				{"IfBlock", html, "@if (cond.expr; as foo) {", "}"},
 				{"IfBlockBranch", "@if (cond.expr; as foo) {Main case was true!}", "@if (cond.expr; as foo) {"},
 				{"Variable", "foo", "foo", "<empty>"},
-				{"BoundText", "Main case was true!"},
+				{"Text", "Main case was true!"},
 				{"IfBlockBranch", "@else if (other.expr) {Extra case was true!}", "@else if (other.expr) {"},
-				{"BoundText", "Extra case was true!"},
+				{"Text", "Extra case was true!"},
 				{"IfBlockBranch", "@else {False case!}", "@else {"},
-				{"BoundText", "False case!"},
+				{"Text", "False case!"},
 			}, expectFromHtml(html, false))
 		})
 	})
@@ -999,7 +999,7 @@ func TestR3AstSpans(t *testing.T) {
 				{"Directive", "<empty>", "@OtherDir", ")"},
 				{"BoundAttribute", "[a]=\"a\"", "a", "a"},
 				{"BoundEvent", "(b)=\"b()\"", "b", "b()"},
-				{"BoundText", "Hello"},
+				{"Text", "Hello"},
 			}, expectFromHtml("<MyComp before=\"foo\" @Dir middle @OtherDir([a]=\"a\" (b)=\"b()\") after=\"123\">Hello</MyComp>", true))
 		})
 
@@ -1008,7 +1008,7 @@ func TestR3AstSpans(t *testing.T) {
 				{"IfBlock", "@if (expr) {<div>Hello: <MyComp><span><OtherComp></OtherComp></span></MyComp></div>}", "@if (expr) {", "}"},
 				{"IfBlockBranch", "@if (expr) {<div>Hello: <MyComp><span><OtherComp></OtherComp></span></MyComp></div>}", "@if (expr) {"},
 				{"Element", "<div>Hello: <MyComp><span><OtherComp></OtherComp></span></MyComp></div>", "<div>", "</div>"},
-				{"BoundText", "Hello: "},
+				{"Text", "Hello: "},
 				{"Component", "<MyComp><span><OtherComp></OtherComp></span></MyComp>", "<MyComp>", "</MyComp>"},
 				{"Element", "<span><OtherComp></OtherComp></span>", "<span>", "</span>"},
 				{"Component", "<OtherComp></OtherComp>", "<OtherComp>", "</OtherComp>"},

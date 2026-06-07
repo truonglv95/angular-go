@@ -492,21 +492,14 @@ func (tc *TraitCompiler) registerSemanticReferences(classDecl *ast.ClassDeclarat
 
 // Resolve chạy bước giải quyết tham chiếu cho tất cả các traits đã được Analyze (song song).
 func (tc *TraitCompiler) Resolve() {
-	var wg sync.WaitGroup
-
 	for classDecl, traits := range tc.classes {
 		for _, trait := range traits {
 			if trait.State == TraitStateAnalyzed || trait.State == TraitStateResolved {
-				wg.Add(1)
-				go func(c *ast.ClassDeclaration, t *Trait) {
-					defer wg.Done()
-					t.GetResolution(c)
-					tc.registerSemanticReferences(c, t)
-				}(classDecl, trait)
+				trait.GetResolution(classDecl)
+				tc.registerSemanticReferences(classDecl, trait)
 			}
 		}
 	}
-	wg.Wait()
 }
 
 // UpdateSourceFile áp dụng kết quả compile (CompileResult) vào AST của source file.

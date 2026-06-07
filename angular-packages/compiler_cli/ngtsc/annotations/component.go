@@ -288,11 +288,18 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 					modifiers = member.AsMethodDeclaration().Modifiers()
 					nameNode = member.AsMethodDeclaration().Name()
 				}
-				if modifiers != nil {
-					propName := ""
-					if nameNode != nil && nameNode.Kind == ast.KindIdentifier {
-						propName = nameNode.AsIdentifier().Text
+				propName := ""
+				if nameNode != nil && nameNode.Kind == ast.KindIdentifier {
+					propName = nameNode.AsIdentifier().Text
+				}
+				if member.Kind == ast.KindPropertyDeclaration && propName != "" {
+					if initVal := member.Initializer(); initVal != nil {
+						if meta, ok := parseSignalInput(initVal, propName); ok {
+							analysis.Inputs[propName] = meta
+						}
 					}
+				}
+				if modifiers != nil {
 					var propDecs []*ast.Node
 					for _, mod := range modifiers.Nodes {
 						if mod.Kind == ast.KindDecorator {
