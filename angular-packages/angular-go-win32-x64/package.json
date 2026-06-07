@@ -1,0 +1,11 @@
+{
+  "name": "angular-go-win32-x64",
+  "version": "1.0.0",
+  "description": "Windows x64 binary for angular-go",
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ]
+}

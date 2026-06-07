@@ -19,7 +19,7 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'npm run e2e:prepare && npm run vite:build && npm run vite:preview -- --port 4202',
+    command: 'npm run build && npm run vite:preview -- --port 4202',
     url: 'http://localhost:4202',
     reuseExistingServer: false,
     timeout: 120000,

@@ -14,10 +14,26 @@
       "prefix": "app",
       "architect": {
         "build": {
-          "builder": "@angular/build:application",
+          "builder": "angular-go:application",
           "options": {
             "browser": "src/main.ts",
             "tsConfig": "tsconfig.app.json",
+            "polyfills": [
+              "src/polyfills.ts"
+            ],
+            "preserveSymlinks": true,
+            "stylePreprocessorOptions": {
+              "includePaths": [
+                "src"
+              ]
+            },
+            "define": {
+              "process.env.NG_GO_VERSION": "\"1.0.0\""
+            },
+            "namedChunks": false,
+            "loader": {
+              ".txt": "text"
+            },
             "assets": [
               {
                 "glob": "**/*",
@@ -39,10 +55,14 @@
                 {
                   "type": "anyComponentStyle",
                   "maximumWarning": "4kB",
-                  "maximumError": "8kB"
+                  "maximumError": "20kB"
                 }
               ],
-              "outputHashing": "all"
+              "outputHashing": "all",
+              "subresourceIntegrity": true,
+              "crossOrigin": "anonymous",
+              "statsJson": true,
+              "extractLicenses": true
             },
             "development": {
               "optimization": false,
@@ -53,7 +73,7 @@
           "defaultConfiguration": "production"
         },
         "serve": {
-          "builder": "@angular/build:dev-server",
+          "builder": "angular-go:dev-server",
           "configurations": {
             "production": {
               "buildTarget": "new-demo-app:build:production"
@@ -65,7 +85,13 @@
           "defaultConfiguration": "development"
         },
         "test": {
-          "builder": "@angular/build:unit-test"
+          "builder": "angular-go:unit-test",
+          "options": {
+            "tsConfig": "tsconfig.spec.json",
+            "outDir": "out-tsc/spec",
+            "watch": false,
+            "testEnvironment": "happy-dom"
+          }
         }
       }
     }

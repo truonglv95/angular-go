@@ -1,0 +1,11 @@
+{
+  "name": "angular-go-darwin-arm64",
+  "version": "1.0.0",
+  "description": "macOS arm64 binary for angular-go",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ]
+}

@@ -41,7 +41,7 @@ interface Product {
   quantity: number;
 }
 
-type DemoView = 'button' | 'input' | 'table' | 'form' | 'accordion' | 'dialog' | 'tabs' | 'misc' | 'tree' | 'extra' | 'advanced' | 'defer';
+type DemoView = 'button' | 'input' | 'table' | 'form' | 'accordion' | 'dialog' | 'tabs' | 'misc' | 'tree' | 'extra' | 'advanced' | 'defer' | 'knob';
 
 @Component({
   selector: 'app-root',
@@ -55,6 +55,11 @@ type DemoView = 'button' | 'input' | 'table' | 'form' | 'accordion' | 'dialog' |
   styleUrl: './app.scss'
 })
 export class App {
+  constructor() {
+    // @ts-ignore
+    console.log('NG_GO_VERSION from define:', process.env.NG_GO_VERSION);
+  }
+
   protected readonly title = signal('new-demo-app');
   activeView: DemoView = 'knob' as any; // default to knob to see it immediately!
   knobValue = 60;

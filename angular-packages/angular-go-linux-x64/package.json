@@ -1,0 +1,11 @@
+{
+  "name": "angular-go-linux-x64",
+  "version": "1.0.0",
+  "description": "Linux x64 binary for angular-go",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ]
+}

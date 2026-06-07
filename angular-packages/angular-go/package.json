@@ -1,0 +1,80 @@
+{
+  "name": "angular-go",
+  "version": "1.0.0",
+  "description": "Unified toolchain for angular-go: compile, linker, testbed, vitest, and builders",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "builders": "./builders.json",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./package.json": "./package.json",
+    "./vite": {
+      "import": "./dist/vite/index.js",
+      "types": "./dist/vite/index.d.ts"
+    },
+    "./compile": {
+      "import": "./dist/compile/index.js",
+      "types": "./dist/compile/index.d.ts"
+    },
+    "./linker": {
+      "import": "./dist/linker/index.js",
+      "types": "./dist/linker/index.d.ts"
+    },
+    "./testbed": {
+      "import": "./dist/testbed/index.js",
+      "types": "./dist/testbed/index.d.ts"
+    },
+    "./testbed/setup": {
+      "import": "./dist/vitest/setup.js",
+      "types": "./dist/vitest/setup.d.ts"
+    },
+    "./vitest": {
+      "import": "./dist/vitest/index.js",
+      "types": "./dist/vitest/index.d.ts"
+    },
+    "./builders": {
+      "import": "./dist/builders/index.js",
+      "types": "./dist/builders/index.d.ts"
+    },
+    "./builders.json": "./builders.json"
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@angular-devkit/architect": "^0.2102.13"
+  },
+  "optionalDependencies": {
+    "angular-go-darwin-arm64": "file:../angular-go-darwin-arm64",
+    "angular-go-darwin-x64": "file:../angular-go-darwin-x64",
+    "angular-go-linux-x64": "file:../angular-go-linux-x64",
+    "angular-go-win32-x64": "file:../angular-go-win32-x64"
+  },
+  "peerDependencies": {
+    "@angular/common": "^21.0.0",
+    "@angular/core": "^21.0.0",
+    "@angular/platform-browser": "^21.0.0",
+    "@angular/router": "^21.0.0",
+    "rxjs": "^7.8.0",
+    "vite": "^6.0.0 || ^7.0.0 || ^8.0.0",
+    "vitest": "^4.0.0 || ^5.0.0"
+  },
+  "devDependencies": {
+    "@angular/common": "^21.2.0",
+    "@angular/core": "^21.2.0",
+    "@angular/platform-browser": "^21.2.0",
+    "@angular/router": "^21.2.0",
+    "@types/node": "^25.9.1",
+    "happy-dom": "^20.10.2",
+    "jsdom": "^28.0.0",
+    "rxjs": "^7.8.0",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.0",
+    "vitest": "^4.0.8"
+  }
+}
