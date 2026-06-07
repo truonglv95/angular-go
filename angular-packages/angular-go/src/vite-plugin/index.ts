@@ -1483,10 +1483,11 @@ export function angularGoLinker(options: AngularGoLinkerOptions = {}): any {
       return diskCached;
     }
 
-    // B#4 FIX: Use the shared daemon client when available to avoid spawning
-    // a fresh go-ngc subprocess for every dependency file (~50ms overhead each).
     let linked: string;
-    if (sharedDaemonClient) {
+    if (pluginMode === 'server') {
+      if (!sharedDaemonClient) {
+        sharedDaemonClient = createGoNgcClient(compilerPath, projectRoot);
+      }
       const result = await sharedDaemonClient.linkFile(filePath);
       linked = result.code;
     } else {
@@ -1512,8 +1513,10 @@ export function angularGoLinker(options: AngularGoLinkerOptions = {}): any {
     }
 
     let linked: string;
-    // B#4 FIX: Use daemon client when available
-    if (sharedDaemonClient) {
+    if (pluginMode === 'server') {
+      if (!sharedDaemonClient) {
+        sharedDaemonClient = createGoNgcClient(compilerPath, projectRoot);
+      }
       const result = await sharedDaemonClient.linkCode(code, id);
       linked = result.code;
     } else {
@@ -1634,6 +1637,14 @@ export function angularGoLinker(options: AngularGoLinkerOptions = {}): any {
         return;
       }
       linkCache.delete(`file:${ctx.file}`);
+    },
+
+    async closeBundle() {
+      if (sharedDaemonClient) {
+        await sharedDaemonClient.close().catch(() => {});
+        sharedDaemonClient = null;
+        sharedDaemonContextId = '';
+      }
     },
   };
 }
