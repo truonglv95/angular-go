@@ -155,7 +155,8 @@ func optimizeVariablesInOpList(ops *ir.OpList, predicate func(ir.VisitorContextF
 	varRemoteUsage := map[ir.XrefId]bool{}
 	opInfos := map[ir.Op]opInfo{}
 
-	elements := ops.Elements()
+	elements := make([]ir.Op, len(ops.Elements()))
+	copy(elements, ops.Elements())
 	for _, op := range elements {
 		var flags ir.VariableFlags
 		var init output.Expression

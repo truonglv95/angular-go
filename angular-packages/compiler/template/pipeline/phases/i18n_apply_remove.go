@@ -79,7 +79,9 @@ func i18nNeedsApplication(i18nContexts map[ir.XrefId]ir.Op, ops []ir.Op, idx int
 // RemoveI18nContexts removes i18n context ops after they are no longer needed.
 func RemoveI18nContexts(job compilation.CompilationJob) {
 	for _, unit := range job.GetUnits() {
-		for _, op := range unit.GetCreate().Elements() {
+		ops := make([]ir.Op, len(unit.GetCreate().Elements()))
+		copy(ops, unit.GetCreate().Elements())
+		for _, op := range ops {
 			switch op.Kind() {
 			case ir.OpKindI18nContext:
 				unit.GetCreate().Remove(op)
@@ -103,7 +105,9 @@ func RemoveUnusedI18nAttributesOps(job compilation.CompilationJob) {
 				}
 			}
 		}
-		for _, op := range unit.GetCreate().Elements() {
+		ops := make([]ir.Op, len(unit.GetCreate().Elements()))
+		copy(ops, unit.GetCreate().Elements())
+		for _, op := range ops {
 			if op.Kind() == ir.OpKindI18nAttributes {
 				if xg, ok := op.(interface{ GetXref() ir.XrefId }); ok {
 					if !ownersWithI18nExpressions[xg.GetXref()] {

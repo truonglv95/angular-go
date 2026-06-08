@@ -7,8 +7,10 @@ import (
 	"os"
 	"runtime/pprof"
 	"sort"
+	"strings"
 
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli"
+	"github.com/microsoft/typescript-go/internal/ast"
 	"github.com/microsoft/typescript-go/internal/diagnosticwriter"
 	"github.com/microsoft/typescript-go/internal/execute/tsc"
 	"github.com/microsoft/typescript-go/internal/tspath"
@@ -106,12 +108,31 @@ func main() {
 		os.Stderr.WriteString("--------------------------\n")
 	}
 
+	// Deduplicate diagnostics
+	{
+		var uniqueDiags []*ast.Diagnostic
+		seen := make(map[string]bool)
+		for _, d := range result.Diagnostics {
+			file := ""
+			if d.File() != nil {
+				file = d.File().FileName()
+			}
+			key := fmt.Sprintf("%s:%d:%d:%s", file, d.Code(), d.Pos(), d.String())
+			if !seen[key] {
+				seen[key] = true
+				uniqueDiags = append(uniqueDiags, d)
+			}
+		}
+		result.Diagnostics = uniqueDiags
+	}
+
 	if *formatFlag == "json" {
 		type DiagnosticMessage struct {
-			Category string `json:"category"`
-			Code     int    `json:"code"`
-			Message  string `json:"message"`
-			File     string `json:"file,omitempty"`
+			Category  string `json:"category"`
+			Code      int    `json:"code"`
+			Message   string `json:"message"`
+			File      string `json:"file,omitempty"`
+			Formatted string `json:"formatted,omitempty"`
 		}
 		type BuildResult struct {
 			Outputs     []compiler_cli.OutputFile `json:"outputs"`
@@ -127,18 +148,31 @@ func main() {
 				file = d.File().FileName()
 			}
 			category := "error"
-			if d.Category() == 1 { // Warning
+			switch d.Category() {
+			case 0: // CategoryWarning
 				category = "warning"
-			} else if d.Category() == 2 { // Message
-				category = "message"
-			} else if d.Category() == 3 { // Suggestion
+			case 1: // CategoryError
+				category = "error"
+			case 2: // CategorySuggestion
 				category = "suggestion"
+			case 3: // CategoryMessage
+				category = "message"
 			}
+
+			var sb strings.Builder
+			compareOpts := tspath.ComparePathsOptions{
+				CurrentDirectory:          ".",
+				UseCaseSensitiveFileNames: true,
+			}
+			compiler_cli.FormatDiagnosticEsbuildStyle(&sb, d, config.Locale, compareOpts)
+			formattedStr := sb.String()
+
 			diags = append(diags, DiagnosticMessage{
-				Category: category,
-				Code:     int(d.Code()),
-				Message:  d.Localize(config.Locale),
-				File:     file,
+				Category:  category,
+				Code:      int(d.Code()),
+				Message:   d.Localize(config.Locale),
+				File:      file,
+				Formatted: formattedStr,
 			})
 		}
 

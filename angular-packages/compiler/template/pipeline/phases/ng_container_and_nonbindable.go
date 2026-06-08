@@ -13,7 +13,9 @@ func GenerateNgContainerOps(job compilation.CompilationJob) {
 	for _, unit := range job.GetUnits() {
 		updatedElementXrefs := map[ir.XrefId]bool{}
 
-		for _, op := range unit.GetCreate().Elements() {
+		ops := make([]ir.Op, len(unit.GetCreate().Elements()))
+		copy(ops, unit.GetCreate().Elements())
+		for _, op := range ops {
 			if op.Kind() == ir.OpKindElementStart {
 				if el, ok := op.(*ir.ElementStartOp); ok {
 					tag := el.Tag

@@ -9,13 +9,16 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc"
+	"github.com/microsoft/typescript-go/internal/ast"
 	"github.com/microsoft/typescript-go/internal/compiler"
 	"github.com/microsoft/typescript-go/internal/core"
 	"github.com/microsoft/typescript-go/internal/execute/tsc"
+	"github.com/microsoft/typescript-go/internal/tspath"
 	"github.com/microsoft/typescript-go/internal/vfs/cachedvfs"
 )
 
@@ -53,10 +56,11 @@ type HelloResult struct {
 }
 
 type DiagnosticMessage struct {
-	Category string `json:"category"`
-	Code     int    `json:"code"`
-	Message  string `json:"message"`
-	File     string `json:"file,omitempty"`
+	Category  string `json:"category"`
+	Code      int    `json:"code"`
+	Message   string `json:"message"`
+	File      string `json:"file,omitempty"`
+	Formatted string `json:"formatted,omitempty"`
 }
 
 type BuildResult struct {
@@ -329,6 +333,24 @@ func handleRequest(ctx context.Context, req RpcRequest) {
 			state.NgProgram = ngProgram
 		}
 
+		// Deduplicate diagnostics
+		{
+			var uniqueDiags []*ast.Diagnostic
+			seen := make(map[string]bool)
+			for _, d := range result.Diagnostics {
+				file := ""
+				if d.File() != nil {
+					file = d.File().FileName()
+				}
+				key := fmt.Sprintf("%s:%d:%d:%s", file, d.Code(), d.Pos(), d.String())
+				if !seen[key] {
+					seen[key] = true
+					uniqueDiags = append(uniqueDiags, d)
+				}
+			}
+			result.Diagnostics = uniqueDiags
+		}
+
 		var diags []DiagnosticMessage
 		for _, d := range result.Diagnostics {
 			file := ""
@@ -336,18 +358,31 @@ func handleRequest(ctx context.Context, req RpcRequest) {
 				file = d.File().FileName()
 			}
 			category := "error"
-			if d.Category() == 1 {
+			switch d.Category() {
+			case 0: // CategoryWarning
 				category = "warning"
-			} else if d.Category() == 2 {
-				category = "message"
-			} else if d.Category() == 3 {
+			case 1: // CategoryError
+				category = "error"
+			case 2: // CategorySuggestion
 				category = "suggestion"
+			case 3: // CategoryMessage
+				category = "message"
 			}
+
+			var sb strings.Builder
+			compareOpts := tspath.ComparePathsOptions{
+				CurrentDirectory:          state.Host.GetCurrentDirectory(),
+				UseCaseSensitiveFileNames: true,
+			}
+			FormatDiagnosticEsbuildStyle(&sb, d, state.Config.Locale, compareOpts)
+			formattedStr := sb.String()
+
 			diags = append(diags, DiagnosticMessage{
-				Category: category,
-				Code:     int(d.Code()),
-				Message:  d.Localize(state.Config.Locale),
-				File:     file,
+				Category:  category,
+				Code:      int(d.Code()),
+				Message:   d.Localize(state.Config.Locale),
+				File:      file,
+				Formatted: formattedStr,
 			})
 		}
 

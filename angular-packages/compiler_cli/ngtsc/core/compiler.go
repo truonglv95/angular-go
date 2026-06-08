@@ -25,6 +25,7 @@ import (
 	"github.com/microsoft/typescript-go/internal/compiler"
 	"github.com/microsoft/typescript-go/internal/core"
 	"github.com/microsoft/typescript-go/internal/parser"
+	"github.com/microsoft/typescript-go/internal/scanner"
 	"github.com/microsoft/typescript-go/internal/tspath"
 )
 
@@ -43,9 +44,10 @@ type NgCompiler struct {
 	compilationMode string
 	options         NgCompilerOptions
 
-	analyzed bool
-	resolved bool
-	prepared bool
+	analyzed      bool
+	resolved      bool
+	resolvedDiags []*ast.Diagnostic
+	prepared      bool
 
 	perfRecorder *perf.ActivePerfRecorder
 }
@@ -224,7 +226,7 @@ func (c *NgCompiler) Resolve() []*ast.Diagnostic {
 		defer c.perfRecorder.Phase(perf.PerfPhase_Unaccounted)
 	}
 	if c.resolved {
-		return nil
+		return c.resolvedDiags
 	}
 	c.traitCompiler.Resolve()
 
@@ -294,6 +296,7 @@ func (c *NgCompiler) Resolve() []*ast.Diagnostic {
 		c.incrementalCompilation.RecordSuccessfulTypeCheck(res)
 	}
 
+	c.resolvedDiags = finalDiags
 	c.resolved = true
 	return finalDiags
 }
@@ -492,7 +495,8 @@ func (c *NgCompiler) runTemplateTypeChecking() map[string][]*ast.Diagnostic {
 		scope := c.scopeRegistry.GetCompilationScope(classDecl.AsNode())
 
 		pipes := make(map[string]string)
-		var getDirectives func(node render3.Node) []string
+		var getDirectives func(node render3.Node) []typecheck.DirectiveInfo
+		var getBindingConsumer func(node render3.Node, binding any) (string, string, bool)
 
 		if scope != nil {
 			for _, pipe := range scope.Pipes {
@@ -510,23 +514,65 @@ func (c *NgCompiler) runTemplateTypeChecking() map[string][]*ast.Diagnostic {
 			binderObj := render3.NewR3TargetBinder[directiveMetaAdapter](matcher, nil)
 			bound := binderObj.Bind(render3.Target[directiveMetaAdapter]{Template: analysis.ParsedTemplate.Nodes})
 
-			getDirectives = func(node render3.Node) []string {
-				var result []string
+			getDirectives = func(node render3.Node) []typecheck.DirectiveInfo {
+				var result []typecheck.DirectiveInfo
 				if dirOwner, ok := node.(render3.DirectiveOwner); ok {
 					matched := bound.GetDirectivesOfNode(dirOwner)
 					for _, m := range matched {
-						result = append(result, m.meta.Ref.Name)
+						result = append(result, typecheck.DirectiveInfo{
+							ClassName:    m.meta.Ref.Name,
+							OwningModule: m.meta.Ref.OwningModule,
+						})
 					}
 				}
 				return result
 			}
+
+			getBindingConsumer = func(node render3.Node, binding any) (string, string, bool) {
+				if consumer := bound.GetConsumerOfBinding(binding); consumer != nil {
+					if adapter, ok := consumer.(directiveMetaAdapter); ok {
+						classPropName := ""
+						var propName string
+						switch b := binding.(type) {
+						case *render3.BoundAttribute:
+							propName = b.Name
+						case *render3.TextAttribute:
+							propName = b.Name
+						case *render3.BoundEvent:
+							propName = b.Name
+						}
+						if propName != "" {
+							if inputs, ok := adapter.GetInputs().(*render3.ClassPropertyMappingGeneric); ok {
+								if mapping := inputs.GetByBindingPropertyName(propName); len(mapping) > 0 {
+									classPropName = mapping[0].ClassPropertyName
+								}
+							}
+							if classPropName == "" {
+								if outputs, ok := adapter.GetOutputs().(*render3.ClassPropertyMappingGeneric); ok {
+									if mapping := outputs.GetByBindingPropertyName(propName); len(mapping) > 0 {
+										classPropName = mapping[0].ClassPropertyName
+									}
+								}
+							}
+						}
+						if classPropName == "" {
+							classPropName = propName
+						}
+						return adapter.meta.Ref.Name, classPropName, true
+					}
+				}
+				return "", "", false
+			}
 		} else {
-			getDirectives = func(node render3.Node) []string {
+			getDirectives = func(node render3.Node) []typecheck.DirectiveInfo {
 				return nil
+			}
+			getBindingConsumer = func(node render3.Node, binding any) (string, string, bool) {
+				return "", "", false
 			}
 		}
 
-		tcbCode, lineSpans := typecheck.GenerateTcb(className, analysis.ParsedTemplate, getDirectives, pipes)
+		tcbCode, lineSpans := typecheck.GenerateTcb(className, analysis.ParsedTemplate, getDirectives, getBindingConsumer, pipes)
 		if tcbCode == "" {
 			continue
 		}
@@ -584,18 +630,20 @@ func (c *NgCompiler) runTemplateTypeChecking() map[string][]*ast.Diagnostic {
 				}
 
 				if span, ok := lineSpans[diagnosticLine]; ok && span.Start != nil {
-					mappedDiag := d.Clone()
 					startOffset := span.Start.Offset
 					endOffset := span.End.Offset
+
+					var targetFile *ast.SourceFile
+					var targetLoc core.TextRange
 
 					if analysis.TemplateUrl == "" {
 						templateStart := strings.Index(sf.Text(), analysis.Template)
 						if templateStart != -1 {
-							mappedDiag.SetFile(sf)
-							mappedDiag.SetLocation(core.NewTextRange(templateStart+startOffset, templateStart+endOffset))
+							targetFile = sf
+							targetLoc = core.NewTextRange(templateStart+startOffset, templateStart+endOffset)
 						} else {
-							mappedDiag.SetFile(sf)
-							mappedDiag.SetLocation(core.NewTextRange(classDecl.Pos(), classDecl.End()))
+							targetFile = sf
+							targetLoc = core.NewTextRange(classDecl.Pos(), classDecl.End())
 						}
 					} else {
 						templatePath := span.Start.File.Url
@@ -605,13 +653,52 @@ func (c *NgCompiler) runTemplateTypeChecking() map[string][]*ast.Diagnostic {
 							Path:     tspath.Path(templatePath),
 						}, templateContent, core.ScriptKindJS)
 						if templateSf != nil {
-							mappedDiag.SetFile(templateSf)
-							mappedDiag.SetLocation(core.NewTextRange(startOffset, endOffset))
+							targetFile = templateSf
+							targetLoc = core.NewTextRange(startOffset, endOffset)
 						} else {
-							mappedDiag.SetFile(sf)
-							mappedDiag.SetLocation(core.NewTextRange(classDecl.Pos(), classDecl.End()))
+							targetFile = sf
+							targetLoc = core.NewTextRange(classDecl.Pos(), classDecl.End())
 						}
 					}
+
+					relatedNode := findTemplatePropertyNode(analysis.DecoratorNode)
+					if relatedNode == nil {
+						relatedNode = classDecl.AsNode()
+					}
+					var relatedFile *ast.SourceFile
+					var relatedLoc core.TextRange
+					if relatedNode != nil {
+						relatedFile = ast.GetSourceFileOfNode(relatedNode)
+						start := scanner.GetTokenPosOfNode(relatedNode, relatedFile, false)
+						relatedLoc = core.NewTextRange(start, relatedNode.End())
+					}
+					relatedDiag := ast.NewDiagnosticFromSerialized(
+						relatedFile,
+						relatedLoc,
+						0,
+						3, // CategoryMessage
+						"",
+						[]string{"Error occurs in the template of component " + className + "."},
+						nil,
+						nil,
+						false,
+						false,
+						false,
+					)
+
+					mappedDiag := ast.NewDiagnosticFromSerialized(
+						targetFile,
+						targetLoc,
+						d.Code(),
+						d.Category(),
+						d.MessageKey(),
+						d.MessageArgs(),
+						d.MessageChain(),
+						[]*ast.Diagnostic{relatedDiag},
+						d.ReportsUnnecessary(),
+						d.ReportsDeprecated(),
+						d.SkippedOnNoEmit(),
+					)
 					res[sf.FileName()] = append(res[sf.FileName()], mappedDiag)
 				}
 			}
@@ -633,6 +720,33 @@ func (c *NgCompiler) GetPerfResults() map[string]int64 {
 	if c.perfRecorder != nil {
 		res := c.perfRecorder.Finalize()
 		return res.Phases
+	}
+	return nil
+}
+
+func findTemplatePropertyNode(decoratorNode *ast.Node) *ast.Node {
+	if decoratorNode == nil || decoratorNode.AsDecorator() == nil || decoratorNode.AsDecorator().Expression == nil {
+		return nil
+	}
+	callExpr := decoratorNode.AsDecorator().Expression.AsCallExpression()
+	if callExpr == nil || callExpr.Arguments == nil || len(callExpr.Arguments.Nodes) == 0 {
+		return nil
+	}
+	obj := callExpr.Arguments.Nodes[0].AsObjectLiteralExpression()
+	if obj == nil || obj.Properties == nil {
+		return nil
+	}
+	for _, prop := range obj.Properties.Nodes {
+		if !ast.IsPropertyAssignment(prop) {
+			continue
+		}
+		name := prop.Name()
+		if name == nil {
+			continue
+		}
+		if name.Text() == "templateUrl" || name.Text() == "template" {
+			return prop.AsPropertyAssignment().Initializer
+		}
 	}
 	return nil
 }

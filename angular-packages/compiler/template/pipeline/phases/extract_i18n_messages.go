@@ -27,7 +27,9 @@ func ExtractI18nMessages(job compilation.CompilationJob) {
 	i18nContexts := map[ir.XrefId]*ir.I18nContextOp{}
 
 	for _, unit := range job.GetUnits() {
-		for _, op := range unit.GetCreate().Elements() {
+		ops := make([]ir.Op, len(unit.GetCreate().Elements()))
+		copy(ops, unit.GetCreate().Elements())
+		for _, op := range ops {
 			switch op.Kind() {
 			case ir.OpKindI18nContext:
 				if ctxOp, ok := op.(*ir.I18nContextOp); ok {
@@ -46,7 +48,9 @@ func ExtractI18nMessages(job compilation.CompilationJob) {
 
 	// Associate sub-messages for ICUs with root message.
 	for _, unit := range job.GetUnits() {
-		for _, op := range unit.GetCreate().Elements() {
+		ops := make([]ir.Op, len(unit.GetCreate().Elements()))
+		copy(ops, unit.GetCreate().Elements())
+		for _, op := range ops {
 			switch op.Kind() {
 			case ir.OpKindIcuStart:
 				if icuOp, ok := op.(*ir.IcuStartOp); ok {

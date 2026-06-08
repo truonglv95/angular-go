@@ -16,11 +16,46 @@ func NewOpListId() int {
 // This is the Go port of the TypeScript OpList<OpT> class in operations.ts.
 // We dropped the linked list implementation for performance via slices.
 //
-// Go-specific Contract:
-// - Operations are strictly ordered by their index in the slice.
-// - Inserting, prepending, or removing operations will re-allocate or shift the underlying slice.
-// - References to indexes (or iterators in TS) should NOT be held across mutations, as they will be invalidated.
-// - Linked-list assumptions like op.next or op.prev do not exist and are not supported.
+// Go-specific Contract & Developer Guide:
+//
+// 1. Performance and Design Decision:
+//    Unlike the original Angular TypeScript compiler which uses a doubly-linked list for the template pipeline IR,
+//    the Go compiler implements OpList using flat slices. Slices provide O(1) random-access indexing, high cache-locality
+//    for range loops, and lower memory overhead, making compiler passes significantly faster.
+//
+// 2. Index & Slice Reference Invalidation:
+//    - Slice backing arrays may be reallocated during insertions (Push, Prepend, InsertBefore).
+//    - Removing or inserting elements shifts all subsequent elements, changing their indices.
+//    - Consequently, do NOT hold indices or slice headers across list mutations.
+//
+// 3. Safe Iteration and Mutation Patterns (CRITICAL):
+//    - Pattern A: Snapshot / Copy Loop (Use this when removing or replacing elements during range loops)
+//      Because `range list.Elements()` copies the slice header only once at loop entry, mutating list.Ops directly
+//      inside the loop can cause out-of-sync iteration (skipping elements, accessing out-of-bound indices, or reading nils).
+//      Always snapshot the elements into a new slice before looping:
+//
+//          opsSnapshot := make([]ir.Op, len(list.Elements()))
+//          copy(opsSnapshot, list.Elements())
+//          for _, op := range opsSnapshot {
+//              if shouldRemove(op) {
+//                  list.Remove(op)
+//              }
+//          }
+//
+//    - Pattern B: Dynamic Index-based Loop (Use this for chaining/merging adjacent elements)
+//      Evaluate the dynamic length of the slice in the loop condition:
+//
+//          for i := 0; i < len(list.Elements()); {
+//              op := list.Elements()[i]
+//              if canChainWithNext(op) {
+//                  list.Remove(nextOp)
+//                  // Do not increment i, as the elements shifted left
+//              } else {
+//                  i++
+//              }
+//          }
+//
+//    - Linked-list properties/assumptions (like `op.next` or `op.prev` fields on node objects) are NOT supported.
 type OpList struct {
 	// DebugListId is the unique debug identifier for this list.
 	DebugListId int

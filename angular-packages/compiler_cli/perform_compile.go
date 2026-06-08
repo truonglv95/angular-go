@@ -3,6 +3,7 @@ package compiler_cli
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -45,6 +46,7 @@ type ParsedConfiguration struct {
 	DiscardOutput   bool
 	Write           bool
 	Format          string
+	StrictTemplates bool
 }
 
 func EnablePreserveImports(config *ParsedConfiguration) {
@@ -132,6 +134,102 @@ func (d *discardFS) AppendFile(path string, data string) error {
 	return nil
 }
 
+func stripComments(data []byte) []byte {
+	var clean []byte
+	inLineComment := false
+	inBlockComment := false
+	inString := false
+	var stringChar byte
+
+	for i := 0; i < len(data); i++ {
+		b := data[i]
+
+		if inLineComment {
+			if b == '\n' || b == '\r' {
+				inLineComment = false
+				clean = append(clean, b)
+			}
+			continue
+		}
+
+		if inBlockComment {
+			if b == '*' && i+1 < len(data) && data[i+1] == '/' {
+				inBlockComment = false
+				i++ // skip '/'
+			}
+			continue
+		}
+
+		if inString {
+			clean = append(clean, b)
+			if b == '\\' && i+1 < len(data) {
+				clean = append(clean, data[i+1])
+				i++
+			} else if b == stringChar {
+				inString = false
+			}
+			continue
+		}
+
+		// Check for comment starts or string starts
+		if b == '"' || b == '\'' || b == '`' {
+			inString = true
+			stringChar = b
+			clean = append(clean, b)
+			continue
+		}
+
+		if b == '/' && i+1 < len(data) {
+			if data[i+1] == '/' {
+				inLineComment = true
+				i++ // skip second '/'
+				continue
+			} else if data[i+1] == '*' {
+				inBlockComment = true
+				i++ // skip '*'
+				continue
+			}
+		}
+
+		clean = append(clean, b)
+	}
+
+	return clean
+}
+
+func parseStrictTemplates(tsconfigPath string) bool {
+	data, err := os.ReadFile(tsconfigPath)
+	if err != nil {
+		return false
+	}
+	
+	cleanData := stripComments(data)
+
+	var parsed struct {
+		Extends                string `json:"extends"`
+		AngularCompilerOptions struct {
+			StrictTemplates *bool `json:"strictTemplates"`
+		} `json:"angularCompilerOptions"`
+	}
+	if err := json.Unmarshal(cleanData, &parsed); err != nil {
+		return false
+	}
+	
+	if parsed.AngularCompilerOptions.StrictTemplates != nil {
+		return *parsed.AngularCompilerOptions.StrictTemplates
+	}
+	
+	if parsed.Extends != "" {
+		parentPath := filepath.Join(filepath.Dir(tsconfigPath), parsed.Extends)
+		if !strings.HasSuffix(parentPath, ".json") {
+			parentPath += ".json"
+		}
+		return parseStrictTemplates(parentPath)
+	}
+	
+	return false
+}
+
 func ReadConfiguration(project string) *ParsedConfiguration {
 	sys := newSystem(false)
 	resolvedProject := tspath.CombinePaths(sys.GetCurrentDirectory(), project)
@@ -161,6 +259,7 @@ func ReadConfiguration(project string) *ParsedConfiguration {
 	parsed.Options.SingleThreaded = core.BoolToTristate(false)
 	parsed.RootNames = configParseResult.FileNames()
 	parsed.Locale = configParseResult.Locale()
+	parsed.StrictTemplates = parseStrictTemplates(resolvedProject)
 	return parsed
 }
 
@@ -304,6 +403,7 @@ func PerformCompilationWithHost(config *ParsedConfiguration, host compiler.Compi
 				CompilationMode:  config.CompilationMode,
 				EnableHmr:        config.EnableHmr,
 				InvalidatedFiles: invalidatedFiles,
+				StrictTemplates:  config.StrictTemplates,
 			},
 			oldProgram,
 		)
@@ -326,10 +426,14 @@ func PerformCompilationWithHost(config *ParsedConfiguration, host compiler.Compi
 				sf := ngProgram.GetTsProgram().GetSourceFileByPath(tspath.Path(canonicalPath))
 				if sf != nil {
 					diags = append(diags, ngProgram.GetTsProgram().GetSyntacticDiagnostics(ctx, sf)...)
+					diags = append(diags, ngProgram.GetTsProgram().GetBindDiagnostics(ctx, sf)...)
+					diags = append(diags, ngProgram.GetTsProgram().GetSemanticDiagnostics(ctx, sf)...)
 				}
 			}
 		} else {
 			diags = append(diags, ngProgram.GetTsProgram().GetSyntacticDiagnostics(ctx, nil)...)
+			diags = append(diags, ngProgram.GetTsProgram().GetBindDiagnostics(ctx, nil)...)
+			diags = append(diags, ngProgram.GetTsProgram().GetSemanticDiagnostics(ctx, nil)...)
 		}
 	}()
 

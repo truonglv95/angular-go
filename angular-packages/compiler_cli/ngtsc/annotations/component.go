@@ -689,14 +689,14 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 			}
 		}
 		h.metaRegistry.RegisterDirective(node.AsNode(), &metadata.DirectiveMeta{
-			Name:        node.Name().AsIdentifier().Text,
-			Selector:    analysis.Selector,
-			Standalone:  analysis.IsStandalone,
-			Imports:     metaImports,
-			IsComponent: true,
-			Inputs:      metaInputs,
-			Outputs:     analysis.Outputs,
-			ExportAs:    analysis.ExportAs,
+			Name:           node.Name().AsIdentifier().Text,
+			Selector:       analysis.Selector,
+			Standalone:     analysis.IsStandalone,
+			Imports:        metaImports,
+			IsComponent:    true,
+			Inputs:         metaInputs,
+			Outputs:        analysis.Outputs,
+			ExportAs:       analysis.ExportAs,
 			RequiredInputs: reqInputs,
 			Ref: metadata.Reference{
 				Name: node.Name().AsIdentifier().Text,
@@ -752,7 +752,11 @@ func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysis
 					PreserveWhitespaces: analysis.PreserveWhitespaces,
 				}
 			}
-			parsedTemplate := render3.ParseTemplate(templateStr, "", parseOpts)
+			templateUrlStr := ""
+			if analysis.TemplateUrl != "" {
+				templateUrlStr = filepath.Join(baseDir, analysis.TemplateUrl)
+			}
+			parsedTemplate := render3.ParseTemplate(templateStr, templateUrlStr, parseOpts)
 			analysis.ParsedTemplate = &parsedTemplate
 
 			// Deduplicate dependencies
@@ -1239,7 +1243,11 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 				PreserveWhitespaces: analysis.PreserveWhitespaces,
 			}
 		}
-		parsedTemplate = render3.ParseTemplate(analysis.Template, "", parseOpts)
+		templateUrlStr := ""
+		if analysis.TemplateUrl != "" {
+			templateUrlStr = filepath.Join(baseDir, analysis.TemplateUrl)
+		}
+		parsedTemplate = render3.ParseTemplate(analysis.Template, templateUrlStr, parseOpts)
 	}
 
 	className := ""
@@ -1423,7 +1431,11 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 	if analysis.DecoratorNode != nil {
 		callExpr := analysis.DecoratorNode.AsDecorator().Expression.AsCallExpression()
 		if callExpr != nil && callExpr.Arguments != nil && len(callExpr.Arguments.Nodes) > 0 {
-			decArgs = append(decArgs, output.NewWrappedNodeExpr(callExpr.Arguments.Nodes[0], nil, nil, nil))
+			if analysis.TemplateUrl != "" || len(analysis.StyleUrls) > 0 {
+				decArgs = append(decArgs, componentDecoratorMetadataExpr(analysis))
+			} else {
+				decArgs = append(decArgs, output.NewWrappedNodeExpr(callExpr.Arguments.Nodes[0], nil, nil, nil))
+			}
 		}
 	}
 
@@ -2053,6 +2065,92 @@ func findComponentPropertyNode(decorator *reflection.Decorator, propName string)
 	return nil
 }
 
+func componentDecoratorMetadataExpr(analysis *ComponentAnalysis) output.Expression {
+	entries := make([]output.LiteralMapEntry, 0)
+	add := func(name string, expr output.Expression) {
+		if expr != nil {
+			entries = append(entries, output.NewLiteralMapPropertyAssignment(name, expr, false))
+		}
+	}
+	addString := func(name string, value string) {
+		if value != "" {
+			add(name, output.NewLiteralExpr(value, nil, nil, nil))
+		}
+	}
+
+	addString("selector", analysis.Selector)
+	if analysis.RawImports != nil {
+		add("imports", analysis.RawImports)
+	} else if node := findComponentPropertyNodeFromAnalysis(analysis, "imports"); node != nil {
+		add("imports", output.NewWrappedNodeExpr(node, nil, nil, nil))
+	}
+	if !analysis.IsStandalone {
+		add("standalone", output.NewLiteralExpr(false, nil, nil, nil))
+	}
+	if len(analysis.ExportAs) > 0 {
+		add("exportAs", output.NewLiteralExpr(strings.Join(analysis.ExportAs, ","), nil, nil, nil))
+	}
+	if analysis.Providers != nil {
+		add("providers", analysis.Providers)
+	}
+	if analysis.ViewProviders != nil {
+		add("viewProviders", analysis.ViewProviders)
+	}
+	if analysis.Animations != nil {
+		add("animations", analysis.Animations)
+	}
+	if analysis.ChangeDetection != nil {
+		add("changeDetection", analysis.ChangeDetection)
+	}
+	if analysis.Encapsulation != 0 {
+		add("encapsulation", output.NewLiteralExpr(analysis.Encapsulation, nil, nil, nil))
+	}
+	if analysis.PreserveWhitespaces != nil {
+		add("preserveWhitespaces", output.NewLiteralExpr(*analysis.PreserveWhitespaces, nil, nil, nil))
+	}
+
+	// Match Angular's JIT metadata shape after external resources are resolved:
+	// templateUrl/styleUrl(s) are replaced with the loaded template/styles.
+	add("template", output.NewLiteralExpr(analysis.Template, nil, nil, nil))
+	if len(analysis.Styles) > 0 {
+		styleExprs := make([]output.Expression, 0, len(analysis.Styles))
+		for _, style := range analysis.Styles {
+			styleExprs = append(styleExprs, output.NewLiteralExpr(style, nil, nil, nil))
+		}
+		add("styles", output.NewLiteralArrayExpr(styleExprs, nil, nil, nil))
+	}
+
+	return output.NewLiteralMapExpr(entries, nil, nil, nil)
+}
+
+func findComponentPropertyNodeFromAnalysis(analysis *ComponentAnalysis, propName string) *ast.Node {
+	if analysis.DecoratorNode == nil {
+		return nil
+	}
+	callExpr := analysis.DecoratorNode.AsDecorator().Expression.AsCallExpression()
+	if callExpr == nil || callExpr.Arguments == nil || len(callExpr.Arguments.Nodes) == 0 {
+		return nil
+	}
+	arg := callExpr.Arguments.Nodes[0]
+	if arg.Kind != ast.KindObjectLiteralExpression {
+		return nil
+	}
+	obj := arg.AsObjectLiteralExpression()
+	if obj.Properties == nil {
+		return nil
+	}
+	for _, prop := range obj.Properties.Nodes {
+		if prop.Kind != ast.KindPropertyAssignment {
+			continue
+		}
+		assign := prop.AsPropertyAssignment()
+		if assign.Name().Kind == ast.KindIdentifier && assign.Name().AsIdentifier().Text == propName {
+			return assign.Initializer
+		}
+	}
+	return nil
+}
+
 type templateDiagnosticWalker struct {
 	diagnostics []ast.Diagnostic
 	h           *ComponentDecoratorHandler
@@ -2512,5 +2610,3 @@ func parseQueryPredicate(argNode *ast.Node) interface{} {
 	}
 	return []string{""}
 }
-
-

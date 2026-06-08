@@ -27,7 +27,9 @@ func MergeNextContextExpressions(job compilation.CompilationJob) {
 }
 
 func mergeNextContextsInOps(ops *ir.OpList) {
-	for _, op := range ops.Elements() {
+	elements := make([]ir.Op, len(ops.Elements()))
+	copy(elements, ops.Elements())
+	for _, op := range elements {
 		if op.Kind() != ir.OpKindStatement {
 			continue
 		}
