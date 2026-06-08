@@ -3,11 +3,11 @@ set -euo pipefail
 
 # List of package directories to publish in order (native platform packages first, then main package)
 packages=(
-  "angular-packages/angular-go-darwin-arm64"
-  "angular-packages/angular-go-darwin-x64"
-  "angular-packages/angular-go-linux-x64"
-  "angular-packages/angular-go-win32-x64"
-  "angular-packages/angular-go"
+  "./angular-packages/angular-go-darwin-arm64"
+  "./angular-packages/angular-go-darwin-x64"
+  "./angular-packages/angular-go-linux-x64"
+  "./angular-packages/angular-go-win32-x64"
+  "./angular-packages/angular-go"
 )
 
 echo "=== Bắt đầu xuất bản toàn bộ các package ==="
