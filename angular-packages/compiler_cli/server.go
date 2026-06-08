@@ -94,6 +94,9 @@ type ContextState struct {
 	// Map of files that have been invalidated since the last compilation.
 	invalidatedFiles map[string]bool
 
+	lastDiagnostics []DiagnosticMessage
+	lastStatus      int
+
 	// B#5 FIX: RWMutex allows concurrent HMR reads while build holds write lock.
 	mu sync.RWMutex
 }
@@ -316,8 +319,8 @@ func handleRequest(ctx context.Context, req RpcRequest) {
 		if state.NgProgram != nil && len(invalidated) == 0 && state.outputManifest != nil {
 			sendResult(req.Id, BuildResult{
 				Outputs:     state.outputManifest,
-				Diagnostics: nil,
-				Status:      int(tsc.ExitStatusSuccess),
+				Diagnostics: state.lastDiagnostics,
+				Status:      state.lastStatus,
 				PerfPhases:  state.lastPerfPhases,
 			})
 			return
@@ -408,6 +411,8 @@ func handleRequest(ctx context.Context, req RpcRequest) {
 			}
 		}
 		state.lastPerfPhases = result.PerfPhases
+		state.lastDiagnostics = diags
+		state.lastStatus = int(result.Status)
 
 		sendResult(req.Id, BuildResult{
 			Outputs:     state.outputManifest,

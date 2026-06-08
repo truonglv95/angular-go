@@ -95,7 +95,11 @@ export interface AngularGoCompileOptions extends AngularGoBaseOptions {
   /**
    * Callback invoked when a project compilation completes.
    */
-  onCompileComplete?: (event: { reason: string; durationMs: number; outputs: OutputFile[] }) => void | Promise<void>;
+  onCompileComplete?: (event: { reason: string; durationMs: number; outputs: OutputFile[]; error?: any }) => void | Promise<void>;
+  /**
+   * Callback invoked when a project compilation starts.
+   */
+  onCompileStart?: (event: { reason: string }) => void | Promise<void>;
   /**
    * Bundle local application entry outputs in memory before serving them.
    * This mirrors Angular's dev-server model where main.js contains the static app graph
@@ -638,6 +642,13 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
     }
 
     const started = Date.now();
+    if (options.onCompileStart) {
+      try {
+        await options.onCompileStart({ reason });
+      } catch (err: any) {
+        console.error('Failed to run onCompileStart callback', err);
+      }
+    }
     compileError = null;
     let buildOperation: Promise<any>;
     if (pluginMode === 'server' && sharedDaemonClient && sharedDaemonContextId) {
@@ -705,6 +716,7 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
         const callbackOutputs = await hydrateOutputsForCallback(result.outputs || []);
         if (options.appBundle) {
           await updateAppBundledEntryOutputs(callbackOutputs);
+          invalidateAppBundles();
         }
         if (options.onCompileComplete) {
           try {
@@ -799,6 +811,12 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
               }
             });
           }
+          if (options.onCompileComplete) {
+            const durationMs = Date.now() - started;
+            Promise.resolve(options.onCompileComplete({ reason, durationMs, error: e, outputs: [] })).catch(err => {
+              console.error('Failed to run onCompileComplete callback for error', err);
+            });
+          }
           // Do not re-throw in serve mode to prevent load/transform/HMR hook failures
           // which cause Vite's module graph to break and trigger forced re-optimization.
           return;
@@ -860,6 +878,51 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
         kind: 'js',
       });
     }
+  }
+
+  function invalidateAppBundles(): void {
+    if (!server) {
+      return;
+    }
+    for (const publicPath of appBundledPublicOutputs.keys()) {
+      const resolvedId = `\0angular-go-app-bundle:${publicPath}`;
+      const mod = server.moduleGraph.getModuleById(resolvedId);
+      if (mod) {
+        server.moduleGraph.invalidateModule(mod);
+      }
+    }
+  }
+
+  function getAppBundleModules(): any[] {
+    if (!server) {
+      return [];
+    }
+    const modules: any[] = [];
+    for (const publicPath of appBundledPublicOutputs.keys()) {
+      const resolvedId = `\0angular-go-app-bundle:${publicPath}`;
+      const mod = server.moduleGraph.getModuleById(resolvedId);
+      if (mod) {
+        modules.push(mod);
+      }
+    }
+    return modules;
+  }
+
+  function getVirtualComponentModules(affectedTsFiles: Iterable<string>): any[] {
+    if (!server) {
+      return [];
+    }
+    const modules: any[] = [];
+    for (const tsFile of affectedTsFiles) {
+      const relPath = path.relative(projectRoot, tsFile).replace(/\\/g, '/');
+      const encodedRelPath = encodeURIComponent(relPath);
+      for (const mod of server.moduleGraph.idToModuleMap.values()) {
+        if (mod.id && mod.id.includes('/@ng/component') && mod.id.includes(encodedRelPath)) {
+          modules.push(mod);
+        }
+      }
+    }
+    return modules;
   }
 
   function findOutputPathByBaseName(outputs: OutputFile[], baseName: string): string | undefined {
@@ -1135,7 +1198,11 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
         const publicPath = id.slice('\0angular-go-app-bundle:'.length);
         const output = appBundledPublicOutputs.get(publicPath);
         if (output?.text !== undefined) {
-          return { code: output.text, map: null };
+          let code = output.text;
+          if (enableHmr) {
+            code = code.replace(/import\s*\(\s*([a-zA-Z0-9_$]*\.)?ɵɵgetReplaceMetadataURL/g, 'import(/* @vite-ignore */ $1ɵɵgetReplaceMetadataURL');
+          }
+          return { code, map: null };
         }
         return null;
       }
@@ -1159,7 +1226,11 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
               try {
                 const result = await (sharedDaemonClient as GoNgcClient).getHmrUpdate(sharedDaemonContextId, c);
                 if (result && result.code) {
-                  return { code: result.code, map: null };
+                  let code = result.code;
+                  if (enableHmr) {
+                    code += '\nif (import.meta.hot) { import.meta.hot.accept(); }\n';
+                  }
+                  return { code, map: null };
                 }
                 // Daemon responded but no update available yet — return a no-op
                 // update so Angular doesn't crash with a failed import.
@@ -1173,7 +1244,11 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
         // No HMR code available: return a no-op module so the dynamic import
         // succeeds (browser doesn't get ERR_ABORTED) and Angular gracefully
         // keeps the existing component state.
-        return { code: 'export default null;', map: null };
+        let fallbackCode = 'export default null;';
+        if (enableHmr) {
+          fallbackCode += '\nif (import.meta.hot) { import.meta.hot.accept(); }\n';
+        }
+        return { code: fallbackCode, map: null };
       }
 
       const jsPath = outputPathForSource(id);
@@ -1247,7 +1322,11 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
       const mapPath = jsPath + '.map';
       const appBundledOutput = appBundledEntryOutputs.get(jsPath);
       if (appBundledOutput && typeof appBundledOutput.text === 'string') {
-        return { code: appBundledOutput.text, map: null };
+        let code = appBundledOutput.text;
+        if (enableHmr) {
+          code = code.replace(/import\s*\(\s*([a-zA-Z0-9_$]*\.)?ɵɵgetReplaceMetadataURL/g, 'import(/* @vite-ignore */ $1ɵɵgetReplaceMetadataURL');
+        }
+        return { code, map: null };
       }
 
       if (pluginMode === 'server' || pluginMode === 'memory') {
@@ -1287,7 +1366,7 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
         code = fs.readFileSync(jsPath, 'utf8');
       }
       if (enableHmr) {
-        code = code.replace(/import\s*\(\s*i0\.ɵɵgetReplaceMetadataURL/g, 'import(/* @vite-ignore */ i0.ɵɵgetReplaceMetadataURL');
+        code = code.replace(/import\s*\(\s*([a-zA-Z0-9_$]*\.)?ɵɵgetReplaceMetadataURL/g, 'import(/* @vite-ignore */ $1ɵɵgetReplaceMetadataURL');
       }
       if (map && sourcePath.endsWith('.ts') && fs.existsSync(sourcePath)) {
         try {
@@ -1318,6 +1397,7 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
         return;
       }
 
+
       // Check 1: Component Template (.html)
       if (filePath.endsWith('.html') && htmlToTs.has(filePath)) {
         log(`handleHotUpdate template changed: ${relativePath}`);
@@ -1333,16 +1413,26 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
         // Force compile the project immediately to build the new template and HMR code
         await compileProject(`change in template ${relativePath}`, true);
 
-        if (!enableHmr) {
-          server?.ws.send({ type: 'full-reload', path: '*' });
-          return [];
-        }
-
         // Send HMR update event to browser and invalidate module graph cache for virtual modules
         if (server) {
           const affectedTsFiles = htmlToTs.get(filePath)!;
           invalidateTsModulesForFiles(affectedTsFiles);
-          await sendHmrUpdatesForFiles(server, affectedTsFiles);
+          if (enableHmr) {
+            await sendHmrUpdatesForFiles(server, affectedTsFiles);
+          }
+
+          if (options.appBundle) {
+            return enableHmr ? getVirtualComponentModules(affectedTsFiles) : getAppBundleModules();
+          } else {
+            const modules: any[] = [];
+            for (const tsFile of affectedTsFiles) {
+              const mods = server.moduleGraph.getModulesByFile(tsFile);
+              if (mods) {
+                modules.push(...mods);
+              }
+            }
+            return modules;
+          }
         }
         return [];
       }
@@ -1366,16 +1456,26 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
         // Force compile the project immediately to build the new styles and HMR code
         await compileProject(`change in style ${relativePath}`, true);
 
-        if (!enableHmr) {
-          server?.ws.send({ type: 'full-reload', path: '*' });
-          return [];
-        }
-
         // Send HMR update event to browser and invalidate module graph cache for virtual modules
         if (server) {
           const affectedTsFiles = cssToTs.get(filePath)!;
           invalidateTsModulesForFiles(affectedTsFiles);
-          await sendHmrUpdatesForFiles(server, affectedTsFiles);
+          if (enableHmr) {
+            await sendHmrUpdatesForFiles(server, affectedTsFiles);
+          }
+
+          if (options.appBundle) {
+            return enableHmr ? getVirtualComponentModules(affectedTsFiles) : getAppBundleModules();
+          } else {
+            const modules: any[] = [];
+            for (const tsFile of affectedTsFiles) {
+              const mods = server.moduleGraph.getModulesByFile(tsFile);
+              if (mods) {
+                modules.push(...mods);
+              }
+            }
+            return modules;
+          }
         }
         return [];
       }
@@ -1403,14 +1503,21 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
       }
 
       if (filePath.endsWith('.ts')) {
-        if (!enableHmr) {
-          server?.ws.send({ type: 'full-reload', path: '*' });
-          return [];
-        }
         try {
           const sourceCode = fs.readFileSync(filePath, 'utf8');
           parseStyleMappingsForFile(filePath, sourceCode);
-          await sendHmrUpdatesForFiles(server, [filePath]);
+          if (enableHmr) {
+            await sendHmrUpdatesForFiles(server, [filePath]);
+          }
+
+          if (options.appBundle) {
+            return getAppBundleModules();
+          } else {
+            const mods = server.moduleGraph.getModulesByFile(filePath);
+            if (mods) {
+              return Array.from(mods);
+            }
+          }
         } catch {
           // ignore read errors
         }

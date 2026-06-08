@@ -157,6 +157,14 @@ func CompileHmrInitializer(meta R3HmrMetadata) output.Expression {
 	//   function Cmp_HmrLoad(t) {...}
 	//   ngDevMode && import.meta.hot && import.meta.hot.on(...);
 	// })()
+	// import.meta.hot.accept()
+	hotAccept := hotRead.Clone().Prop("accept", nil).
+		CallFn([]output.Expression{}, nil, false, nil)
+	// import.meta.hot.accept() || true
+	hotAcceptOrTrue := hotAccept.Or(LiteralExpr(true), nil)
+	// (import.meta.hot.accept() || true) && import.meta.hot.on(...)
+	hotListenerAndAccept := hotAcceptOrTrue.And(hotListener, nil)
+
 	body := []output.Statement{
 		// const id = <id>;
 		output.NewDeclareVarStmt(
@@ -169,8 +177,8 @@ func CompileHmrInitializer(meta R3HmrMetadata) output.Expression {
 		),
 		// function Cmp_HmrLoad() {...}
 		importCallback,
-		// ngDevMode && import.meta.hot && import.meta.hot.on(...)
-		DevOnlyGuardedExpression(hotRead.And(hotListener, nil)).ToStmt(nil),
+		// ngDevMode && import.meta.hot && import.meta.hot.accept() && import.meta.hot.on(...)
+		DevOnlyGuardedExpression(hotRead.And(hotListenerAndAccept, nil)).ToStmt(nil),
 	}
 
 	iife := output.NewArrowFunctionExpr(nil, body, nil, nil, nil)

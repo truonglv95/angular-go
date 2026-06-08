@@ -9,6 +9,7 @@ import { formatAngularDevBundleOutput, formatAngularDevServerReadyOutput } from 
 import { bundleCompilerOutputsWithRolldown } from '../shared/app-bundler.js';
 import { collectBundleSizeSummary, CompilerOutputFile } from '../shared/bundle-stats.js';
 import { normalizeStringList, normalizeGlobalEntries } from '../application/index.js';
+import { startSpinner, stopSpinner } from '../shared/spinner.js';
 
 const angularGo = ((angularGoModule as any).default?.default || (angularGoModule as any).default || angularGoModule) as any;
 const require = createRequire(import.meta.url);
@@ -99,9 +100,11 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
 
     const external = buildOptions.externalDependencies || [];
 
-    const hmrEnabled = options.hmr === true;
+    const hmrEnabled = options.hmr !== undefined ? options.hmr : (options.liveReload !== false);
     const liveReloadEnabled = options.liveReload !== false;
     const polyfills = normalizeStringList(buildOptions.polyfills || []);
+    const styles = normalizeGlobalEntries(buildOptions.styles || [], 'style');
+    const scripts = normalizeGlobalEntries(buildOptions.scripts || [], 'script');
 
     // Define the dry-run configuration for calculating stats
     const dryRunConfig: any = {
@@ -151,8 +154,7 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
           main: browserEntry
         };
 
-        const styles = normalizeGlobalEntries(buildOptions.styles || [], 'style');
-        const scripts = normalizeGlobalEntries(buildOptions.scripts || [], 'script');
+
 
         // Polyfills entry
         if (polyfills.length > 0) {
@@ -230,6 +232,11 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
       }
     }
 
+    let localUrl = '';
+    let hasPrintedWatchMessage = false;
+    let hasPrintedUrlBlock = false;
+    let compileSucceeded = false;
+
     const viteConfig: any = {
       root: path.dirname(browserEntry),
       configFile: false,
@@ -273,12 +280,48 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
             ...polyfills.map(value => path.basename(value, path.extname(value)) + '.js')
           ],
           devBundleSummary: false, // Turn off plugin's native console.log to avoid duplicates
-          onCompileComplete: async ({ reason, outputs }: { reason: string; durationMs: number; outputs: CompilerOutputFile[] }) => {
+          onCompileStart: () => {
             if (useAngularOutput) {
-              await printRebuildSummary(reason, outputs);
+              startSpinner('Building...');
+            }
+          },
+          onCompileComplete: async ({ reason, outputs, durationMs, error }: { reason: string; durationMs: number; outputs: CompilerOutputFile[]; error?: any }) => {
+            if (useAngularOutput) {
+              stopSpinner();
+              if (error) {
+                const durationSec = (durationMs / 1000).toFixed(3);
+                const ts = new Date().toISOString();
+                context.logger.error(`Application bundle generation failed. [${durationSec} seconds] - ${ts}\n`);
+                if (!hasPrintedWatchMessage) {
+                  hasPrintedWatchMessage = true;
+                  context.logger.info(`Watch mode enabled. Watching for file changes...`);
+                }
+              } else {
+                compileSucceeded = true;
+                await printRebuildSummary(reason, outputs);
+                if (!hasPrintedWatchMessage) {
+                  hasPrintedWatchMessage = true;
+                  context.logger.info(`Watch mode enabled. Watching for file changes...`);
+                }
+                if (!hasPrintedUrlBlock && localUrl) {
+                  hasPrintedUrlBlock = true;
+                  context.logger.info(
+                    `NOTE: Raw file sizes do not reflect development server per-request transformations.\n` +
+                    `  ➜  Local:   ${localUrl}\n` +
+                    `  ➜  press h + enter to show help`
+                  );
+                }
+              }
             }
           }
         }),
+        createHtmlAssetsPlugin(
+          path.dirname(browserEntry),
+          polyfills,
+          styles,
+          scripts,
+          workspaceRoot
+        ),
         createLoaderPlugin(buildOptions.loader)
       ],
       resolve: {
@@ -362,12 +405,17 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
     const address = server.httpServer?.address();
     const resolvedHost = typeof address === 'object' && address ? address.address : host;
     const resolvedPort = typeof address === 'object' && address ? address.port : port;
-    const localUrl = formatLocalUrl(options.ssl === true, host, resolvedHost, resolvedPort);
+    localUrl = formatLocalUrl(options.ssl === true, host, resolvedHost, resolvedPort);
 
-    if (useAngularOutput) {
-      context.logger.info(formatAngularDevServerReadyOutput(localUrl));
-    } else if (cliOutput !== 'silent') {
+    if (!useAngularOutput && cliOutput !== 'silent') {
       context.logger.info(`Vite Dev Server is running at ${localUrl}`);
+    } else if (useAngularOutput && !hasPrintedUrlBlock && compileSucceeded) {
+      hasPrintedUrlBlock = true;
+      context.logger.info(
+        `NOTE: Raw file sizes do not reflect development server per-request transformations.\n` +
+        `  ➜  Local:   ${localUrl}\n` +
+        `  ➜  press h + enter to show help`
+      );
     }
 
     return new Promise<BuilderOutput>((resolve) => {
@@ -386,20 +434,50 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
 
 function createAngularDevServerLogger(context: BuilderContext) {
   const baseLogger = createLogger();
+  const shouldIgnore = (message: string): boolean => {
+    const msg = String(message);
+    return msg.includes('The file does not exist at') || msg.includes('optimizeDeps.exclude');
+  };
+
   return {
     ...baseLogger,
     info(message: string, options?: any) {
+      if (shouldIgnore(message)) {
+        return;
+      }
       if (
         message.includes('ready in') ||
         message.includes('Local:') ||
         message.includes('Network:') ||
         message.includes('press h + enter') ||
         message.includes('Forced re-optimization of dependencies') ||
-        message.includes('[optimizer] bundling dependencies')
+        message.includes('[optimizer] bundling dependencies') ||
+        message.includes('[vite] (client)') ||
+        message.includes('page reload') ||
+        message.includes('hmr update') ||
+        message.includes('hot update')
       ) {
         return;
       }
       baseLogger.info(message, options);
+    },
+    warn(message: string, options?: any) {
+      if (shouldIgnore(message)) {
+        return;
+      }
+      baseLogger.warn(message, options);
+    },
+    warnOnce(message: string, options?: any) {
+      if (shouldIgnore(message)) {
+        return;
+      }
+      baseLogger.warnOnce(message, options);
+    },
+    error(message: string, options?: any) {
+      if (shouldIgnore(message)) {
+        return;
+      }
+      baseLogger.error(message, options);
     },
     clearScreen() {
       // no-op
@@ -481,6 +559,75 @@ export default bytes;`;
         }
       }
       return null;
+    }
+  };
+}
+
+function toViteUrl(filePath: string, viteRoot: string): string {
+  const absPath = path.resolve(filePath);
+  if (absPath.startsWith(viteRoot)) {
+    return '/' + path.relative(viteRoot, absPath).replace(/\\/g, '/');
+  }
+  // Outside root, use /@fs/ prefix
+  return '/@fs' + (absPath.startsWith('/') ? '' : '/') + absPath.replace(/\\/g, '/');
+}
+
+function createHtmlAssetsPlugin(
+  viteRoot: string,
+  polyfills: string[],
+  styles: { input: string; inject: boolean }[],
+  scripts: { input: string; inject: boolean }[],
+  workspaceRoot: string
+) {
+  return {
+    name: 'angular-go-html-assets',
+    transformIndexHtml(html: string) {
+      const tags: string[] = [];
+
+      // 1. Inject Polyfills (as module scripts)
+      for (const polyfill of polyfills) {
+        let absPath = '';
+        if (polyfill.startsWith('.') || polyfill.startsWith('/') || polyfill.startsWith('\\') || fs.existsSync(path.resolve(workspaceRoot, polyfill))) {
+          absPath = path.resolve(workspaceRoot, polyfill);
+        } else {
+          try {
+            absPath = require.resolve(polyfill, {
+              paths: [workspaceRoot]
+            });
+          } catch {
+            absPath = polyfill;
+          }
+        }
+        const url = toViteUrl(absPath, viteRoot);
+        tags.push(`<script type="module" src="${url}"></script>`);
+      }
+
+      // 2. Inject Styles (as link tags)
+      for (const style of styles) {
+        if (!style.inject) continue;
+        const absPath = path.resolve(workspaceRoot, style.input);
+        const url = toViteUrl(absPath, viteRoot);
+        tags.push(`<link rel="stylesheet" href="${url}">`);
+      }
+
+      // 3. Inject Scripts (as normal scripts)
+      for (const script of scripts) {
+        if (!script.inject) continue;
+        const absPath = path.resolve(workspaceRoot, script.input);
+        const url = toViteUrl(absPath, viteRoot);
+        tags.push(`<script src="${url}"></script>`);
+      }
+
+      if (tags.length === 0) {
+        return html;
+      }
+
+      // Inject tags before the closing </head> tag
+      const joinedTags = tags.join('\n  ');
+      if (html.includes('</head>')) {
+        return html.replace('</head>', `  ${joinedTags}\n</head>`);
+      }
+      return html + '\n' + joinedTags;
     }
   };
 }

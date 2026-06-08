@@ -419,24 +419,31 @@ func PerformCompilationWithHost(config *ParsedConfiguration, host compiler.Compi
 
 	func() {
 		diags = append(diags, ngProgram.GetTsProgram().GetConfigFileParsingDiagnostics()...)
+		var rawDiags []*ast.Diagnostic
 		if len(invalidatedFiles) > 0 {
 			for file := range invalidatedFiles {
 				absPath := tspath.GetNormalizedAbsolutePath(file, host.GetCurrentDirectory())
 				canonicalPath := tspath.GetCanonicalFileName(absPath, host.FS().UseCaseSensitiveFileNames())
 				sf := ngProgram.GetTsProgram().GetSourceFileByPath(tspath.Path(canonicalPath))
 				if sf != nil {
-					diags = append(diags, ngProgram.GetTsProgram().GetSyntacticDiagnostics(ctx, sf)...)
-					diags = append(diags, ngProgram.GetTsProgram().GetBindDiagnostics(ctx, sf)...)
-					diags = append(diags, ngProgram.GetTsProgram().GetSemanticDiagnostics(ctx, sf)...)
+					rawDiags = append(rawDiags, ngProgram.GetTsProgram().GetSyntacticDiagnostics(ctx, sf)...)
+					rawDiags = append(rawDiags, ngProgram.GetTsProgram().GetBindDiagnostics(ctx, sf)...)
+					rawDiags = append(rawDiags, ngProgram.GetTsProgram().GetSemanticDiagnostics(ctx, sf)...)
 				}
 			}
 		} else {
-			diags = append(diags, ngProgram.GetTsProgram().GetSyntacticDiagnostics(ctx, nil)...)
-			diags = append(diags, ngProgram.GetTsProgram().GetBindDiagnostics(ctx, nil)...)
-			diags = append(diags, ngProgram.GetTsProgram().GetSemanticDiagnostics(ctx, nil)...)
+			rawDiags = append(rawDiags, ngProgram.GetTsProgram().GetSyntacticDiagnostics(ctx, nil)...)
+			rawDiags = append(rawDiags, ngProgram.GetTsProgram().GetBindDiagnostics(ctx, nil)...)
+			rawDiags = append(rawDiags, ngProgram.GetTsProgram().GetSemanticDiagnostics(ctx, nil)...)
+		}
+		for _, d := range rawDiags {
+			if d.Code() != 1484 {
+				diags = append(diags, d)
+			}
 		}
 	}()
 
+	diags = filterDiagnostics(diags)
 	if len(diags) > 0 {
 		return &PerformCompilationResult{
 			Diagnostics: diags,
@@ -593,6 +600,7 @@ func PerformCompilationWithHost(config *ParsedConfiguration, host compiler.Compi
 		}
 	}
 
+	diags = filterDiagnostics(diags)
 	status := tsc.ExitStatusSuccess
 	if emitResult.EmitSkipped || len(diags) > 0 {
 		status = tsc.ExitStatusDiagnosticsPresent_OutputsSkipped
@@ -647,4 +655,14 @@ func isJavaScriptOutput(fileName string) bool {
 	default:
 		return false
 	}
+}
+
+func filterDiagnostics(diags []*ast.Diagnostic) []*ast.Diagnostic {
+	var filtered []*ast.Diagnostic
+	for _, d := range diags {
+		if d.Code() != 1484 {
+			filtered = append(filtered, d)
+		}
+	}
+	return filtered
 }
