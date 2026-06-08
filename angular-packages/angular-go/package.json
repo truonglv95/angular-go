@@ -1,5 +1,5 @@
 {
-  "name": "angular-go",
+  "name": "@angular-go/angular-go",
   "version": "1.0.3",
   "description": "Unified toolchain for angular-go: compile, linker, testbed, vitest, and builders",
   "type": "module",
@@ -50,10 +50,10 @@
     "@angular-devkit/architect": "^0.2102.13"
   },
   "optionalDependencies": {
-    "angular-go-darwin-arm64": "1.0.1",
-    "angular-go-darwin-x64": "1.0.1",
-    "angular-go-linux-x64": "1.0.1",
-    "angular-go-win32-x64": "1.0.1"
+    "@angular-go/darwin-arm64": "1.0.1",
+    "@angular-go/darwin-x64": "1.0.1",
+    "@angular-go/linux-x64": "1.0.1",
+    "@angular-go/win32-x64": "1.0.1"
   },
   "peerDependencies": {
     "@angular/common": "^21.0.0",

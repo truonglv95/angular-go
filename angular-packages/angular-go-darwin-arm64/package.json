@@ -1,5 +1,5 @@
 {
-  "name": "angular-go-darwin-arm64",
+  "name": "@angular-go/darwin-arm64",
   "version": "1.0.1",
   "description": "macOS arm64 binary for angular-go",
   "bin": {

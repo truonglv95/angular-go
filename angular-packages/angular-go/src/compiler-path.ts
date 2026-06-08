@@ -3,10 +3,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const PLATFORM_PACKAGES: Record<string, string> = {
-  'darwin-arm64': 'angular-go-darwin-arm64',
-  'darwin-x64': 'angular-go-darwin-x64',
-  'linux-x64': 'angular-go-linux-x64',
-  'win32-x64': 'angular-go-win32-x64'
+  'darwin-arm64': '@angular-go/darwin-arm64',
+  'darwin-x64': '@angular-go/darwin-x64',
+  'linux-x64': '@angular-go/linux-x64',
+  'win32-x64': '@angular-go/win32-x64'
 };
 
 export function resolveGoNgcPath(projectRoot: string, compilerPath = 'go-ngc', fromUrl = import.meta.url): string {
