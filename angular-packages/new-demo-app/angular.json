@@ -14,7 +14,7 @@
       "prefix": "app",
       "architect": {
         "build": {
-          "builder": "@angular-go/angular-go:application",
+          "builder": "@angular-go/build:application",
           "options": {
             "browser": "src/main.ts",
             "tsConfig": "tsconfig.app.json",
@@ -132,7 +132,7 @@
           "defaultConfiguration": "production"
         },
         "serve": {
-          "builder": "@angular-go/angular-go:dev-server",
+          "builder": "@angular-go/build:dev-server",
           "configurations": {
             "production": {
               "buildTarget": "new-demo-app:build:production"
@@ -156,7 +156,7 @@
           "defaultConfiguration": "development"
         },
         "test": {
-          "builder": "@angular-go/angular-go:unit-test",
+          "builder": "@angular-go/build:unit-test",
           "options": {
             "tsConfig": "tsconfig.spec.json",
             "outDir": "out-tsc/spec",

@@ -1,5 +1,5 @@
 {
-  "name": "@angular-go/angular-go",
+  "name": "@angular-go/build",
   "version": "1.0.3",
   "description": "Unified toolchain for angular-go: compile, linker, testbed, vitest, and builders",
   "type": "module",
