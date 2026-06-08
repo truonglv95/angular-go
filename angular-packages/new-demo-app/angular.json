@@ -72,6 +72,65 @@
           },
           "defaultConfiguration": "production"
         },
+        "build-ng": {
+          "builder": "@angular/build:application",
+          "options": {
+            "browser": "src/main.ts",
+            "tsConfig": "tsconfig.app.json",
+            "polyfills": [
+              "src/polyfills.ts"
+            ],
+            "preserveSymlinks": true,
+            "stylePreprocessorOptions": {
+              "includePaths": [
+                "src"
+              ]
+            },
+            "define": {
+              "process.env.NG_GO_VERSION": "\"1.0.0\""
+            },
+            "namedChunks": false,
+            "loader": {
+              ".txt": "text"
+            },
+            "assets": [
+              {
+                "glob": "**/*",
+                "input": "public"
+              }
+            ],
+            "styles": [
+              "src/styles.css"
+            ]
+          },
+          "configurations": {
+            "production": {
+              "budgets": [
+                {
+                  "type": "initial",
+                  "maximumWarning": "2MB",
+                  "maximumError": "4MB"
+                },
+                {
+                  "type": "anyComponentStyle",
+                  "maximumWarning": "4kB",
+                  "maximumError": "20kB"
+                }
+              ],
+              "outputHashing": "all",
+              "subresourceIntegrity": true,
+              "crossOrigin": "anonymous",
+              "statsJson": true,
+              "extractLicenses": true
+            },
+            "development": {
+              "optimization": false,
+              "extractLicenses": false,
+              "sourceMap": true
+            }
+          },
+          "defaultConfiguration": "production"
+        },
         "serve": {
           "builder": "angular-go:dev-server",
           "configurations": {
@@ -80,6 +139,18 @@
             },
             "development": {
               "buildTarget": "new-demo-app:build:development"
+            }
+          },
+          "defaultConfiguration": "development"
+        },
+        "serve-ng": {
+          "builder": "@angular/build:dev-server",
+          "configurations": {
+            "production": {
+              "buildTarget": "new-demo-app:build-ng:production"
+            },
+            "development": {
+              "buildTarget": "new-demo-app:build-ng:development"
             }
           },
           "defaultConfiguration": "development"
