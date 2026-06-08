@@ -8,6 +8,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { createGoNgcClient, GoNgcClient } from './client.js';
 import { resolveGoNgcPath } from '../compiler-path.js';
+import { bundleCompilerOutputsWithRolldown } from '../builders/shared/app-bundler.js';
 
 export interface OutputFile {
   path: string;
@@ -21,6 +22,7 @@ export interface DiagnosticMessage {
   code: number;
   message: string;
   file?: string;
+  formatted?: string;
 }
 
 export interface BuildResult {
@@ -85,6 +87,25 @@ export interface AngularGoCompileOptions extends AngularGoBaseOptions {
    * resolver for large Angular projects.
    */
   preserveImports?: boolean;
+  /**
+   * If false, does not print the dev bundle size summary on serve mode.
+   * Defaults to true.
+   */
+  devBundleSummary?: boolean;
+  /**
+   * Callback invoked when a project compilation completes.
+   */
+  onCompileComplete?: (event: { reason: string; durationMs: number; outputs: OutputFile[] }) => void | Promise<void>;
+  /**
+   * Bundle local application entry outputs in memory before serving them.
+   * This mirrors Angular's dev-server model where main.js contains the static app graph
+   * while bare package imports stay external/prebundled by Vite.
+   */
+  appBundle?: boolean;
+  /**
+   * JavaScript output file names to bundle as application entries.
+   */
+  appBundleEntryFileNames?: string[];
 }
 
 export interface AngularGoLinkerOptions extends AngularGoBaseOptions {
@@ -190,10 +211,16 @@ let linkCache = new BoundedMap<string, { key: string; code: string }>(500);
 
 let sharedDaemonClient: GoNgcClient | null = null;
 let sharedDaemonContextId = '';
+let isDryRunBuildInProgress = false;
+export function setDryRunBuildInProgress(value: boolean) {
+  isDryRunBuildInProgress = value;
+}
 // B#2 FIX: pluginMode is now set per-plugin-instance from options (see angularGoCompile).
 // The module-level variable is kept only as a shared reference for angularGoLinker.
 let pluginMode: 'server' | 'memory' | 'default' = 'server';
 let memoryOutputs = new Map<string, OutputFile>();
+let appBundledEntryOutputs = new Map<string, OutputFile>();
+let appBundledPublicOutputs = new Map<string, OutputFile>();
 
 const sourceFilePattern = /\.(ts|html|css|scss|sass|less)$/;
 const projectInputPattern = /\.(ts|html|css|scss|sass|less|json)$/;
@@ -217,6 +244,10 @@ function optionalStatKey(filePath: string): string {
   } catch {
     return 'missing';
   }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function findPackageJson(startDir: string, packageName: string): string | null {
@@ -565,6 +596,9 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
   }
 
   async function ensureFreshDevCompile(reason: string): Promise<void> {
+    if (isDryRunBuildInProgress) {
+      return;
+    }
     if (config.command !== 'serve' || !recompileOnChange) {
       return;
     }
@@ -618,12 +652,44 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
     }
 
     compilePromise = buildOperation
-      .then((result: BuildResult) => {
+      .then(async (result: BuildResult) => {
         lastCompileKey = compileKey;
         lastInputStats = new Map(cachedInputStats);
+
+        if (result.diagnostics && result.diagnostics.length > 0) {
+          const errors = result.diagnostics.filter(d => d.category === 'error');
+          const warnings = result.diagnostics.filter(d => d.category === 'warning');
+
+          if (warnings.length > 0) {
+            for (const w of warnings) {
+              if (w.formatted) {
+                config.logger.warn(w.formatted);
+              } else {
+                const msg = w.message || '';
+                const filePrefix = w.file ? `${w.file}: ` : '';
+                config.logger.warn(`[angular-go] ${filePrefix}warning TS${w.code}: ${msg}`);
+              }
+            }
+          }
+
+          if (errors.length > 0) {
+            const errorLines = errors.map(e => {
+              if (e.formatted) {
+                return e.formatted;
+              }
+              const msg = e.message || '';
+              const filePrefix = e.file ? `${e.file}: ` : '';
+              return `${filePrefix}error TS${e.code}: ${msg}`;
+            });
+            throw new Error(errorLines.join('\n'));
+          }
+        }
+
         if (pluginMode === 'memory' || pluginMode === 'server') {
           try {
             memoryOutputs.clear();
+            appBundledEntryOutputs.clear();
+            appBundledPublicOutputs.clear();
             if (result.outputs) {
               for (const output of result.outputs) {
                 const absPath = path.resolve(projectRoot, output.path);
@@ -634,10 +700,109 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
             console.error('Failed to parse in-memory outputs', e);
           }
         }
-        log(`compile completed in ${Date.now() - started}ms`);
+        
+        const durationMs = Date.now() - started;
+        const callbackOutputs = await hydrateOutputsForCallback(result.outputs || []);
+        if (options.appBundle) {
+          await updateAppBundledEntryOutputs(callbackOutputs);
+        }
+        if (options.onCompileComplete) {
+          try {
+            await options.onCompileComplete({ reason, durationMs, outputs: callbackOutputs });
+          } catch (callbackErr: any) {
+            console.error('Failed to run onCompileComplete callback', callbackErr);
+          }
+        }
+
+        if (config.command === 'serve' && options.devBundleSummary !== false) {
+          isDryRunBuildInProgress = true;
+          try {
+            const { build } = await import('vite');
+            const configInput = config.build?.rollupOptions?.input;
+            let input: any = { main: 'src/main.ts' };
+            if (configInput) {
+              input = configInput;
+            } else {
+              const rootDir = config.root || process.cwd();
+              const mainCandidates = [
+                path.resolve(rootDir, 'main.ts'),
+                path.resolve(rootDir, 'src/main.ts'),
+                path.resolve(rootDir, 'src/main.js'),
+              ];
+              for (const cand of mainCandidates) {
+                if (fs.existsSync(cand)) {
+                  input = { main: cand };
+                  break;
+                }
+              }
+            }
+
+            const userPlugins = (config.plugins || []).filter(
+              (p: any) => p && p.name && !p.name.startsWith('vite:')
+            );
+
+            const buildConfig = {
+              configFile: false,
+              root: config.root,
+              base: config.base,
+              mode: config.mode,
+              define: config.define,
+              resolve: config.resolve,
+              publicDir: config.publicDir,
+              cacheDir: path.resolve(config.root, '.angular/cache/angular-go-dry-run'),
+              optimizeDeps: {
+                disabled: true,
+                noDiscovery: true,
+              },
+              plugins: userPlugins,
+              logLevel: 'silent' as const,
+              build: {
+                write: false,
+                minify: false,
+                sourcemap: false,
+                rollupOptions: {
+                  input,
+                  output: {
+                    entryFileNames: 'assets/[name].js',
+                    chunkFileNames: 'assets/[name].js',
+                    assetFileNames: 'assets/[name].[ext]',
+                  }
+                }
+              }
+            };
+
+            await build(buildConfig as any);
+            console.log(`Application bundle generation complete. [${((Date.now() - started) / 1000).toFixed(3)} seconds] - ${new Date().toISOString()}\n`);
+          } catch (buildErr: any) {
+            console.warn(`[angular-go] Could not calculate initial bundle size: ${buildErr.stack || buildErr.message || buildErr}`);
+          } finally {
+            isDryRunBuildInProgress = false;
+          }
+        } else {
+          log(`compile completed in ${durationMs}ms`);
+        }
       })
       .catch((e) => {
         compileError = e;
+        if (config && config.command === 'serve') {
+          config.logger.error(`\x1b[31m[angular-go] Compilation failed:\n${e.message}\x1b[0m`);
+          if (server) {
+            server.ws.send({
+              type: 'error',
+              err: {
+                message: e.message,
+                stack: e.stack || '',
+                plugin: 'vite-plugin-angular-go',
+                id: e.id,
+                loc: e.loc,
+                frame: e.frame,
+              }
+            });
+          }
+          // Do not re-throw in serve mode to prevent load/transform/HMR hook failures
+          // which cause Vite's module graph to break and trigger forced re-optimization.
+          return;
+        }
         throw e;
       })
       .finally(() => {
@@ -645,6 +810,60 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
       });
 
     return compilePromise;
+  }
+
+  async function hydrateOutputsForCallback(outputs: OutputFile[]): Promise<OutputFile[]> {
+    if (pluginMode !== 'server' || !sharedDaemonClient || !sharedDaemonContextId) {
+      return outputs;
+    }
+
+    const hydrated: OutputFile[] = [];
+    for (const output of outputs) {
+      if (output.kind !== 'js' || output.text !== undefined) {
+        hydrated.push(output);
+        continue;
+      }
+      try {
+        hydrated.push(await sharedDaemonClient.getOutput(sharedDaemonContextId, output.path) || output);
+      } catch {
+        hydrated.push(output);
+      }
+    }
+    return hydrated;
+  }
+
+  async function updateAppBundledEntryOutputs(outputs: OutputFile[]): Promise<void> {
+    const entryFileNames = options.appBundleEntryFileNames || ['main.js'];
+    const entries = entryFileNames.map(fileName => ({
+      name: path.basename(fileName, path.extname(fileName)),
+      fileName,
+    }));
+    const bundled = await bundleCompilerOutputsWithRolldown(outputs, entries);
+
+    appBundledEntryOutputs.clear();
+    appBundledPublicOutputs.clear();
+    for (const entry of entries) {
+      const sourceOutputPath = findOutputPathByBaseName(outputs, entry.fileName);
+      const bundledItem = bundled[`${entry.name}.js`];
+      if (!sourceOutputPath || !bundledItem || bundledItem.type !== 'chunk') {
+        continue;
+      }
+      const absPath = path.resolve(projectRoot, sourceOutputPath);
+      appBundledEntryOutputs.set(absPath, {
+        path: absPath,
+        text: bundledItem.code,
+        kind: 'js',
+      });
+      appBundledPublicOutputs.set(`/${entry.fileName}`, {
+        path: `/${entry.fileName}`,
+        text: bundledItem.code,
+        kind: 'js',
+      });
+    }
+  }
+
+  function findOutputPathByBaseName(outputs: OutputFile[], baseName: string): string | undefined {
+    return outputs.find(output => output.kind === 'js' && path.basename(output.path) === baseName)?.path;
   }
 
   function projectCompileKey(): string {
@@ -670,10 +889,35 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
     enforce: 'pre',
 
     configResolved(resolvedConfig: ResolvedConfig) {
+      if (isDryRunBuildInProgress) {
+        return;
+      }
       config = resolvedConfig;
       projectRoot = options.projectRoot ? path.resolve(options.projectRoot) : process.cwd();
       outDir = resolveFromProjectRoot(options.outDir || 'out-tsc/app');
       compilerPath = resolveGoNgcPath(projectRoot, compilerPath, import.meta.url);
+
+      const angularVersion = packageVersion(projectRoot, '@angular/core');
+      if (angularVersion !== 'unknown') {
+        const majorVersion = parseInt(angularVersion.split('.')[0], 10);
+        if (majorVersion !== 21) {
+          resolvedConfig.logger.warn(
+            `\x1b[33m[angular-go] Warning: @angular/core version ${angularVersion} is installed. ` +
+            `angular-go is designed and tested for Angular version 21.x. Incompatibilities may occur.\x1b[0m`
+          );
+        }
+      }
+      const cliVersion = packageVersion(projectRoot, '@angular/compiler-cli');
+      if (cliVersion !== 'unknown') {
+        const majorVersion = parseInt(cliVersion.split('.')[0], 10);
+        if (majorVersion !== 21) {
+          resolvedConfig.logger.warn(
+            `\x1b[33m[angular-go] Warning: @angular/compiler-cli version ${cliVersion} is installed. ` +
+            `angular-go is designed and tested for Angular version 21.x. Incompatibilities may occur.\x1b[0m`
+          );
+        }
+      }
+
       compileArgs = normalizeCompileArgs(options.args || ['-p', options.project || 'tsconfig.app.json']);
       // Keep server mode for production build to avoid spawning subprocesses
       // for linking and compilation.
@@ -786,7 +1030,26 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
       invalidateTsModulesForResource(cleanId(id));
     },
 
+    transformIndexHtml(html: string) {
+      if (!options.appBundle) {
+        return html;
+      }
+
+      let nextHtml = html;
+      for (const fileName of options.appBundleEntryFileNames || ['main.js']) {
+        const sourceName = fileName.replace(/\.js$/, '.ts');
+        nextHtml = nextHtml.replace(
+          new RegExp(`(<script\\s+[^>]*type=["']module["'][^>]*src=["'])/${escapeRegExp(sourceName)}(["'][^>]*>\\s*</script>)`, 'g'),
+          `$1/${fileName}$2`
+        );
+      }
+      return nextHtml;
+    },
+
     async buildStart() {
+      if (isDryRunBuildInProgress) {
+        return;
+      }
       const isServe = config.command === 'serve';
 
       // C3 FIX: Only start the daemon when running the dev server.
@@ -843,6 +1106,13 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
     },
 
     resolveId(id: string) {
+      if (options.appBundle) {
+        const clean = cleanId(id);
+        if (appBundledPublicOutputs.has(clean)) {
+          return `\0angular-go-app-bundle:${clean}`;
+        }
+      }
+
       if (!enableHmr) {
         return;
       }
@@ -861,6 +1131,15 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
     },
 
     async load(id: string) {
+      if (id.startsWith('\0angular-go-app-bundle:')) {
+        const publicPath = id.slice('\0angular-go-app-bundle:'.length);
+        const output = appBundledPublicOutputs.get(publicPath);
+        if (output?.text !== undefined) {
+          return { code: output.text, map: null };
+        }
+        return null;
+      }
+
       if (id.startsWith('\0') && id.includes('/@ng/component')) {
         if (!enableHmr) {
           return null;
@@ -904,25 +1183,27 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
 
       await ensureFreshDevCompile(`freshness check for ${path.relative(projectRoot, cleanId(id))}`);
 
-      if (pluginMode !== 'server' && pluginMode !== 'memory') {
-        if (!fs.existsSync(jsPath)) {
-          try {
-            await compileProject(`missing output for ${path.relative(projectRoot, cleanId(id))}`, true);
-          } catch (e) {
-            // ignore here, we will throw compileError below
+      if (!isDryRunBuildInProgress) {
+        if (pluginMode !== 'server' && pluginMode !== 'memory') {
+          if (!fs.existsSync(jsPath)) {
+            try {
+              await compileProject(`missing output for ${path.relative(projectRoot, cleanId(id))}`, true);
+            } catch (e) {
+              // ignore here, we will throw compileError below
+            }
           }
-        }
-      } else {
-        if (!memoryOutputs.has(jsPath)) {
-          try {
-            await compileProject(`missing memory output for ${path.relative(projectRoot, cleanId(id))}`, true);
-          } catch (e) {
-            // ignore here
+        } else {
+          if (!memoryOutputs.has(jsPath)) {
+            try {
+              await compileProject(`missing memory output for ${path.relative(projectRoot, cleanId(id))}`, true);
+            } catch (e) {
+              // ignore here
+            }
           }
         }
       }
 
-      if (compileError) {
+      if (compileError && config && config.command === 'build') {
         this.error(compileError);
       }
 
@@ -964,6 +1245,11 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
       let map = null;
       let code: string | null = null;
       const mapPath = jsPath + '.map';
+      const appBundledOutput = appBundledEntryOutputs.get(jsPath);
+      if (appBundledOutput && typeof appBundledOutput.text === 'string') {
+        return { code: appBundledOutput.text, map: null };
+      }
+
       if (pluginMode === 'server' || pluginMode === 'memory') {
         const memOut = memoryOutputs.get(jsPath);
         if (memOut && typeof memOut.text === 'string') {
@@ -988,6 +1274,9 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
       }
 
       if (code == null) {
+        if (compileError && config && config.command === 'serve') {
+          return { code: 'export default null;', map: null };
+        }
         if (fs.existsSync(mapPath)) {
           try {
             map = JSON.parse(fs.readFileSync(mapPath, 'utf8'));
@@ -1135,7 +1424,7 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
     },
 
     async generateBundle(options: any, bundle: any) {
-      if (config.command !== 'build') {
+      if (config.command !== 'build' && !isDryRunBuildInProgress) {
         return;
       }
 
@@ -1214,21 +1503,12 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
       const lazyRows: SizeRow[] = [];
 
       const formatBytes = (bytes: number): string => {
-        if (bytes === 0) return '0 B';
+        if (bytes === 1) return '1 byte';
+        if (bytes < 1024) return `${bytes} bytes`;
         const k = 1024;
-        const sizes = ['B', 'kB', 'MB', 'GB'];
+        const sizes = ['bytes', 'kB', 'MB', 'GB'];
         const i = Math.floor(Math.log(bytes) / Math.log(k));
         return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-      };
-
-      const colorSize = (sizeStr: string, bytes: number): string => {
-        if (bytes < 100 * 1024) {
-          return `\x1b[32m${sizeStr}\x1b[39m`; // Green
-        } else if (bytes < 500 * 1024) {
-          return `\x1b[33m${sizeStr}\x1b[39m`; // Yellow
-        } else {
-          return `\x1b[31m\x1b[1m${sizeStr}\x1b[22m\x1b[39m`; // Bold Red
-        }
       };
 
       const isEmptyCssEntryChunk = (item: any): boolean => {
@@ -1312,114 +1592,124 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
 
       // 5. Generate beautiful console output
       let initialRawTotal = 0;
-      let initialGzipTotal = 0;
       for (const row of initialRows) {
         initialRawTotal += row.rawSize;
-        initialGzipTotal += row.gzipSize;
       }
 
+      const displayInitialRows = initialRows.map(row => ({
+        ...row,
+        file: row.file.replace(/^assets\//, ''),
+        sizeStr: formatBytes(row.rawSize)
+      }));
+
+      const displayLazyRows = lazyRows.map(row => ({
+        ...row,
+        file: row.file.replace(/^assets\//, ''),
+        sizeStr: formatBytes(row.rawSize)
+      }));
+
       const maxFileLen = Math.max(
-        'Initial Chunk Files'.length,
-        'Lazy Chunk Files'.length,
-        ...initialRows.map(r => r.file.length),
-        ...lazyRows.map(r => r.file.length)
+        'Initial chunk files'.length,
+        'Lazy chunk files'.length,
+        ...displayInitialRows.map(r => r.file.length),
+        ...displayLazyRows.map(r => r.file.length)
       );
       const maxNameLen = Math.max(
-        'Names'.length,
-        ...initialRows.map(r => r.name.length),
-        ...lazyRows.map(r => r.name.length)
+        13, // 'Initial total'.length
+        ...displayInitialRows.map(r => r.name.length),
+        ...displayLazyRows.map(r => r.name.length)
       );
+      const maxRawSizeLen = Math.max(
+        8, // 'Raw size'.length
+        ...displayInitialRows.map(r => r.sizeStr.length),
+        ...displayLazyRows.map(r => r.sizeStr.length),
+        formatBytes(initialRawTotal).length
+      );
+
+      const col2Width = maxNameLen + 1;
 
       const pad = (str: string, len: number) => str.padEnd(len);
       const padStart = (str: string, len: number) => str.padStart(len);
 
       const outputLines: string[] = [];
-      outputLines.push(`\n\x1b[1m\x1b[36mAngular Initial Bundle Size Summary:\x1b[0m\n`);
       outputLines.push(
         `  ` +
-        `\x1b[1m${pad('Initial Chunk Files', maxFileLen)}\x1b[22m | ` +
-        `\x1b[1m${pad('Names', maxNameLen)}\x1b[22m | ` +
-        `\x1b[1m${padStart('Raw Size', 12)}\x1b[22m | ` +
-        `\x1b[1m${padStart('Estimated Transfer Size', 24)}\x1b[22m`
-      );
-      outputLines.push(
-        `  ` +
-        `\x1b[90m${'-'.repeat(maxFileLen)}\x1b[39m-+-` +
-        `\x1b[90m${'-'.repeat(maxNameLen)}\x1b[39m-+-` +
-        `\x1b[90m${'-'.repeat(12)}\x1b[39m-+-` +
-        `\x1b[90m${'-'.repeat(24)}\x1b[39m`
+        `\x1b[1m${pad('Initial chunk files', maxFileLen)}\x1b[22m | ` +
+        `\x1b[1m${pad('Names', col2Width)}\x1b[22m | ` +
+        `\x1b[1m${pad('Raw size', maxRawSizeLen)}\x1b[22m`
       );
 
-      for (const row of initialRows) {
+      for (const row of displayInitialRows) {
         const fileStr = row.type === 'js' ? `\x1b[36m${row.file}\x1b[39m` : `\x1b[35m${row.file}\x1b[39m`;
-        const nameStr = row.name;
-        const rawSizeStr = formatBytes(row.rawSize);
-        const gzipSizeStr = colorSize(formatBytes(row.gzipSize), row.gzipSize);
+        const nameStr = `\x1b[90m${row.name}\x1b[39m`;
         
-        outputLines.push(
-          `  ` +
-          `${pad(fileStr, maxFileLen + (fileStr.length - row.file.length))} | ` +
-          `${pad(nameStr, maxNameLen)} | ` +
-          `${padStart(rawSizeStr, 12)} | ` +
-          `${padStart(gzipSizeStr, 24 + (gzipSizeStr.length - formatBytes(row.gzipSize).length))}`
-        );
+        let sizeColor = '';
+        if (row.rawSize < 100 * 1024) {
+          sizeColor = '\x1b[32m';
+        } else if (row.rawSize < 500 * 1024) {
+          sizeColor = '\x1b[33m';
+        } else {
+          sizeColor = '\x1b[31m\x1b[1m';
+        }
+        const sizeStr = `${sizeColor}${row.sizeStr}\x1b[39m\x1b[22m`;
+
+        const filePadded = pad(fileStr, maxFileLen + (fileStr.length - row.file.length));
+        const namePadded = pad(nameStr, col2Width + (nameStr.length - row.name.length));
+        const sizePadded = padStart(sizeStr, maxRawSizeLen + (sizeStr.length - row.sizeStr.length));
+        
+        outputLines.push(`  ${filePadded} | ${namePadded} | ${sizePadded} | `);
       }
 
-      outputLines.push(
-        `  ` +
-        `\x1b[90m${'-'.repeat(maxFileLen)}\x1b[39m-+-` +
-        `\x1b[90m${'-'.repeat(maxNameLen)}\x1b[39m-+-` +
-        `\x1b[90m${'-'.repeat(12)}\x1b[39m-+-` +
-        `\x1b[90m${'-'.repeat(24)}\x1b[39m`
-      );
+      outputLines.push('');
 
-      const totalLabel = `\x1b[1mInitial Total\x1b[22m`;
-      const totalRawStr = `\x1b[1m${formatBytes(initialRawTotal)}\x1b[22m`;
-      const totalGzipStr = colorSize(formatBytes(initialGzipTotal), initialGzipTotal);
+      const totalLabel = `\x1b[1mInitial total\x1b[22m`;
+      const totalRawVal = formatBytes(initialRawTotal);
+      const totalRawStr = `\x1b[1m${totalRawVal}\x1b[22m`;
 
-      outputLines.push(
-        `  ` +
-        `${pad('', maxFileLen)} | ` +
-        `${pad(totalLabel, maxNameLen + (totalLabel.length - 'Initial Total'.length))} | ` +
-        `${padStart(totalRawStr, 12 + (totalRawStr.length - formatBytes(initialRawTotal).length))} | ` +
-        `${padStart(totalGzipStr, 24 + (totalGzipStr.length - formatBytes(initialGzipTotal).length))}`
-      );
+      const spaces1 = ' '.repeat(maxFileLen);
+      const labelPadded = pad(totalLabel, col2Width + (totalLabel.length - 'Initial total'.length));
+      const sizePadded = padStart(totalRawStr, maxRawSizeLen + (totalRawStr.length - totalRawVal.length));
 
-      if (lazyRows.length > 0) {
-        outputLines.push(`\n  ` +
-          `\x1b[1m${pad('Lazy Chunk Files', maxFileLen)}\x1b[22m | ` +
-          `\x1b[1m${pad('Names', maxNameLen)}\x1b[22m | ` +
-          `\x1b[1m${padStart('Raw Size', 12)}\x1b[22m | ` +
-          `\x1b[1m${padStart('Estimated Transfer Size', 24)}\x1b[22m`
-        );
+      outputLines.push(`  ${spaces1} | ${labelPadded} | ${sizePadded}`);
+
+      if (displayLazyRows.length > 0) {
+        outputLines.push('');
         outputLines.push(
           `  ` +
-          `\x1b[90m${'-'.repeat(maxFileLen)}\x1b[39m-+-` +
-          `\x1b[90m${'-'.repeat(maxNameLen)}\x1b[39m-+-` +
-          `\x1b[90m${'-'.repeat(12)}\x1b[39m-+-` +
-          `\x1b[90m${'-'.repeat(24)}\x1b[39m`
+          `\x1b[1m${pad('Lazy chunk files', maxFileLen)}\x1b[22m | ` +
+          `\x1b[1m${pad('Names', col2Width)}\x1b[22m | ` +
+          `\x1b[1m${pad('Raw size', maxRawSizeLen)}\x1b[22m`
         );
 
-        for (const row of lazyRows) {
+        for (const row of displayLazyRows) {
           const fileStr = `\x1b[90m${row.file}\x1b[39m`;
           const nameStr = `\x1b[90m${row.name}\x1b[39m`;
-          const rawSizeStr = formatBytes(row.rawSize);
-          const gzipSizeStr = colorSize(formatBytes(row.gzipSize), row.gzipSize);
           
-          outputLines.push(
-            `  ` +
-            `${pad(fileStr, maxFileLen + (fileStr.length - row.file.length))} | ` +
-            `${pad(nameStr, maxNameLen + (nameStr.length - row.name.length))} | ` +
-            `${padStart(rawSizeStr, 12)} | ` +
-            `${padStart(gzipSizeStr, 24 + (gzipSizeStr.length - formatBytes(row.gzipSize).length))}`
-          );
+          let sizeColor = '';
+          if (row.rawSize < 100 * 1024) {
+            sizeColor = '\x1b[32m';
+          } else if (row.rawSize < 500 * 1024) {
+            sizeColor = '\x1b[33m';
+          } else {
+            sizeColor = '\x1b[31m\x1b[1m';
+          }
+          const sizeStr = `${sizeColor}${row.sizeStr}\x1b[39m\x1b[22m`;
+
+          const filePadded = pad(fileStr, maxFileLen + (fileStr.length - row.file.length));
+          const namePadded = pad(nameStr, col2Width + (nameStr.length - row.name.length));
+          const sizePadded = padStart(sizeStr, maxRawSizeLen + (sizeStr.length - row.sizeStr.length));
+          
+          outputLines.push(`  ${filePadded} | ${namePadded} | ${sizePadded} | `);
         }
       }
 
-      console.log(outputLines.join('\n') + '\n');
+      console.log('\n' + outputLines.join('\n') + '\n');
     },
 
     async closeBundle() {
+      if (isDryRunBuildInProgress) {
+        return;
+      }
       if (sharedDaemonClient) {
         await sharedDaemonClient.close();
         sharedDaemonClient = null;
@@ -1433,7 +1723,7 @@ export function angularGoLinker(options: AngularGoLinkerOptions = {}): any {
   let projectRoot = '';
   let compilerPath = options.compilerPath || 'go-ngc';
   const ascii = options.ascii !== false;
-  const forceOptimizeDeps = options.forceOptimizeDeps !== false;
+  const forceOptimizeDeps = options.forceOptimizeDeps === true;
   const linkCache = new BoundedMap<string, LinkCacheEntry>(500);
   let cacheDir = '';
 
@@ -1668,6 +1958,9 @@ export function angularGoLinker(options: AngularGoLinkerOptions = {}): any {
     },
 
     async closeBundle() {
+      if (isDryRunBuildInProgress) {
+        return;
+      }
       if (sharedDaemonClient) {
         await sharedDaemonClient.close().catch(() => {});
         sharedDaemonClient = null;

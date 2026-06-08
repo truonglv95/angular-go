@@ -1,23 +1,51 @@
 import { createBuilder, BuilderContext, BuilderOutput } from '@angular-devkit/architect';
-import { createServer } from 'vite';
+import { createServer, build, createLogger } from 'vite';
 import path from 'node:path';
 import fs from 'node:fs';
 import * as angularGoModule from '../../vite-plugin/index.js';
 import { createRequire } from 'node:module';
 import { resolveGoNgcPath } from '../../compiler-path.js';
+import { formatAngularDevBundleOutput, formatAngularDevServerReadyOutput } from '../shared/angular-cli-dev-output.js';
+import { bundleCompilerOutputsWithRolldown } from '../shared/app-bundler.js';
+import { collectBundleSizeSummary, CompilerOutputFile } from '../shared/bundle-stats.js';
+import { normalizeStringList, normalizeGlobalEntries } from '../application/index.js';
 
 const angularGo = ((angularGoModule as any).default?.default || (angularGoModule as any).default || angularGoModule) as any;
 const require = createRequire(import.meta.url);
 
 export default createBuilder<any, BuilderOutput>(async (options, context): Promise<BuilderOutput> => {
-  context.logger.info(`Starting development server with go-ngc and Vite...`);
+  const cliOutput = options.cliOutput ?? 'angular';
+  const useAngularOutput = cliOutput === 'angular';
+
+  if (!useAngularOutput && cliOutput !== 'silent') {
+    context.logger.info(`Starting development server with go-ngc and Vite...`);
+  }
 
   try {
     const workspaceRoot = context.workspaceRoot;
     
     let buildOptions: any = {};
     if (options.buildTarget) {
-      buildOptions = await context.getTargetOptions(parseBuildTarget(options.buildTarget) as any);
+      const parsed = parseBuildTarget(options.buildTarget);
+      buildOptions = await context.getTargetOptions({ project: parsed.project, target: parsed.target }) as any;
+      if (parsed.configuration) {
+        const configs = parsed.configuration.split(',');
+        for (const config of configs) {
+          const configOptions = await context.getTargetOptions({
+            project: parsed.project,
+            target: parsed.target,
+            configuration: config.trim()
+          }) as any;
+          buildOptions = {
+            ...buildOptions,
+            ...configOptions,
+            define: {
+              ...(buildOptions.define || {}),
+              ...(configOptions.define || {})
+            }
+          };
+        }
+      }
     }
 
     const tsConfigPath = path.resolve(workspaceRoot, buildOptions.tsConfig || 'tsconfig.app.json');
@@ -27,6 +55,10 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
 
     const host = options.host || '127.0.0.1';
     const port = options.port ?? 4200;
+
+    if (options.inspect) {
+      context.logger.warn(`angular-go-build:dev-server does not support 'inspect' option in non-SSR mode.`);
+    }
 
     const baseHref = normalizeServeBase(options.servePath || buildOptions.baseHref || '/');
 
@@ -69,10 +101,142 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
 
     const hmrEnabled = options.hmr === true;
     const liveReloadEnabled = options.liveReload !== false;
+    const polyfills = normalizeStringList(buildOptions.polyfills || []);
+
+    // Define the dry-run configuration for calculating stats
+    const dryRunConfig: any = {
+      configFile: false,
+      root: path.dirname(browserEntry),
+      base: baseHref,
+      mode: 'development',
+      define: {
+        ...(buildOptions.define || {}),
+        ...(options.define || {}),
+      },
+      resolve: {
+        mainFields: ['module'],
+        alias: [],
+        preserveSymlinks: buildOptions.preserveSymlinks === true || options.preserveSymlinks === true
+      },
+      cacheDir: path.resolve(workspaceRoot, '.angular/cache/angular-go-dry-run'),
+      optimizeDeps: {
+        disabled: true,
+        noDiscovery: true,
+      },
+      plugins: [], // will be populated from viteConfig
+      logLevel: 'silent' as const,
+      build: {
+        write: false,
+        minify: false,
+        sourcemap: false,
+        rollupOptions: {
+          input: {},
+          output: {
+            entryFileNames: 'assets/[name].js',
+            chunkFileNames: 'assets/[name].js',
+            assetFileNames: 'assets/[name].[ext]',
+          }
+        }
+      }
+    };
+
+    const setDryRunBuildInProgress = (angularGoModule as any).setDryRunBuildInProgress;
+    
+    async function printRebuildSummary(reason: string, compilerOutputs: CompilerOutputFile[]) {
+      const started = Date.now();
+      try {
+        setDryRunBuildInProgress(true);
+        
+        const input: Record<string, string> = {
+          main: browserEntry
+        };
+
+        const styles = normalizeGlobalEntries(buildOptions.styles || [], 'style');
+        const scripts = normalizeGlobalEntries(buildOptions.scripts || [], 'script');
+
+        // Polyfills entry
+        if (polyfills.length > 0) {
+          const firstPolyfill = polyfills[0];
+          const polyfillPath = path.resolve(workspaceRoot, firstPolyfill);
+          if (fs.existsSync(polyfillPath)) {
+            input['polyfills'] = polyfillPath;
+          }
+        }
+
+        // Style entry points
+        for (const entry of styles) {
+          const stylePath = path.resolve(workspaceRoot, entry.input);
+          if (fs.existsSync(stylePath)) {
+            input[entry.bundleName] = stylePath;
+          }
+        }
+
+        // Script entry points
+        for (const entry of scripts) {
+          const scriptPath = path.resolve(workspaceRoot, entry.input);
+          if (fs.existsSync(scriptPath)) {
+            input[entry.bundleName] = scriptPath;
+          }
+        }
+
+        dryRunConfig.build.rollupOptions.input = input;
+
+        dryRunConfig.build.rollupOptions.external = (id: string) => {
+          if (id.startsWith('.') || id.startsWith('/') || id.startsWith('\\') || path.isAbsolute(id)) {
+            return false;
+          }
+          if (id.endsWith('.css') || id.endsWith('.scss') || id.endsWith('.sass') || id.includes('?')) {
+            return false;
+          }
+          return true;
+        };
+
+        const rollupOutput = await build(dryRunConfig);
+        const outputs = Array.isArray(rollupOutput) ? rollupOutput : [rollupOutput as any];
+        const bundleRecord: Record<string, any> = {};
+        for (const out of outputs) {
+          if (out && (out as any).output) {
+            for (const chunkOrAsset of (out as any).output) {
+              bundleRecord[chunkOrAsset.fileName] = chunkOrAsset;
+            }
+          }
+        }
+        
+        const appBundleRecord = await bundleCompilerOutputsWithRolldown(compilerOutputs, [
+          { name: 'main', fileName: path.basename(browserEntry, path.extname(browserEntry)) + '.js' },
+          ...polyfills.map(value => ({
+            name: path.basename(value, path.extname(value)),
+            fileName: path.basename(value, path.extname(value)) + '.js'
+          }))
+        ]);
+        const drySummary = collectBundleSizeSummary(bundleRecord);
+        const appBundleSummary = collectBundleSizeSummary(appBundleRecord);
+        const cssRows = drySummary.initial.filter(row => row.kind === 'css');
+        const lazyCssRows = drySummary.lazy.filter(row => row.kind === 'css');
+        const initial = [...appBundleSummary.initial, ...cssRows];
+        const lazy = [...appBundleSummary.lazy, ...lazyCssRows];
+        const summary = {
+          initial,
+          lazy,
+          initialTotalRawSize: initial.reduce((total, row) => total + row.rawSize, 0)
+        };
+        const durationMs = Date.now() - started;
+        
+        context.logger.info(formatAngularDevBundleOutput(summary, { durationMs }));
+      } catch (err: any) {
+        context.logger.error(`[angular-go] Failed to generate bundle summary: ${err.stack || err.message || err}`);
+      } finally {
+        setDryRunBuildInProgress(false);
+      }
+    }
+
     const viteConfig: any = {
       root: path.dirname(browserEntry),
       configFile: false,
       base: baseHref,
+      cacheDir: path.resolve(workspaceRoot, '.angular/cache/angular-go-vite'),
+      logLevel: cliOutput === 'silent' ? 'silent' : (useAngularOutput ? 'info' : undefined),
+      customLogger: useAngularOutput ? createAngularDevServerLogger(context) : undefined,
       define: {
         ...(buildOptions.define || {}),
         ...(options.define || {}),
@@ -80,16 +244,18 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
       server: {
         host,
         port,
-        https: options.ssl ? {
-          key: options.sslKey ? fs.readFileSync(path.resolve(workspaceRoot, options.sslKey)) : undefined,
-          cert: options.sslCert ? fs.readFileSync(path.resolve(workspaceRoot, options.sslCert)) : undefined,
-        } : undefined,
+        https: options.ssl ? (
+          options.sslKey || options.sslCert ? {
+            key: options.sslKey ? fs.readFileSync(path.resolve(workspaceRoot, options.sslKey)) : undefined,
+            cert: options.sslCert ? fs.readFileSync(path.resolve(workspaceRoot, options.sslCert)) : undefined,
+          } : true
+        ) : undefined,
         headers: options.headers,
         open: options.open,
         proxy,
         allowedHosts,
         hmr: hmrEnabled || liveReloadEnabled ? undefined : false,
-        watch: options.poll ? { usePolling: true, interval: options.poll } : undefined,
+        watch: options.watch === false ? null : (options.poll ? { usePolling: true, interval: options.poll } : undefined),
       },
       plugins: [
         angularGo({
@@ -100,7 +266,18 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
           compile: true,
           link: true,
           hmr: hmrEnabled,
-          recompileOnChange: options.watch !== false
+          recompileOnChange: options.watch !== false,
+          appBundle: true,
+          appBundleEntryFileNames: [
+            path.basename(browserEntry, path.extname(browserEntry)) + '.js',
+            ...polyfills.map(value => path.basename(value, path.extname(value)) + '.js')
+          ],
+          devBundleSummary: false, // Turn off plugin's native console.log to avoid duplicates
+          onCompileComplete: async ({ reason, outputs }: { reason: string; durationMs: number; outputs: CompilerOutputFile[] }) => {
+            if (useAngularOutput) {
+              await printRebuildSummary(reason, outputs);
+            }
+          }
         }),
         createLoaderPlugin(buildOptions.loader)
       ],
@@ -110,6 +287,11 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
         preserveSymlinks: buildOptions.preserveSymlinks === true || options.preserveSymlinks === true
       }
     };
+
+    // Filter plugins for dryRunConfig
+    dryRunConfig.plugins = viteConfig.plugins.filter(
+      (p: any) => p && p.name && !p.name.startsWith('vite:')
+    );
 
     // External dependencies handling
     if (external.length > 0) {
@@ -121,6 +303,12 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
       viteConfig.build = viteConfig.build || {};
       viteConfig.build.rollupOptions = viteConfig.build.rollupOptions || {};
       viteConfig.build.rollupOptions.external = external;
+      
+      dryRunConfig.optimizeDeps.exclude = [
+        ...(dryRunConfig.optimizeDeps.exclude || []),
+        ...external
+      ];
+      dryRunConfig.build.rollupOptions.external = external;
     }
 
     if (options.prebundle === false) {
@@ -145,6 +333,11 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
         ...(viteConfig.esbuild.loader || {}),
         ...buildOptions.loader
       };
+      dryRunConfig.esbuild = dryRunConfig.esbuild || {};
+      dryRunConfig.esbuild.loader = {
+        ...(dryRunConfig.esbuild.loader || {}),
+        ...buildOptions.loader
+      };
     }
 
     // Resolve fileReplacements
@@ -153,6 +346,10 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
         const replacePath = path.resolve(workspaceRoot, replacement.replace);
         const withPath = path.resolve(workspaceRoot, replacement.with);
         viteConfig.resolve.alias.push({
+          find: replacePath,
+          replacement: withPath
+        });
+        dryRunConfig.resolve.alias.push({
           find: replacePath,
           replacement: withPath
         });
@@ -165,7 +362,13 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
     const address = server.httpServer?.address();
     const resolvedHost = typeof address === 'object' && address ? address.address : host;
     const resolvedPort = typeof address === 'object' && address ? address.port : port;
-    context.logger.info(`Vite Dev Server is running at http://${resolvedHost}:${resolvedPort}/`);
+    const localUrl = formatLocalUrl(options.ssl === true, host, resolvedHost, resolvedPort);
+
+    if (useAngularOutput) {
+      context.logger.info(formatAngularDevServerReadyOutput(localUrl));
+    } else if (cliOutput !== 'silent') {
+      context.logger.info(`Vite Dev Server is running at ${localUrl}`);
+    }
 
     return new Promise<BuilderOutput>((resolve) => {
       const shutdown = async () => {
@@ -180,6 +383,29 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
     return { success: false, error: error.message };
   }
 });
+
+function createAngularDevServerLogger(context: BuilderContext) {
+  const baseLogger = createLogger();
+  return {
+    ...baseLogger,
+    info(message: string, options?: any) {
+      if (
+        message.includes('ready in') ||
+        message.includes('Local:') ||
+        message.includes('Network:') ||
+        message.includes('press h + enter') ||
+        message.includes('Forced re-optimization of dependencies') ||
+        message.includes('[optimizer] bundling dependencies')
+      ) {
+        return;
+      }
+      baseLogger.info(message, options);
+    },
+    clearScreen() {
+      // no-op
+    }
+  };
+}
 
 function parseBuildTarget(buildTarget: string) {
   const firstColon = buildTarget.indexOf(':');
@@ -199,6 +425,15 @@ function normalizeServeBase(value: string): string {
   if (!value || value === '/') return '/';
   const withLeadingSlash = value.startsWith('/') ? value : `/${value}`;
   return withLeadingSlash.endsWith('/') ? withLeadingSlash : `${withLeadingSlash}/`;
+}
+
+function formatLocalUrl(https: boolean, requestedHost: string, resolvedHost: string, port: number): string {
+  const protocol = https ? 'https' : 'http';
+  const host = requestedHost && requestedHost !== '0.0.0.0' && requestedHost !== '::'
+    ? requestedHost
+    : resolvedHost;
+  const formattedHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+  return `${protocol}://${formattedHost}:${port}/`;
 }
 
 function createLoaderPlugin(loaderOptions: Record<string, string> | undefined) {

@@ -45,12 +45,17 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
     const compilerPath = resolveGoNgcPath(workspaceRoot, options.compilerPath || 'go-ngc', import.meta.url);
 
     // Normalize outputPath
-    let outDir = 'dist';
+    let baseOutDir = 'dist';
+    let browserSubdir = '';
+    let mediaSubdir = 'media';
     if (typeof options.outputPath === 'string') {
-      outDir = options.outputPath;
+      baseOutDir = options.outputPath;
     } else if (options.outputPath && typeof options.outputPath === 'object') {
-      outDir = options.outputPath.base || 'dist';
+      baseOutDir = options.outputPath.base || 'dist';
+      browserSubdir = options.outputPath.browser !== undefined ? options.outputPath.browser : 'browser';
+      mediaSubdir = options.outputPath.media !== undefined ? options.outputPath.media : 'media';
     }
+    const outDir = browserSubdir ? path.join(baseOutDir, browserSubdir) : baseOutDir;
     const absoluteOutDir = path.resolve(workspaceRoot, outDir);
 
     const parseSize = (sizeStr: string | undefined): number | null => {
@@ -206,21 +211,27 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
     }
 
     // Index file configuration
-    let indexInput = 'src/index.html';
+    let indexInput = '';
     let indexOutput = 'index.html';
-    if (typeof options.index === 'string') {
-      indexInput = options.index;
-    } else if (options.index && typeof options.index === 'object') {
-      indexInput = options.index.input || 'src/index.html';
-      indexOutput = options.index.output || 'index.html';
+    if (options.index !== false) {
+      if (typeof options.index === 'string') {
+        indexInput = options.index;
+      } else if (options.index && typeof options.index === 'object') {
+        indexInput = options.index.input || 'src/index.html';
+        indexOutput = options.index.output || 'index.html';
+      } else {
+        indexInput = 'src/index.html';
+      }
     }
-    const indexHtmlPath = path.resolve(workspaceRoot, indexInput);
 
     const entryPoints: Record<string, string> = {
       main: browserEntry
     };
-    if (fs.existsSync(indexHtmlPath)) {
-      entryPoints['index'] = indexHtmlPath;
+    if (indexInput) {
+      const indexHtmlPath = path.resolve(workspaceRoot, indexInput);
+      if (fs.existsSync(indexHtmlPath)) {
+        entryPoints['index'] = indexHtmlPath;
+      }
     }
 
     // Style inputs
@@ -247,7 +258,9 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
         chunkFileNames: useJsHash 
           ? (namedChunks ? 'assets/[name]-[hash].js' : 'assets/[hash].js') 
           : 'assets/[name].js',
-        assetFileNames: useAssetHash ? 'assets/[name]-[hash].[ext]' : 'assets/[name].[ext]',
+        assetFileNames: useAssetHash
+          ? `${mediaSubdir}/[name]-[hash].[ext]`
+          : `${mediaSubdir}/[name].[ext]`,
       }
     };
 
@@ -256,7 +269,7 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
 
     // Post-process index.html to inject global styles and scripts
     const finalIndexHtmlPath = path.resolve(absoluteOutDir, indexOutput);
-    if (fs.existsSync(finalIndexHtmlPath) && options.index !== false) {
+    if (indexInput && fs.existsSync(finalIndexHtmlPath) && options.index !== false) {
       let htmlContent = fs.readFileSync(finalIndexHtmlPath, 'utf8');
 
       // Find compiled CSS files for style entry points
@@ -616,16 +629,28 @@ export function normalizeStringList(value: unknown): string[] {
 
 export function normalizeGlobalEntries(value: unknown, fallbackPrefix: string): GlobalEntry[] {
   if (!Array.isArray(value)) return [];
+  
+  const getDefaultBundleName = (input: string, fallback: string): string => {
+    try {
+      const filename = path.basename(input);
+      const ext = path.extname(filename);
+      return filename.substring(0, filename.length - ext.length);
+    } catch {
+      return fallback;
+    }
+  };
+
   return value.flatMap((entry, index): GlobalEntry[] => {
+    const fallback = `${fallbackPrefix}-${index}`;
     if (typeof entry === 'string') {
-      return [{ input: entry, bundleName: `${fallbackPrefix}-${index}`, inject: true }];
+      return [{ input: entry, bundleName: getDefaultBundleName(entry, fallback), inject: true }];
     }
     if (entry && typeof entry === 'object' && typeof (entry as any).input === 'string') {
       return [{
         input: (entry as any).input,
         bundleName: typeof (entry as any).bundleName === 'string' && (entry as any).bundleName.length > 0
           ? (entry as any).bundleName
-          : `${fallbackPrefix}-${index}`,
+          : getDefaultBundleName((entry as any).input, fallback),
         inject: (entry as any).inject !== false
       }];
     }

@@ -319,6 +319,29 @@ Supported or partially supported by `angular-go:application`:
 - `conditions`
 - `namedChunks`
 
+### Dev Server Option Coverage (angular-go:dev-server)
+
+Supported or partially supported options by `angular-go:dev-server`:
+
+- `buildTarget`
+- `port`
+- `host`
+- `proxyConfig`
+- `ssl`
+- `sslKey`
+- `sslCert`
+- `headers`
+- `open`
+- `liveReload`
+- `hmr`
+- `watch`
+- `allowedHosts`
+- `define`
+- `cliOutput` — Controls dev-server console output style:
+  - `angular` (default): print Angular CLI-compatible output.
+  - `vite`: keep Vite's native logger behavior.
+  - `silent`: suppress non-error dev-server logs.
+
 Unsupported application features fail fast or warn depending on risk:
 
 - `aot: false`
