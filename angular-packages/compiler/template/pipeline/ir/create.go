@@ -1056,6 +1056,7 @@ func CreateI18nStartOp(
 	return &I18nStartOp{
 		I18nOpBase: I18nOpBase{
 			Xref:         xref,
+			Root:         xref,
 			Message:      message,
 			MessageIndex: messageIndex,
 			SourceSpan:   sourceSpan,

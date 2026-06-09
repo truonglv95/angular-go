@@ -1,6 +1,7 @@
 package phases
 
 import (
+	"fmt"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/i18n"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline/compilation"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline/ir"
@@ -99,6 +100,7 @@ func CreateI18nContexts(job compilation.CompilationJob) {
 				if i18nStart.Xref != i18nStart.Root {
 					rootContext, ok := blockContextByI18nBlock[i18nStart.Root]
 					if !ok {
+						fmt.Printf("AssertionError: Root i18n block i18n context should have been created. Xref=%d, Root=%d\n", i18nStart.Xref, i18nStart.Root)
 						panic("AssertionError: Root i18n block i18n context should have been created.")
 					}
 					i18nStart.Context = rootContext.Xref

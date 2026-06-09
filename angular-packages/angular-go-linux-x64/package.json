@@ -1,6 +1,6 @@
 {
   "name": "@angular-go/linux-x64",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Linux x64 binary for angular-go",
   "bin": {
     "go-ngc": "bin/go-ngc"

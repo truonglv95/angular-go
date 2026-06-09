@@ -345,6 +345,9 @@ func handleRequest(ctx context.Context, req RpcRequest) {
 			var uniqueDiags []*ast.Diagnostic
 			seen := make(map[string]bool)
 			for _, d := range result.Diagnostics {
+				if d.Code() == 6059 {
+					continue
+				}
 				file := ""
 				if d.File() != nil {
 					file = d.File().FileName()
