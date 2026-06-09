@@ -106,11 +106,32 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
     const styles = normalizeGlobalEntries(buildOptions.styles || [], 'style');
     const scripts = normalizeGlobalEntries(buildOptions.scripts || [], 'script');
 
+    // Style preprocessor options
+    const cssConfig: any = {};
+    let styleIncludePaths: string[] | undefined;
+    if (buildOptions.stylePreprocessorOptions && typeof buildOptions.stylePreprocessorOptions === 'object') {
+      const includePaths = (buildOptions.stylePreprocessorOptions.includePaths || []).map((p: string) =>
+        path.resolve(workspaceRoot, p)
+      );
+      if (includePaths.length > 0) {
+        styleIncludePaths = includePaths;
+        cssConfig.preprocessorOptions = {
+          sass: {
+            includePaths
+          },
+          scss: {
+            includePaths
+          }
+        };
+      }
+    }
+
     // Define the dry-run configuration for calculating stats
     const dryRunConfig: any = {
       configFile: false,
       root: path.dirname(browserEntry),
       base: baseHref,
+      css: cssConfig,
       mode: 'development',
       define: {
         ...(buildOptions.define || {}),
@@ -241,6 +262,7 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
       root: path.dirname(browserEntry),
       configFile: false,
       base: baseHref,
+      css: cssConfig,
       cacheDir: path.resolve(workspaceRoot, '.angular/cache/angular-go-vite'),
       logLevel: cliOutput === 'silent' ? 'silent' : (useAngularOutput ? 'info' : undefined),
       customLogger: useAngularOutput ? createAngularDevServerLogger(context) : undefined,
@@ -274,6 +296,7 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
           link: true,
           hmr: hmrEnabled,
           recompileOnChange: options.watch !== false,
+          styleIncludePaths,
           appBundle: true,
           appBundleEntryFileNames: [
             path.basename(browserEntry, path.extname(browserEntry)) + '.js',

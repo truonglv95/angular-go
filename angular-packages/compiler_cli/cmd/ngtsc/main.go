@@ -31,6 +31,7 @@ func main() {
 	serverFlag := flag.Bool("server", false, "Run in daemon mode via JSON-RPC over stdin/stdout")
 	perfReportFlag := flag.Bool("perf-report", false, "Print performance phase timings to os.Stderr")
 	preserveImportsFlag := flag.Bool("preserve-imports", true, "Preserve ES imports during emit by enabling verbatimModuleSyntax")
+	styleIncludePathsFlag := flag.String("style-include-paths", "", "Comma-separated list of paths for Sass/Less to use")
 	flag.Parse()
 
 	if *serverFlag {
@@ -75,6 +76,9 @@ func main() {
 	config.Write = *writeFlag
 	if *preserveImportsFlag {
 		compiler_cli.EnablePreserveImports(config)
+	}
+	if *styleIncludePathsFlag != "" {
+		config.StyleIncludePaths = strings.Split(*styleIncludePathsFlag, ",")
 	}
 
 	formatOpts := &diagnosticwriter.FormattingOptions{

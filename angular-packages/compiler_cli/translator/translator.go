@@ -607,19 +607,19 @@ func findImportInfo(sourceFile *ast.SourceFile, symbol string) (moduleSpecifier 
 			if clause.PhaseModifier == ast.KindTypeKeyword {
 				continue
 			}
-			if clause.Name() != nil && clause.Name().AsIdentifier().Text == symbol {
+			if clause.Name() != nil && ast.IsIdentifier(clause.Name()) && clause.Name().AsIdentifier().Text == symbol {
 				return modSpec, "default", true, false, true
 			}
 			if clause.NamedBindings != nil {
 				if clause.NamedBindings.Kind == ast.KindNamespaceImport {
 					ns := clause.NamedBindings.AsNamespaceImport()
-					if ns.Name() != nil && ns.Name().AsIdentifier().Text == symbol {
+					if ns.Name() != nil && ast.IsIdentifier(ns.Name()) && ns.Name().AsIdentifier().Text == symbol {
 						return modSpec, "", false, true, true
 					}
 				} else if clause.NamedBindings.Kind == ast.KindNamedImports {
 					for _, el := range clause.NamedBindings.AsNamedImports().Elements.Nodes {
 						spec := el.AsImportSpecifier()
-						if spec.IsTypeOnly {
+						if spec.IsTypeOnly || !ast.IsIdentifier(spec.Name()) {
 							continue
 						}
 						name := spec.Name().AsIdentifier().Text

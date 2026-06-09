@@ -75,7 +75,7 @@ func NewNgCompiler(tsProgram *compiler.Program, options NgCompilerOptions, oldCo
 	var handlers []transform.DecoratorHandler
 	if options.CompilationMode == "local" {
 		handlers = []transform.DecoratorHandler{
-			annotations_local.NewComponentLocalDecoratorHandler(localRefHost, false, localMetaRegistry, scopeRegistry, options.EnableHmr),
+			annotations_local.NewComponentLocalDecoratorHandler(localRefHost, false, localMetaRegistry, scopeRegistry, options.EnableHmr, options.StyleIncludePaths),
 			annotations_local.NewDirectiveLocalDecoratorHandler(localRefHost, localMetaRegistry),
 			annotations_local.NewPipeLocalDecoratorHandler(localRefHost, localMetaRegistry), // LOCAL HANDLER
 			annotations_local.NewInjectableLocalDecoratorHandler(localRefHost),
@@ -83,7 +83,7 @@ func NewNgCompiler(tsProgram *compiler.Program, options NgCompilerOptions, oldCo
 		}
 	} else {
 		handlers = []transform.DecoratorHandler{
-			annotations.NewComponentDecoratorHandler(refHost, false, localMetaRegistry, scopeRegistry, resourceRegistry, options.EnableHmr),
+			annotations.NewComponentDecoratorHandler(refHost, false, localMetaRegistry, scopeRegistry, resourceRegistry, options.EnableHmr, options.StyleIncludePaths),
 			annotations.NewDirectiveDecoratorHandler(refHost, localMetaRegistry),
 			annotations.NewPipeDecoratorHandler(refHost, localMetaRegistry),
 			annotations.NewInjectableDecoratorHandler(refHost), // GLOBAL HANDLER

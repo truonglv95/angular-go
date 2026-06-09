@@ -71,11 +71,12 @@ type BuildResult struct {
 }
 
 type BuildParams struct {
-	Project         string `json:"project"`
-	CompilationMode string `json:"compilationMode"`
-	Hmr             bool   `json:"hmr"`
-	ContextId       string `json:"contextId"`
-	PreserveImports bool   `json:"preserveImports"`
+	Project           string   `json:"project"`
+	CompilationMode   string   `json:"compilationMode"`
+	Hmr               bool     `json:"hmr"`
+	ContextId         string   `json:"contextId"`
+	PreserveImports   bool     `json:"preserveImports"`
+	StyleIncludePaths []string `json:"styleIncludePaths"`
 }
 
 // B#6 FIX: ContextState now tracks per-file invalidation instead of full cache clear.
@@ -149,6 +150,7 @@ func getOrCreateContext(params BuildParams) *ContextState {
 	if params.PreserveImports {
 		EnablePreserveImports(config)
 	}
+	config.StyleIncludePaths = params.StyleIncludePaths
 	config.Write = false
 	sys := newSystem(config.DiscardOutput)
 	host := CreateCompilerHost(sys)
@@ -265,8 +267,9 @@ func handleRequest(ctx context.Context, req RpcRequest) {
 			ContextId       string `json:"contextId"`
 			Project         string `json:"project"`
 			CompilationMode string `json:"compilationMode"`
-			Hmr             bool   `json:"hmr"`
-			PreserveImports *bool  `json:"preserveImports"`
+			Hmr               bool     `json:"hmr"`
+			PreserveImports   *bool    `json:"preserveImports"`
+			StyleIncludePaths []string `json:"styleIncludePaths"`
 		}
 		if err := json.Unmarshal(req.Params, &params); err != nil {
 			sendError(req.Id, "InvalidParams", err.Error())
@@ -286,6 +289,7 @@ func handleRequest(ctx context.Context, req RpcRequest) {
 			if params.PreserveImports == nil || *params.PreserveImports {
 				EnablePreserveImports(config)
 			}
+			config.StyleIncludePaths = params.StyleIncludePaths
 			config.Write = false
 			sys := newSystem(config.DiscardOutput)
 			host := CreateCompilerHost(sys)

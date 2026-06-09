@@ -112,6 +112,10 @@ export interface AngularGoCompileOptions extends AngularGoBaseOptions {
    * JavaScript output file names to bundle as application entries.
    */
   appBundleEntryFileNames?: string[];
+  /**
+   * Paths to include for Sass/Less resolution.
+   */
+  styleIncludePaths?: string[];
 }
 
 export interface AngularGoLinkerOptions extends AngularGoBaseOptions {
@@ -1012,6 +1016,9 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
 
       if (!compileArgs.find(arg => arg.startsWith('--compilationMode'))) {
         compileArgs.push(`--compilationMode=${compilationMode}`);
+      }
+      if (options.styleIncludePaths && options.styleIncludePaths.length > 0) {
+        compileArgs.push(`--style-include-paths=${options.styleIncludePaths.join(',')}`);
       }
       if (preserveImports && !compileArgs.some(arg => arg === '--preserve-imports')) {
         compileArgs.push('--preserve-imports');

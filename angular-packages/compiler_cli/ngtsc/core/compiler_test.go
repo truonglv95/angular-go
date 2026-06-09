@@ -79,6 +79,7 @@ func TestNgCompiler_GetDiagnosticsForFile(t *testing.T) {
 	}
 	compiler, err := core.NewNgCompiler(result.Program, options, nil)
 	require.NoError(t, err)
+	compiler.AnalyzeSync()
 
 	sf := result.GetSourceFileByName("cmp.ts")
 	require.NotNil(t, sf)
@@ -432,6 +433,7 @@ func TestNgCompiler_GetResourceDependencies(t *testing.T) {
 	}
 	compiler, err := core.NewNgCompiler(result.Program, options, nil)
 	require.NoError(t, err)
+	compiler.AnalyzeSync()
 
 	sf := result.GetSourceFileByName("cmp.ts")
 	require.NotNil(t, sf)
@@ -486,6 +488,7 @@ func TestNgCompiler_ResourceOnlyChanges(t *testing.T) {
 	}
 	compilerA, err := core.NewNgCompiler(result.Program, optionsA, nil)
 	require.NoError(t, err)
+	compilerA.AnalyzeSync()
 
 	sf := result.GetSourceFileByName("cmp.ts")
 	diagsA := compilerA.GetDiagnosticsForFile(sf, nil)
@@ -506,6 +509,7 @@ func TestNgCompiler_ResourceOnlyChanges(t *testing.T) {
 	}
 	compilerB, err := core.NewNgCompiler(result.Program, optionsB, compilerA)
 	require.NoError(t, err)
+	compilerB.AnalyzeSync()
 
 	diagsB := compilerB.GetDiagnosticsForFile(sf, nil)
 	assert.Len(t, diagsB, 1)

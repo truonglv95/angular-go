@@ -526,7 +526,14 @@ func (h *TypeScriptReflectionHost) GetDeclarationOfIdentifier(id *ast.Node) *Dec
 	if h.checker == nil {
 		sf := ast.GetSourceFileOfNode(id)
 		if sf == nil { return nil }
-		idText := id.AsIdentifier().Text
+		var idText string
+		if ast.IsIdentifier(id) {
+			idText = id.AsIdentifier().Text
+		} else if ast.IsPrivateIdentifier(id) {
+			idText = id.AsPrivateIdentifier().Text
+		} else {
+			return nil
+		}
 		var foundDecl *Declaration
 		sf.ForEachChild(func(n *ast.Node) bool {
 			if n.Kind == ast.KindClassDeclaration {

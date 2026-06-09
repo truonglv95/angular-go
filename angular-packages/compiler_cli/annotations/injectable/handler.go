@@ -353,7 +353,7 @@ func extractInjectableMetadata(clazz *ast.Node, decorator *reflection.Decorator,
 	name := ""
 	if ast.IsClassDeclaration(clazz) {
 		classDecl := clazz.AsClassDeclaration()
-		if classDecl.Name() != nil {
+		if classDecl.Name() != nil && ast.IsIdentifier(classDecl.Name()) {
 			name = classDecl.Name().AsIdentifier().Text
 		}
 	}

@@ -238,22 +238,24 @@ func (a *ComponentAnalysis) ResourceDependencies(sourceFile *ast.SourceFile) []s
 }
 
 type ComponentDecoratorHandler struct {
-	host             reflection.ReflectionHost
-	isPartial        bool
-	metaRegistry     *metadata.LocalMetadataRegistry
-	scopeRegistry    *ngscope.LocalModuleScopeRegistry
-	resourceRegistry *metadata.ResourceRegistry
-	enableHmr        bool
+	host              reflection.ReflectionHost
+	isPartial         bool
+	metaRegistry      *metadata.LocalMetadataRegistry
+	scopeRegistry     *ngscope.LocalModuleScopeRegistry
+	resourceRegistry  *metadata.ResourceRegistry
+	enableHmr         bool
+	styleIncludePaths []string
 }
 
-func NewComponentDecoratorHandler(host reflection.ReflectionHost, isPartial bool, metaRegistry *metadata.LocalMetadataRegistry, scopeRegistry *ngscope.LocalModuleScopeRegistry, resourceRegistry *metadata.ResourceRegistry, enableHmr bool) *ComponentDecoratorHandler {
+func NewComponentDecoratorHandler(host reflection.ReflectionHost, isPartial bool, metaRegistry *metadata.LocalMetadataRegistry, scopeRegistry *ngscope.LocalModuleScopeRegistry, resourceRegistry *metadata.ResourceRegistry, enableHmr bool, styleIncludePaths []string) *ComponentDecoratorHandler {
 	return &ComponentDecoratorHandler{
-		host:             host,
-		isPartial:        isPartial,
-		metaRegistry:     metaRegistry,
-		scopeRegistry:    scopeRegistry,
-		resourceRegistry: resourceRegistry,
-		enableHmr:        enableHmr,
+		host:              host,
+		isPartial:         isPartial,
+		metaRegistry:      metaRegistry,
+		scopeRegistry:     scopeRegistry,
+		resourceRegistry:  resourceRegistry,
+		enableHmr:         enableHmr,
+		styleIncludePaths: styleIncludePaths,
 	}
 }
 
@@ -1264,7 +1266,7 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 
 	for _, styleUrl := range analysis.StyleUrls {
 		stylePath := filepath.Join(baseDir, styleUrl)
-		if content, err := readAndCompileStyle(stylePath); err == nil {
+		if content, err := readAndCompileStyle(stylePath, h.styleIncludePaths); err == nil {
 			analysis.Styles = append(analysis.Styles, content)
 		} else {
 			diagnostics = append(diagnostics, *ngdiagnostics.MakeDiagnostic(
@@ -1892,7 +1894,7 @@ var (
 	styleCacheMu sync.RWMutex
 )
 
-func readAndCompileStyle(stylePath string) (string, error) {
+func readAndCompileStyle(stylePath string, includePaths []string) (string, error) {
 	ext := filepath.Ext(stylePath)
 	isSass := ext == ".scss" || ext == ".sass"
 	isLess := ext == ".less"
@@ -1917,22 +1919,32 @@ func readAndCompileStyle(stylePath string) (string, error) {
 	var err error
 
 	if isSass {
-		cmd := exec.Command("sass", stylePath)
+		args := []string{}
+		for _, p := range includePaths {
+			args = append(args, "--load-path=" + p)
+		}
+		args = append(args, stylePath)
+		cmd := exec.Command("sass", args...)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr
 		if err = cmd.Run(); err == nil {
 			content = stdout.Bytes()
 		} else {
-			cmdNpx := exec.Command("npx", "sass", stylePath)
-			stdout.Reset()
-			stderr.Reset()
-			cmdNpx.Stdout = &stdout
-			cmdNpx.Stderr = &stderr
-			if err = cmdNpx.Run(); err == nil {
-				content = stdout.Bytes()
+			if strings.Contains(err.Error(), "executable file not found") || strings.Contains(err.Error(), "command not found") {
+				npxArgs := append([]string{"sass"}, args...)
+				cmdNpx := exec.Command("npx", npxArgs...)
+				stdout.Reset()
+				stderr.Reset()
+				cmdNpx.Stdout = &stdout
+				cmdNpx.Stderr = &stderr
+				if err = cmdNpx.Run(); err == nil {
+					content = stdout.Bytes()
+				} else {
+					return "", fmt.Errorf("sass compilation failed:\n%s", stderr.String())
+				}
 			} else {
-				content, err = ioutil.ReadFile(stylePath)
+				return "", fmt.Errorf("sass compilation failed:\n%s", stderr.String())
 			}
 		}
 	} else if isLess {

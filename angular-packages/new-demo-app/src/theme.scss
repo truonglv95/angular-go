@@ -1,0 +1,11 @@
+// Theme file configured for @use and @import testing
+$custom-primary: #8b5cf6; // Purple
+$custom-secondary: #ec4899; // Pink
+$custom-success: #10b981; // Emerald
+
+@mixin custom-badge-style {
+  padding: 0.5rem 1rem;
+  border-radius: 9999px;
+  font-weight: bold;
+  text-transform: uppercase;
+}

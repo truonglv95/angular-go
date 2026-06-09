@@ -1,3 +1,6 @@
+@use "theme";
+@import "legacy-import";
+
 $primary-color: #3b82f6;
 
 :host {
@@ -84,4 +87,24 @@ $primary-color: #3b82f6;
     span {
         text-decoration: underline;
     }
+}
+
+// Complex styles tested using SCSS @use and @import
+.custom-complex-header {
+    background: linear-gradient(135deg, theme.$custom-primary, theme.$custom-secondary);
+    color: white;
+    padding: 1.5rem;
+    border-radius: 12px;
+    box-shadow: $legacy-shadow;
+    margin-bottom: 1.5rem;
+    border-left: 6px solid $legacy-color;
+}
+
+.custom-status-badge {
+    @include theme.custom-badge-style;
+    background-color: theme.$custom-success;
+    color: white;
+    display: inline-block;
+    font-size: 0.75rem;
+    letter-spacing: 0.05em;
 }

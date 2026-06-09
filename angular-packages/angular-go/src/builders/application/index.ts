@@ -132,11 +132,13 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
     const cssConfig: any = {
       devSourcemap: useCssSourcemap
     };
+    let styleIncludePaths: string[] | undefined;
     if (options.stylePreprocessorOptions && typeof options.stylePreprocessorOptions === 'object') {
       const includePaths = (options.stylePreprocessorOptions.includePaths || []).map((p: string) =>
         path.resolve(workspaceRoot, p)
       );
       if (includePaths.length > 0) {
+        styleIncludePaths = includePaths;
         cssConfig.preprocessorOptions = {
           sass: {
             includePaths
@@ -177,7 +179,8 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
           compile: true,
           link: true,
           hmr: false,
-          recompileOnChange: false
+          recompileOnChange: false,
+          styleIncludePaths
         }),
         createLoaderPlugin(options.loader)
       ],

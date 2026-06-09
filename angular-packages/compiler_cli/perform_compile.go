@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -36,17 +37,18 @@ import (
 )
 
 type ParsedConfiguration struct {
-	Project         string
-	Options         *core.CompilerOptions
-	RootNames       []string
-	Errors          []*ast.Diagnostic
-	Locale          locale.Locale
-	CompilationMode string
-	EnableHmr       bool
-	DiscardOutput   bool
-	Write           bool
-	Format          string
-	StrictTemplates bool
+	Project           string
+	Options           *core.CompilerOptions
+	RootNames         []string
+	Errors            []*ast.Diagnostic
+	Locale            locale.Locale
+	CompilationMode   string
+	EnableHmr         bool
+	DiscardOutput     bool
+	Write             bool
+	Format            string
+	StrictTemplates   bool
+	StyleIncludePaths []string
 }
 
 func EnablePreserveImports(config *ParsedConfiguration) {
@@ -281,7 +283,7 @@ func newCompilerInternalErrorDiagnostic(recovered any) *ast.Diagnostic {
 	return ast.NewCompilerDiagnostic(
 		diagnostics.Could_not_write_file_0_Colon_1,
 		"Angular compiler",
-		fmt.Sprintf("internal error: %v", recovered),
+		fmt.Sprintf("internal error: %v\nStack: %s", recovered, string(debug.Stack())),
 	)
 }
 
@@ -418,10 +420,11 @@ func PerformCompilationWithHost(config *ParsedConfiguration, host compiler.Compi
 			parsedCommandLine,
 			host,
 			ngtsc_core.NgCompilerOptions{
-				CompilationMode:  config.CompilationMode,
-				EnableHmr:        config.EnableHmr,
-				InvalidatedFiles: invalidatedFiles,
-				StrictTemplates:  config.StrictTemplates,
+				CompilationMode:   config.CompilationMode,
+				EnableHmr:         config.EnableHmr,
+				InvalidatedFiles:  invalidatedFiles,
+				StrictTemplates:   config.StrictTemplates,
+				StyleIncludePaths: config.StyleIncludePaths,
 			},
 			oldProgram,
 		)

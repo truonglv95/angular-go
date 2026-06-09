@@ -82,7 +82,7 @@ func nodeDeclKey(node *ast.Node) string {
 	name := ""
 	if node.Kind == ast.KindClassDeclaration {
 		classDecl := node.AsClassDeclaration()
-		if classDecl.Name() != nil {
+		if classDecl.Name() != nil && ast.IsIdentifier(classDecl.Name()) {
 			name = classDecl.Name().AsIdentifier().Text
 		}
 	}

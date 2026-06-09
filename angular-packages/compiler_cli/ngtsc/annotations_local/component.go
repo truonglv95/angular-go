@@ -15,11 +15,12 @@ import (
 )
 
 type ComponentLocalDecoratorHandler struct {
-	host          reflection.ReflectionHost // The global host (with checker) used for delegation in Resolve/Compile
-	isCore        bool
-	metaRegistry  *metadata.LocalMetadataRegistry
-	scopeRegistry *scope.LocalModuleScopeRegistry
-	enableHmr     bool
+	host              reflection.ReflectionHost // The global host (with checker) used for delegation in Resolve/Compile
+	isCore            bool
+	metaRegistry      *metadata.LocalMetadataRegistry
+	scopeRegistry     *scope.LocalModuleScopeRegistry
+	enableHmr         bool
+	styleIncludePaths []string
 }
 
 func NewComponentLocalDecoratorHandler(
@@ -28,13 +29,15 @@ func NewComponentLocalDecoratorHandler(
 	metaRegistry *metadata.LocalMetadataRegistry,
 	scopeRegistry *scope.LocalModuleScopeRegistry,
 	enableHmr bool,
+	styleIncludePaths []string,
 ) *ComponentLocalDecoratorHandler {
 	return &ComponentLocalDecoratorHandler{
-		host:          host,
-		isCore:        isCore,
-		metaRegistry:  metaRegistry,
-		scopeRegistry: scopeRegistry,
-		enableHmr:     enableHmr,
+		host:              host,
+		isCore:            isCore,
+		metaRegistry:      metaRegistry,
+		scopeRegistry:     scopeRegistry,
+		enableHmr:         enableHmr,
+		styleIncludePaths: styleIncludePaths,
 	}
 }
 
@@ -339,26 +342,26 @@ func (h *ComponentLocalDecoratorHandler) Resolve(node *ast.ClassDeclaration, ana
 		}
 	}
 
-	globalHandler := annotations.NewComponentDecoratorHandler(h.host, h.isCore, h.metaRegistry, h.scopeRegistry, nil, h.enableHmr)
+	globalHandler := annotations.NewComponentDecoratorHandler(h.host, h.isCore, h.metaRegistry, h.scopeRegistry, nil, h.enableHmr, h.styleIncludePaths)
 	return globalHandler.Resolve(node, localAnalysis)
 }
 
 func (h *ComponentLocalDecoratorHandler) CompileFull(node *ast.ClassDeclaration, analysisData any, resolutionData any, pool *compiler.ConstantPool, importMgr *imports.ImportManager, factory *ast.NodeFactory) ([]transform.CompileResult, []ast.Diagnostic) {
-	globalHandler := annotations.NewComponentDecoratorHandler(h.host, h.isCore, h.metaRegistry, h.scopeRegistry, nil, h.enableHmr)
+	globalHandler := annotations.NewComponentDecoratorHandler(h.host, h.isCore, h.metaRegistry, h.scopeRegistry, nil, h.enableHmr, h.styleIncludePaths)
 	return globalHandler.CompileFull(node, analysisData, resolutionData, pool, importMgr, factory)
 }
 
 func (h *ComponentLocalDecoratorHandler) GetSemanticSymbol(node *ast.ClassDeclaration, analysis any) *semantic_graph.SemanticSymbol {
-	globalHandler := annotations.NewComponentDecoratorHandler(h.host, h.isCore, h.metaRegistry, h.scopeRegistry, nil, h.enableHmr)
+	globalHandler := annotations.NewComponentDecoratorHandler(h.host, h.isCore, h.metaRegistry, h.scopeRegistry, nil, h.enableHmr, h.styleIncludePaths)
 	return globalHandler.GetSemanticSymbol(node, analysis)
 }
 
 func (h *ComponentLocalDecoratorHandler) GetSemanticReferenceKeys(node *ast.ClassDeclaration, analysis any, resolution any) []string {
-	globalHandler := annotations.NewComponentDecoratorHandler(h.host, h.isCore, h.metaRegistry, h.scopeRegistry, nil, h.enableHmr)
+	globalHandler := annotations.NewComponentDecoratorHandler(h.host, h.isCore, h.metaRegistry, h.scopeRegistry, nil, h.enableHmr, h.styleIncludePaths)
 	return globalHandler.GetSemanticReferenceKeys(node, analysis, resolution)
 }
 
 func (h *ComponentLocalDecoratorHandler) GetSemanticReferenceSymbols(node *ast.ClassDeclaration, analysis any, resolution any) []semantic_graph.SemanticSymbol {
-	globalHandler := annotations.NewComponentDecoratorHandler(h.host, h.isCore, h.metaRegistry, h.scopeRegistry, nil, h.enableHmr)
+	globalHandler := annotations.NewComponentDecoratorHandler(h.host, h.isCore, h.metaRegistry, h.scopeRegistry, nil, h.enableHmr, h.styleIncludePaths)
 	return globalHandler.GetSemanticReferenceSymbols(node, analysis, resolution)
 }
