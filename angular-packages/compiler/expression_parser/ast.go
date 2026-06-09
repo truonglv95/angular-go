@@ -162,7 +162,9 @@ type PropertyRead struct {
 	ASTNodeBase
 	Receiver AST
 	Name     string
+	NameSpan AbsoluteSourceSpan
 }
+
 
 func (p *PropertyRead) Visit(visitor Visitor, context any) any {
 	return visitor.VisitPropertyRead(p, context)

@@ -268,24 +268,58 @@ func (m *ImportManager) GetAllImports(file *ast.Node) []*ast.Node {
 	if !ok {
 		return nil
 	}
-	var moduleNames []string
+
+	moduleNamesMap := make(map[string]bool)
 	for moduleName := range tracker.NamespaceImports {
-		moduleNames = append(moduleNames, string(moduleName))
+		moduleNamesMap[string(moduleName)] = true
 	}
-	sort.Strings(moduleNames)
+	for moduleName := range tracker.NamedImports {
+		moduleNamesMap[string(moduleName)] = true
+	}
+	for moduleName := range tracker.SideEffectImports {
+		moduleNamesMap[string(moduleName)] = true
+	}
+
+	var sortedModules []string
+	for moduleName := range moduleNamesMap {
+		sortedModules = append(sortedModules, moduleName)
+	}
+	sort.Strings(sortedModules)
 
 	var declarations []*ast.Node
-	for _, moduleNameStr := range moduleNames {
+	for _, moduleNameStr := range sortedModules {
 		moduleName := ModuleName(moduleNameStr)
-		namespaceImport := tracker.NamespaceImports[moduleName]
-		importClause := m.factory.NewImportClause(ast.KindUnknown, nil, namespaceImport)
-		importClause.Flags |= ast.NodeFlagsSynthesized
-		namespaceImport.AsNode().Flags |= ast.NodeFlagsSynthesized
-		moduleSpecifier := m.factory.NewStringLiteral(string(moduleName), 0)
-		importDecl := m.factory.NewImportDeclaration(nil, importClause, moduleSpecifier, nil)
-		importDecl.Flags |= ast.NodeFlagsSynthesized
-		declarations = append(declarations, importDecl.AsNode())
+
+		if tracker.SideEffectImports[moduleName] {
+			moduleSpecifier := m.factory.NewStringLiteral(string(moduleName), 0)
+			importDecl := m.factory.NewImportDeclaration(nil, nil, moduleSpecifier, nil)
+			importDecl.Flags |= ast.NodeFlagsSynthesized
+			declarations = append(declarations, importDecl.AsNode())
+			continue
+		}
+
+		if namespaceImport, ok := tracker.NamespaceImports[moduleName]; ok && namespaceImport != nil {
+			importClause := m.factory.NewImportClause(ast.KindUnknown, nil, namespaceImport)
+			importClause.Flags |= ast.NodeFlagsSynthesized
+			namespaceImport.AsNode().Flags |= ast.NodeFlagsSynthesized
+			moduleSpecifier := m.factory.NewStringLiteral(string(moduleName), 0)
+			importDecl := m.factory.NewImportDeclaration(nil, importClause, moduleSpecifier, nil)
+			importDecl.Flags |= ast.NodeFlagsSynthesized
+			declarations = append(declarations, importDecl.AsNode())
+			continue
+		}
+
+		if specifiers, ok := tracker.NamedImports[moduleName]; ok && len(specifiers) > 0 {
+			elementsList := (*ast.ImportSpecifierList)(m.factory.NewNodeList(specifiers))
+			namedImportsNode := m.factory.NewNamedImports(elementsList)
+			namedImportsNode.Flags |= ast.NodeFlagsSynthesized
+			importClause := m.factory.NewImportClause(ast.KindUnknown, nil, namedImportsNode)
+			importClause.Flags |= ast.NodeFlagsSynthesized
+			moduleSpecifier := m.factory.NewStringLiteral(string(moduleName), 0)
+			importDecl := m.factory.NewImportDeclaration(nil, importClause, moduleSpecifier, nil)
+			importDecl.Flags |= ast.NodeFlagsSynthesized
+			declarations = append(declarations, importDecl.AsNode())
+		}
 	}
-	// TODO: Handle NamedImports and SideEffectImports if needed
 	return declarations
 }

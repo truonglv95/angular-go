@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/imports"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/reflection"
 	"github.com/microsoft/typescript-go/internal/ast"
 )
@@ -149,7 +150,7 @@ func (pe *PartialEvaluator) evaluateNode(node *ast.Node, scope *evalScope) Resol
 		return nil
 
 	default:
-		return &DynamicValue{Node: node, Reason: "unrecognized expression"}
+		return &DynamicValue{Node: node, Reason: "unrecognized expression", fromUnsupportedSyntax: true}
 	}
 }
 
@@ -173,7 +174,11 @@ func (pe *PartialEvaluator) evaluateIdentifier(node *ast.Node, scope *evalScope)
 	if pe.host != nil {
 		decl := pe.host.GetDeclarationOfIdentifier(node)
 		if decl != nil && decl.Node != nil {
-			return decl.Node
+			res := pe.evaluateDeclaration(decl.Node, scope)
+			if dv, ok := res.(*DynamicValue); ok {
+				return &DynamicValue{Node: node, Reason: dv, fromDynamicInput: true}
+			}
+			return res
 		}
 	}
 
@@ -181,11 +186,114 @@ func (pe *PartialEvaluator) evaluateIdentifier(node *ast.Node, scope *evalScope)
 	sf := getSourceFile(node)
 	if sf != nil {
 		if val, found := pe.findDeclarationValue(sf, name, scope); found {
+			if dv, ok := val.(*DynamicValue); ok {
+				return &DynamicValue{Node: node, Reason: dv, fromDynamicInput: true}
+			}
 			return val
 		}
 	}
 
 	return &DynamicValue{Node: node, Reason: "identifier reference: " + name}
+}
+
+func (pe *PartialEvaluator) evaluateDeclaration(node *ast.Node, scope *evalScope) ResolvedValue {
+	if node == nil {
+		return nil
+	}
+	if pe.host != nil && pe.host.IsClass(node) {
+		return imports.NewReference(node, nil)
+	}
+	if ast.IsVariableDeclaration(node) {
+		vd := node.AsVariableDeclaration()
+		if vd.Initializer != nil {
+			return pe.evaluateNode(vd.Initializer, scope)
+		}
+		sf := getSourceFile(node)
+		if sf != nil && sf.IsDeclarationFile {
+			return imports.NewReference(node, nil)
+		}
+		return &DynamicValue{Node: node, Reason: "no initializer"}
+	}
+	if ast.IsParameterDeclaration(node) {
+		param := node.AsParameterDeclaration()
+		if param.Name() != nil && ast.IsIdentifier(param.Name()) {
+			name := param.Name().AsIdentifier().Text
+			if scope != nil {
+				if val, ok := scope.get(name); ok {
+					return val
+				}
+			}
+		}
+	}
+	if ast.IsBindingElement(node) {
+		var vdNode *ast.Node
+		var path []*ast.BindingElement
+		for curr := node; curr != nil; curr = curr.Parent {
+			if ast.IsBindingElement(curr) {
+				path = append([]*ast.BindingElement{curr.AsBindingElement()}, path...)
+			}
+			if ast.IsVariableDeclaration(curr) {
+				vdNode = curr
+				break
+			}
+		}
+		if vdNode == nil {
+			return &DynamicValue{Node: node, Reason: "binding element not under variable declaration"}
+		}
+		vd := vdNode.AsVariableDeclaration()
+		if vd.Initializer == nil {
+			return &DynamicValue{Node: node, Reason: "binding element with no initializer"}
+		}
+
+		val := pe.evaluateNode(vd.Initializer, scope)
+
+		for _, elem := range path {
+			if dv, ok := val.(*DynamicValue); ok {
+				return &DynamicValue{Node: elem.AsNode(), Reason: dv, fromDynamicInput: true}
+			}
+			if ref, ok := val.(*imports.Reference); ok {
+				inner := &DynamicValue{Node: ref.Node, Reason: ref, fromExternalReference: true}
+				return &DynamicValue{Node: elem.AsNode(), Reason: inner, fromDynamicInput: true}
+			}
+
+			if ast.IsArrayBindingPattern(elem.Parent) {
+				bp := elem.Parent.AsBindingPattern()
+				idx := -1
+				if bp.Elements != nil {
+					for i, e := range bp.Elements.Nodes {
+						if e == elem.AsNode() {
+							idx = i
+							break
+						}
+					}
+				}
+				if arr, ok := val.(ResolvedValueArray); ok && idx >= 0 && idx < len(arr) {
+					val = arr[idx]
+				} else {
+					return &DynamicValue{Node: elem.AsNode(), Reason: "binding element array index out of bounds"}
+				}
+			} else {
+				propKey := ""
+				elemName := elem.Name()
+				if elem.PropertyName != nil {
+					propKey = propertyNameToString(elem.PropertyName)
+				} else if elemName != nil && ast.IsIdentifier(elemName) {
+					propKey = elemName.AsIdentifier().Text
+				}
+
+				if m, ok := val.(ResolvedValueMap); ok {
+					val = m[propKey]
+				} else {
+					return &DynamicValue{Node: elem.AsNode(), Reason: fmt.Sprintf("destructuring property '%s' of non-map", propKey)}
+				}
+			}
+		}
+		return val
+	}
+	if ast.IsEnumDeclaration(node) {
+		return imports.NewReference(node, nil)
+	}
+	return imports.NewReference(node, nil)
 }
 
 // getSourceFile walks up the parent chain to find the SourceFile node.
@@ -218,13 +326,21 @@ func (pe *PartialEvaluator) findDeclarationValue(sf *ast.SourceFile, name string
 				if declName.AsIdentifier().Text == name {
 					if vd.Initializer != nil {
 						result = pe.evaluateNode(vd.Initializer, scope)
+					} else {
+						nodeSf := getSourceFile(n)
+						if nodeSf != nil && nodeSf.IsDeclarationFile {
+							ref := imports.NewReference(n, nil)
+							result = &DynamicValue{Node: n, Reason: ref, fromExternalReference: true}
+						} else {
+							result = &DynamicValue{Node: n, Reason: "no initializer"}
+						}
 					}
 					found = true
 					return true
 				}
 			}
 			// Handle destructuring patterns
-			if declName != nil {
+			if declName != nil && (ast.IsObjectBindingPattern(declName) || ast.IsArrayBindingPattern(declName)) {
 				if destructured, ok := pe.resolveDestructuredBinding(declName, name, vd.Initializer, scope); ok {
 					result = destructured
 					found = true
@@ -255,6 +371,9 @@ func (pe *PartialEvaluator) resolveBindingPattern(pattern *ast.Node, targetName 
 	}
 
 	if ast.IsArrayBindingPattern(pattern) {
+		if dv, ok := val.(*DynamicValue); ok {
+			return &DynamicValue{Node: pattern, Reason: dv, fromDynamicInput: true}, true
+		}
 		arr, ok := val.(ResolvedValueArray)
 		if !ok {
 			return &DynamicValue{Node: pattern, Reason: "array destructuring non-array"}, false
@@ -293,6 +412,9 @@ func (pe *PartialEvaluator) resolveBindingPattern(pattern *ast.Node, targetName 
 	}
 
 	if ast.IsObjectBindingPattern(pattern) {
+		if dv, ok := val.(*DynamicValue); ok {
+			return &DynamicValue{Node: pattern, Reason: dv, fromDynamicInput: true}, true
+		}
 		m, ok := val.(ResolvedValueMap)
 		if !ok {
 			return &DynamicValue{Node: pattern, Reason: "object destructuring non-map"}, false
@@ -342,6 +464,12 @@ func (pe *PartialEvaluator) evaluatePropertyAccess(node *ast.PropertyAccessExpre
 	if dv, ok := objVal.(*DynamicValue); ok {
 		return &DynamicValue{Node: node.AsNode(), Reason: dv, fromDynamicInput: true}
 	}
+	if ref, ok := objVal.(*imports.Reference); ok {
+		if pe.host == nil || !pe.host.IsClass(ref.Node) {
+			inner := &DynamicValue{Node: ref.Node, Reason: ref, fromExternalReference: true}
+			return &DynamicValue{Node: node.AsNode(), Reason: inner, fromDynamicInput: true}
+		}
+	}
 
 	propName := ""
 	if node.Name() != nil {
@@ -377,6 +505,10 @@ func (pe *PartialEvaluator) evaluateElementAccess(node *ast.ElementAccessExpress
 	objVal := pe.evaluateNode(node.Expression, scope)
 	if dv, ok := objVal.(*DynamicValue); ok {
 		return &DynamicValue{Node: node.AsNode(), Reason: dv, fromDynamicInput: true}
+	}
+	if ref, ok := objVal.(*imports.Reference); ok {
+		inner := &DynamicValue{Node: ref.Node, Reason: ref, fromExternalReference: true}
+		return &DynamicValue{Node: node.AsNode(), Reason: inner, fromDynamicInput: true}
 	}
 	keyVal := pe.evaluateNode(node.ArgumentExpression, scope)
 
@@ -581,7 +713,27 @@ func (pe *PartialEvaluator) evaluateCallExpression(node *ast.CallExpression, sco
 		}
 	}
 
-	return &DynamicValue{Node: node.AsNode(), Reason: "function call not statically evaluable"}
+	lhs := pe.evaluateNode(node.Expression, scope)
+	if dv, ok := lhs.(*DynamicValue); ok {
+		return &DynamicValue{Node: node.AsNode(), Reason: dv, fromDynamicInput: true}
+	}
+	if known, ok := lhs.(KnownFn); ok {
+		args, dynamic := pe.evaluateArguments(node, scope)
+		if dynamic != nil {
+			return &DynamicValue{Node: node.AsNode(), Reason: dynamic}
+		}
+		return known.Evaluate(node, args)
+	}
+
+	if ref, ok := lhs.(*imports.Reference); ok {
+		if isFunctionOrMethodReference(ref.Node) {
+			if body, params, ok := getFunctionLikeDetails(ref.Node); ok {
+				return pe.evaluateFunctionLike(body, params, node, scope)
+			}
+		}
+	}
+
+	return &DynamicValue{Node: node.Expression, Reason: lhs, fromInvalidExpressionType: true}
 }
 
 // evaluateArguments evaluates a call expression's arguments, handling spreads.
@@ -631,20 +783,21 @@ func (pe *PartialEvaluator) findFunctionDeclaration(sf *ast.SourceFile, name str
 	}
 	sf.AsNode().ForEachChild(walk)
 	return result
+}// evaluateFunctionCall evaluates a simple function call (single return statement).
+func (pe *PartialEvaluator) evaluateFunctionCall(fn *ast.FunctionDeclaration, call *ast.CallExpression, scope *evalScope) ResolvedValue {
+	return pe.evaluateFunctionLike(fn.Body, fn.Parameters, call, scope)
 }
 
-// evaluateFunctionCall evaluates a simple function call (single return statement).
-func (pe *PartialEvaluator) evaluateFunctionCall(fn *ast.FunctionDeclaration, call *ast.CallExpression, scope *evalScope) ResolvedValue {
-	if fn.Body == nil {
+// evaluateFunctionLike evaluates a function body with parameter bindings.
+func (pe *PartialEvaluator) evaluateFunctionLike(body *ast.Node, parameters *ast.ParameterList, call *ast.CallExpression, scope *evalScope) ResolvedValue {
+	if body == nil {
 		return &DynamicValue{Node: call.AsNode(), Reason: "function has no body"}
 	}
 
-	// Count statements to check for "complex" functions
-	body := fn.Body
 	if !ast.IsBlock(body) {
 		// Expression body - evaluate directly in function scope
 		fnScope := newScope(scope)
-		pe.bindFunctionArgs(fn, call, fnScope, scope)
+		pe.bindParametersAndArgs(parameters, call, fnScope, scope)
 		return pe.evaluateNode(body, fnScope)
 	}
 
@@ -655,12 +808,14 @@ func (pe *PartialEvaluator) evaluateFunctionCall(fn *ast.FunctionDeclaration, ca
 	stmts := block.Statements.Nodes
 	if len(stmts) != 1 {
 		// "complex" function - multiple statements
-		return &DynamicValue{Node: call.AsNode(), Reason: fn.AsNode(), fromComplexFunctionCall: true}
+		declNode := body.Parent
+		return &DynamicValue{Node: call.AsNode(), Reason: declNode, fromComplexFunctionCall: true}
 	}
 
 	stmt := stmts[0]
 	if !ast.IsReturnStatement(stmt) {
-		return &DynamicValue{Node: call.AsNode(), Reason: fn.AsNode(), fromComplexFunctionCall: true}
+		declNode := body.Parent
+		return &DynamicValue{Node: call.AsNode(), Reason: declNode, fromComplexFunctionCall: true}
 	}
 
 	rs := stmt.AsReturnStatement()
@@ -668,18 +823,22 @@ func (pe *PartialEvaluator) evaluateFunctionCall(fn *ast.FunctionDeclaration, ca
 		return nil
 	}
 
-	// Build function scope with argument bindings
 	fnScope := newScope(scope)
-	pe.bindFunctionArgs(fn, call, fnScope, scope)
+	pe.bindParametersAndArgs(parameters, call, fnScope, scope)
 	return pe.evaluateNode(rs.Expression, fnScope)
 }
 
 // bindFunctionArgs binds the function parameters to the call arguments in the scope.
 func (pe *PartialEvaluator) bindFunctionArgs(fn *ast.FunctionDeclaration, call *ast.CallExpression, fnScope *evalScope, callScope *evalScope) {
-	if fn.Parameters == nil {
+	pe.bindParametersAndArgs(fn.Parameters, call, fnScope, callScope)
+}
+
+// bindParametersAndArgs binds the function parameters to the call arguments in the scope.
+func (pe *PartialEvaluator) bindParametersAndArgs(parameters *ast.ParameterList, call *ast.CallExpression, fnScope *evalScope, callScope *evalScope) {
+	if parameters == nil {
 		return
 	}
-	params := fn.Parameters.Nodes
+	params := parameters.Nodes
 	var callArgs []*ast.Node
 	if call.Arguments != nil {
 		callArgs = call.Arguments.Nodes
@@ -744,9 +903,75 @@ func (pe *PartialEvaluator) bindFunctionArgs(fn *ast.FunctionDeclaration, call *
 	}
 }
 
+func isFunctionOrMethodReference(node *ast.Node) bool {
+	if node == nil {
+		return false
+	}
+	return ast.IsFunctionDeclaration(node) ||
+		ast.IsMethodDeclaration(node) ||
+		ast.IsFunctionExpression(node) ||
+		ast.IsArrowFunction(node)
+}
+
+func getFunctionLikeDetails(node *ast.Node) (body *ast.Node, parameters *ast.ParameterList, ok bool) {
+	if node == nil {
+		return nil, nil, false
+	}
+	switch node.Kind {
+	case ast.KindFunctionDeclaration:
+		fd := node.AsFunctionDeclaration()
+		return fd.Body, fd.Parameters, true
+	case ast.KindFunctionExpression:
+		fe := node.AsFunctionExpression()
+		return fe.Body, fe.Parameters, true
+	case ast.KindArrowFunction:
+		af := node.AsArrowFunction()
+		return af.Body, af.Parameters, true
+	case ast.KindMethodDeclaration:
+		md := node.AsMethodDeclaration()
+		return md.Body, md.Parameters, true
+	}
+	return nil, nil, false
+}
+
 // evaluateBinaryExpression evaluates a binary expression.
+// isSupportedBinaryOperator returns true if the operator is supported by the evaluator.
+func isSupportedBinaryOperator(op ast.Kind) bool {
+	switch op {
+	case ast.KindAmpersandAmpersandToken,
+		ast.KindBarBarToken,
+		ast.KindPlusToken,
+		ast.KindMinusToken,
+		ast.KindAsteriskToken,
+		ast.KindSlashToken,
+		ast.KindPercentToken,
+		ast.KindAmpersandToken,
+		ast.KindBarToken,
+		ast.KindCaretToken,
+		ast.KindAsteriskAsteriskToken,
+		ast.KindLessThanLessThanToken,
+		ast.KindGreaterThanGreaterThanToken,
+		ast.KindGreaterThanGreaterThanGreaterThanToken,
+		ast.KindLessThanToken,
+		ast.KindLessThanEqualsToken,
+		ast.KindGreaterThanToken,
+		ast.KindGreaterThanEqualsToken,
+		ast.KindEqualsEqualsEqualsToken,
+		ast.KindExclamationEqualsEqualsToken,
+		ast.KindEqualsEqualsToken,
+		ast.KindExclamationEqualsToken:
+		return true
+	default:
+		return false
+	}
+}
+
 func (pe *PartialEvaluator) evaluateBinaryExpression(node *ast.BinaryExpression, scope *evalScope) ResolvedValue {
 	op := node.OperatorToken.Kind
+
+	if !isSupportedBinaryOperator(op) {
+		return &DynamicValue{Node: node.AsNode(), Reason: "unsupported binary operator", fromUnsupportedSyntax: true}
+	}
 
 	// Short-circuit for && and ||
 	switch op {
@@ -1024,6 +1249,12 @@ func (pe *PartialEvaluator) evaluateTemplateExpression(node *ast.TemplateExpress
 		for _, span := range node.TemplateSpans.Nodes {
 			ts := span.AsTemplateSpan()
 			val := pe.evaluateNode(ts.Expression, scope)
+			if ev, ok := val.(*EnumValue); ok {
+				val = ev.Resolved
+			}
+			if !isLiteralResolvedValue(val) {
+				val = &DynamicValue{Node: ts.Expression, Reason: val, fromDynamicString: true}
+			}
 			if dv, ok := val.(*DynamicValue); ok {
 				return &DynamicValue{Node: node.AsNode(), Reason: dv, fromDynamicInput: true}
 			}
@@ -1039,6 +1270,24 @@ func (pe *PartialEvaluator) evaluateTemplateExpression(node *ast.TemplateExpress
 		}
 	}
 	return sb.String()
+}
+
+func isLiteralResolvedValue(val ResolvedValue) bool {
+	if val == nil {
+		return true
+	}
+	switch val.(type) {
+	case undefinedType:
+		return true
+	case string, float64, int, int64, int32, bool:
+		return true
+	case *EnumValue:
+		return true
+	case *DynamicValue:
+		return true
+	default:
+		return false
+	}
 }
 
 // evaluateObjectLiteral evaluates an object literal to a ResolvedValueMap.

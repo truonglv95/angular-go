@@ -3,8 +3,8 @@ package compiler_cli
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -202,7 +202,7 @@ func parseStrictTemplates(tsconfigPath string) bool {
 	if err != nil {
 		return false
 	}
-	
+
 	cleanData := stripComments(data)
 
 	var parsed struct {
@@ -214,11 +214,11 @@ func parseStrictTemplates(tsconfigPath string) bool {
 	if err := json.Unmarshal(cleanData, &parsed); err != nil {
 		return false
 	}
-	
+
 	if parsed.AngularCompilerOptions.StrictTemplates != nil {
 		return *parsed.AngularCompilerOptions.StrictTemplates
 	}
-	
+
 	if parsed.Extends != "" {
 		parentPath := filepath.Join(filepath.Dir(tsconfigPath), parsed.Extends)
 		if !strings.HasSuffix(parentPath, ".json") {
@@ -226,7 +226,7 @@ func parseStrictTemplates(tsconfigPath string) bool {
 		}
 		return parseStrictTemplates(parentPath)
 	}
-	
+
 	return false
 }
 
@@ -275,6 +275,14 @@ type PerformCompilationResult struct {
 	Status      tsc.ExitStatus
 	Outputs     []OutputFile
 	PerfPhases  map[string]int64 `json:"perfPhases,omitempty"`
+}
+
+func newCompilerInternalErrorDiagnostic(recovered any) *ast.Diagnostic {
+	return ast.NewCompilerDiagnostic(
+		diagnostics.Could_not_write_file_0_Colon_1,
+		"Angular compiler",
+		fmt.Sprintf("internal error: %v", recovered),
+	)
 }
 
 func PerformCompilation(config *ParsedConfiguration) *PerformCompilationResult {
@@ -372,7 +380,17 @@ func CreateCompilerHost(sys *osSys) compiler.CompilerHost {
 	return &profiledCompilerHost{CompilerHost: cachedHost}
 }
 
-func PerformCompilationWithHost(config *ParsedConfiguration, host compiler.CompilerHost, oldProgram *ngtsc.NgtscProgram, invalidatedFiles map[string]bool) (*PerformCompilationResult, *ngtsc.NgtscProgram) {
+func PerformCompilationWithHost(config *ParsedConfiguration, host compiler.CompilerHost, oldProgram *ngtsc.NgtscProgram, invalidatedFiles map[string]bool) (result *PerformCompilationResult, ngProgramResult *ngtsc.NgtscProgram) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result = &PerformCompilationResult{
+				Diagnostics: []*ast.Diagnostic{newCompilerInternalErrorDiagnostic(recovered)},
+				Status:      tsc.ExitStatusDiagnosticsPresent_OutputsSkipped,
+			}
+			ngProgramResult = nil
+		}
+	}()
+
 	if len(config.Errors) > 0 {
 		return &PerformCompilationResult{
 			Diagnostics: config.Errors,
@@ -538,6 +556,11 @@ func PerformCompilationWithHost(config *ParsedConfiguration, host compiler.Compi
 			wg.Add(1)
 			go func(idx int, file PendingFile) {
 				defer wg.Done()
+				defer func() {
+					if recovered := recover(); recovered != nil {
+						errs <- fmt.Errorf("Angular linker internal error in %s: %v", file.FileName, recovered)
+					}
+				}()
 				workerSem <- struct{}{}
 				defer func() { <-workerSem }()
 

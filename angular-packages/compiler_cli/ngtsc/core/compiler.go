@@ -38,8 +38,9 @@ type NgCompiler struct {
 	incrementalCompilation *incremental.IncrementalCompilation
 	affectedFiles          map[string]bool
 
-	metaRegistry  *metadata.LocalMetadataRegistry
-	scopeRegistry *scope.LocalModuleScopeRegistry
+	metaRegistry     *metadata.LocalMetadataRegistry
+	scopeRegistry    *scope.LocalModuleScopeRegistry
+	resourceRegistry *metadata.ResourceRegistry
 
 	compilationMode string
 	options         NgCompilerOptions
@@ -69,6 +70,7 @@ func NewNgCompiler(tsProgram *compiler.Program, options NgCompilerOptions, oldCo
 	scopeRegistry := scope.NewLocalModuleScopeRegistry(compoundMetaReader)
 
 	localRefHost := reflection.NewTypeScriptReflectionHost(nil)
+	resourceRegistry := metadata.NewResourceRegistry()
 
 	var handlers []transform.DecoratorHandler
 	if options.CompilationMode == "local" {
@@ -81,7 +83,7 @@ func NewNgCompiler(tsProgram *compiler.Program, options NgCompilerOptions, oldCo
 		}
 	} else {
 		handlers = []transform.DecoratorHandler{
-			annotations.NewComponentDecoratorHandler(refHost, false, localMetaRegistry, scopeRegistry, options.EnableHmr),
+			annotations.NewComponentDecoratorHandler(refHost, false, localMetaRegistry, scopeRegistry, resourceRegistry, options.EnableHmr),
 			annotations.NewDirectiveDecoratorHandler(refHost, localMetaRegistry),
 			annotations.NewPipeDecoratorHandler(refHost, localMetaRegistry),
 			annotations.NewInjectableDecoratorHandler(refHost), // GLOBAL HANDLER
@@ -138,6 +140,7 @@ func NewNgCompiler(tsProgram *compiler.Program, options NgCompilerOptions, oldCo
 		affectedFiles:          affectedFiles,
 		metaRegistry:           localMetaRegistry,
 		scopeRegistry:          scopeRegistry,
+		resourceRegistry:       resourceRegistry,
 		compilationMode:        options.CompilationMode,
 		options:                options,
 	}, nil
@@ -353,7 +356,7 @@ func (c *NgCompiler) PrepareEmit() []*ast.Diagnostic {
 			factory := ast.NewNodeFactory(ast.NodeFactoryHooks{})
 			for sf := range ch {
 				isAffected := false
-				if c.affectedFiles != nil && c.affectedFiles[sf.FileName()] {
+				if c.affectedFiles != nil && c.affectedFiles[canonicalizePath(sf.FileName())] {
 					isAffected = true
 				}
 				if !isAffected && c.incrementalCompilation != nil && c.incrementalCompilation.SafeToSkipEmit(sf) {
@@ -445,6 +448,16 @@ func (d directiveMetaAdapter) GetMatchSource() render3.MatchSource {
 	return render3.MatchSourceSelector
 }
 
+func canonicalizePath(path string) string {
+	if path == "" {
+		return ""
+	}
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		return tspath.GetCanonicalFileName(path, false)
+	}
+	return tspath.GetCanonicalFileName(path, true)
+}
+
 func (c *NgCompiler) isFileAffected(fileName string) bool {
 	if c.incrementalCompilation == nil {
 		return true
@@ -452,7 +465,7 @@ func (c *NgCompiler) isFileAffected(fileName string) bool {
 	if c.affectedFiles == nil {
 		return true
 	}
-	return c.affectedFiles[fileName]
+	return c.affectedFiles[canonicalizePath(fileName)]
 }
 
 func (c *NgCompiler) runTemplateTypeChecking() map[string][]*ast.Diagnostic {
@@ -747,6 +760,66 @@ func findTemplatePropertyNode(decoratorNode *ast.Node) *ast.Node {
 		if name.Text() == "templateUrl" || name.Text() == "template" {
 			return prop.AsPropertyAssignment().Initializer
 		}
+	}
+	return nil
+}
+
+func (c *NgCompiler) GetComponentsWithTemplateFile(templatePath string) []*ast.Node {
+	if c.resourceRegistry != nil {
+		return c.resourceRegistry.GetComponentsWithTemplate(templatePath)
+	}
+	return nil
+}
+
+func (c *NgCompiler) GetComponentsWithStyleFile(stylePath string) []*ast.Node {
+	if c.resourceRegistry != nil {
+		return c.resourceRegistry.GetComponentsWithStyle(stylePath)
+	}
+	return nil
+}
+
+func (c *NgCompiler) GetDirectiveResources(directive *ast.Node) *metadata.DirectiveResources {
+	if c.resourceRegistry != nil {
+		template := c.resourceRegistry.GetTemplate(directive)
+		styles := c.resourceRegistry.GetStyles(directive)
+		hostBindings := c.resourceRegistry.GetHostBindings(directive)
+		if template != nil || len(styles) > 0 || len(hostBindings) > 0 {
+			return &metadata.DirectiveResources{
+				Template:     template,
+				Styles:       styles,
+				HostBindings: hostBindings,
+			}
+		}
+	}
+	return nil
+}
+
+func (c *NgCompiler) GetDiagnosticsForFile(file *ast.SourceFile, optimizeFor any) []*ast.Diagnostic {
+	c.AnalyzeSync()
+	diags := c.Resolve()
+
+	var result []*ast.Diagnostic
+	for _, d := range diags {
+		if d.File() != nil && d.File().FileName() == file.FileName() {
+			result = append(result, d)
+			continue
+		}
+		if d.RelatedInformation() != nil {
+			for _, rel := range d.RelatedInformation() {
+				if rel.File() != nil && rel.File().FileName() == file.FileName() {
+					result = append(result, d)
+					break
+				}
+			}
+		}
+	}
+	return result
+}
+
+func (c *NgCompiler) GetResourceDependencies(file *ast.SourceFile) []string {
+	c.AnalyzeSync()
+	if c.incrementalCompilation != nil && c.incrementalCompilation.State != nil && c.incrementalCompilation.State.DepGraph != nil {
+		return c.incrementalCompilation.State.DepGraph.GetResourceDependencies(file)
 	}
 	return nil
 }

@@ -96,7 +96,7 @@ func (tc *TraitCompiler) recordFileImports(sf *ast.SourceFile) {
 
 // AnalyzeSync quét qua một source file, phát hiện các class và chạy hàm Analyze của các Handler.
 func (tc *TraitCompiler) AnalyzeSync(sf *ast.SourceFile) {
-	if sf == nil || sf.Statements == nil {
+	if sf == nil || sf.Statements == nil || sf.IsDeclarationFile {
 		return
 	}
 	tc.recordFileImports(sf)
@@ -230,7 +230,7 @@ func (tc *TraitCompiler) AnalyzeSync(sf *ast.SourceFile) {
 
 // AnalyzeSyncLocal is the AST-based version of AnalyzeSync.
 func (tc *TraitCompiler) AnalyzeSyncLocal(sf *ast.SourceFile) {
-	if sf == nil || sf.Statements == nil {
+	if sf == nil || sf.Statements == nil || sf.IsDeclarationFile {
 		return
 	}
 	tc.recordFileImports(sf)

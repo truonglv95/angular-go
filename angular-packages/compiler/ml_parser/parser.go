@@ -324,7 +324,7 @@ func (b *treeBuilder) consumeText(token *Token) {
 	if len(text) > 0 && text[0] == '\n' {
 		parent := b.getContainer()
 		if parent != nil && len(parent.getChildren()) == 0 {
-			tagDef := b.tagDefinitionResolver(parent.getName())
+			tagDef := b.getTagDefinition(parent)
 			if tagDef != nil && tagDef.IgnoreFirstLf() {
 				text = text[1:]
 				tokens[0] = Token{Type: token.Type, SourceSpan: token.SourceSpan, Parts: []string{text}}
@@ -357,7 +357,7 @@ func (b *treeBuilder) consumeText(token *Token) {
 func (b *treeBuilder) closeVoidElement() {
 	el := b.getContainer()
 	if el != nil {
-		tagDef := b.tagDefinitionResolver(el.getName())
+		tagDef := b.getTagDefinition(el)
 		if tagDef != nil && tagDef.IsVoid() {
 			b.containerStack = b.containerStack[:len(b.containerStack)-1]
 		}
@@ -449,7 +449,7 @@ func (b *treeBuilder) consumeElementStartTag(startTagToken *Token) {
 	parent := b.getContainer()
 	isClosedByChild := false
 	if parent != nil {
-		pDef := b.tagDefinitionResolver(parent.getName())
+		pDef := b.getTagDefinition(parent)
 		if pDef != nil {
 			isClosedByChild = pDef.IsClosedByChild(el.Name)
 		}
@@ -469,8 +469,16 @@ func (b *treeBuilder) consumeComponentStartTag(startTagToken *Token) {
 	var directives []*Directive
 	b.consumeDirectivesAndAttributes(&directives, &attrs)
 
-	fullName := b.getElementFullName(startTagToken, b.getClosestElementLikeParent())
-	tagDef := b.tagDefinitionResolver(fullName)
+	compName := startTagToken.Parts[0]
+	var tagName string
+	if len(startTagToken.Parts) > 2 && startTagToken.Parts[2] != "" {
+		tagName = startTagToken.Parts[2]
+	} else {
+		tagName = "span" // Fallback tag name
+	}
+
+	fullName := b.getComponentFullName(startTagToken, b.getClosestElementLikeParent())
+	tagDef := b.tagDefinitionResolver(tagName)
 	selfClosing := false
 
 	if b.peek.Type == TokenTypeComponentOpenEndVoid {
@@ -488,14 +496,6 @@ func (b *treeBuilder) consumeComponentStartTag(startTagToken *Token) {
 	isVoid := false
 	if tagDef != nil {
 		isVoid = tagDef.IsVoid()
-	}
-
-	compName := startTagToken.Parts[0]
-	var tagName string
-	if len(startTagToken.Parts) > 2 && startTagToken.Parts[2] != "" {
-		tagName = startTagToken.Parts[2]
-	} else {
-		tagName = "span" // Fallback tag name
 	}
 
 	comp := &Component{
@@ -517,9 +517,9 @@ func (b *treeBuilder) consumeComponentStartTag(startTagToken *Token) {
 	parent := b.getContainer()
 	isClosedByChild := false
 	if parent != nil {
-		pDef := b.tagDefinitionResolver(parent.getName())
+		pDef := b.getTagDefinition(parent)
 		if pDef != nil {
-			isClosedByChild = pDef.IsClosedByChild(comp.Name)
+			isClosedByChild = pDef.IsClosedByChild(comp.TagName)
 		}
 	}
 	b.pushContainer(comp, isClosedByChild)
@@ -533,7 +533,11 @@ func (b *treeBuilder) consumeComponentStartTag(startTagToken *Token) {
 }
 
 func (b *treeBuilder) consumeComponentEndTag(endToken *Token) {
-	b.consumeElementEndTag(endToken)
+	fullName := b.getComponentFullName(endToken, b.getClosestElementLikeParent())
+	if !b.popContainer(&fullName, true, endToken.SourceSpan) {
+		errMsg := "Unexpected closing tag \"" + fullName + "\". It may happen when the tag has already been closed by another tag."
+		b.errors = append(b.errors, NewTreeError(&fullName, endToken.SourceSpan, errMsg))
+	}
 }
 
 func (b *treeBuilder) pushContainer(node nodeContainer, isClosedByChild bool) {
@@ -572,7 +576,8 @@ func (b *treeBuilder) popContainer(expectedName *string, isElement bool, endSour
 			return !unexpectedCloseTagDetected
 		}
 
-		if node.isBlock() || b.tagDefinitionResolver(node.getName()) == nil || !b.tagDefinitionResolver(node.getName()).ClosedByParent() {
+		nodeTagDef := b.getTagDefinition(node)
+		if node.isBlock() || nodeTagDef == nil || !nodeTagDef.ClosedByParent() {
 			unexpectedCloseTagDetected = true
 		}
 	}
@@ -801,4 +806,67 @@ func (b *treeBuilder) getElementFullName(token *Token, parent nodeContainer) str
 		return tags.MergeNsAndName(prefix, tagName)
 	}
 	return tagName
+}
+
+func (b *treeBuilder) getComponentFullName(token *Token, parent nodeContainer) string {
+	compName := token.Parts[0]
+	var prefix string
+	var tagName string
+	if len(token.Parts) > 1 {
+		prefix = token.Parts[1]
+	}
+	if len(token.Parts) > 2 {
+		tagName = token.Parts[2]
+	}
+
+	if tagName == "" {
+		return compName
+	}
+
+	if prefix == "" {
+		tagDef := b.tagDefinitionResolver(tagName)
+		if tagDef != nil {
+			imp := tagDef.ImplicitNamespacePrefix()
+			if imp != nil {
+				prefix = *imp
+			}
+		}
+	}
+
+	if prefix == "" && parent != nil && parent.isElement() {
+		parentName := parent.getName()
+		_, parentTagName, _ := tags.SplitNsName(parentName, false)
+		parentTagDef := b.tagDefinitionResolver(parentTagName)
+		if parentTagDef == nil || !parentTagDef.PreventNamespaceInheritance() {
+			parentPrefix := tags.GetNsPrefix(&parentName)
+			if parentPrefix != nil {
+				prefix = *parentPrefix
+			}
+		}
+	}
+
+	var nsTagName string
+	if prefix == "" {
+		nsTagName = tagName
+	} else {
+		nsTagName = prefix + ":" + tagName
+	}
+
+	if strings.HasPrefix(nsTagName, ":") {
+		return compName + nsTagName
+	}
+	return compName + ":" + nsTagName
+}
+
+func (b *treeBuilder) getTagDefinition(node nodeContainer) tags.TagDefinition {
+	if node == nil {
+		return nil
+	}
+	if comp, ok := node.(*Component); ok {
+		if comp.TagName != "" {
+			return b.tagDefinitionResolver(comp.TagName)
+		}
+		return nil
+	}
+	return b.tagDefinitionResolver(node.getName())
 }

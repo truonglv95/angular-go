@@ -34,6 +34,16 @@ func NewNgtscProgram(
 
 	rec.Phase(perf.PerfPhase_TypeScriptProgramCreate)
 	
+	if len(options.InvalidatedFiles) > 0 {
+		canonicalInvalidated := make(map[string]bool)
+		for file, val := range options.InvalidatedFiles {
+			absPath := tspath.GetNormalizedAbsolutePath(file, delegateHost.GetCurrentDirectory())
+			canonicalPath := tspath.GetCanonicalFileName(absPath, delegateHost.FS().UseCaseSensitiveFileNames())
+			canonicalInvalidated[canonicalPath] = val
+		}
+		options.InvalidatedFiles = canonicalInvalidated
+	}
+
 	var tsProgram *compiler.Program
 	if oldProgram != nil && oldProgram.tsProgram != nil && len(options.InvalidatedFiles) > 0 {
 		tsProgram = oldProgram.tsProgram

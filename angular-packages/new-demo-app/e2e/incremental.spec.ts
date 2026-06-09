@@ -24,6 +24,14 @@ async function reloadAfterEdit(page: any): Promise<void> {
   await page.waitForLoadState('networkidle');
 }
 
+async function restoreSourcesAndReload(page: any, html: string, ts: string, scss: string): Promise<void> {
+  write(appHtml, html);
+  write(appTs, ts);
+  write(appScss, scss);
+  await reloadAfterEdit(page);
+  await expect(page.locator('.demo-heading')).toBeVisible({ timeout: 30000 });
+}
+
 test.describe.configure({ mode: 'serial' });
 
 test.describe('Incremental edit matrix', () => {
@@ -37,10 +45,8 @@ test.describe('Incremental edit matrix', () => {
     originalScss = read(appScss);
   });
 
-  test.afterEach(() => {
-    write(appHtml, originalHtml);
-    write(appTs, originalTs);
-    write(appScss, originalScss);
+  test.afterEach(async ({ page }) => {
+    await restoreSourcesAndReload(page, originalHtml, originalTs, originalScss);
   });
 
   test.afterAll(() => {

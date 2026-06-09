@@ -1,5 +1,5 @@
 import { defineConfig } from 'vite';
-import angularGo from 'angular-go/vite';
+import angularGo from '@angular-go/build/vite';
 
 const enableAngularGoHmr = process.env.NG_GO_HMR === '1';
 

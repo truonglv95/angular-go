@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/microsoft/typescript-go/internal/ast"
+	"github.com/microsoft/typescript-go/internal/astnav"
 	"github.com/microsoft/typescript-go/internal/core"
 	"github.com/microsoft/typescript-go/internal/diagnostics"
 )
@@ -47,16 +48,23 @@ func MakeDiagnostic(code ErrorCode, node *ast.Node, messageText interface{}, rel
 	loc := core.UndefinedTextRange()
 	if node != nil {
 		file = ast.GetSourceFileOfNode(node)
-		loc = node.Loc
+		if file != nil {
+			start := astnav.GetStartOfNode(node, file, false)
+			loc = core.NewTextRange(start, node.End())
+		} else {
+			loc = node.Loc
+		}
 	}
 
 	var d *ast.Diagnostic
 	msgArgs := []string{}
+	var chain []*ast.Diagnostic
 	switch v := messageText.(type) {
 	case string:
 		msgArgs = append(msgArgs, v)
 	case *ast.Diagnostic:
-		msgArgs = append(msgArgs, v.String())
+		msgArgs = v.MessageArgs()
+		chain = v.MessageChain()
 	}
 
 	d = ast.NewDiagnosticFromSerialized(
@@ -66,7 +74,7 @@ func MakeDiagnostic(code ErrorCode, node *ast.Node, messageText interface{}, rel
 		category,
 		diagnostics.Key(""),
 		msgArgs,
-		nil, // msgChain
+		chain, // msgChain
 		relatedInformation,
 		false,
 		false,
@@ -97,7 +105,12 @@ func MakeRelatedInformation(node *ast.Node, messageText string) *ast.Diagnostic 
 	loc := core.UndefinedTextRange()
 	if node != nil {
 		file = ast.GetSourceFileOfNode(node)
-		loc = node.Loc
+		if file != nil {
+			start := astnav.GetStartOfNode(node, file, false)
+			loc = core.NewTextRange(start, node.End())
+		} else {
+			loc = node.Loc
+		}
 	}
 
 	return ast.NewDiagnosticFromSerialized(

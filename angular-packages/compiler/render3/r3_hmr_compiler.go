@@ -140,6 +140,12 @@ func CompileHmrInitializer(meta R3HmrMetadata) output.Expression {
 		nil,
 	)
 
+	// Cmp_HmrLoad(Date.now());
+	initialCall := VariableExpr(importCallbackName).
+		CallFn([]output.Expression{
+			VariableExpr("Date").Prop("now", nil).CallFn([]output.Expression{}, nil, false, nil),
+		}, nil, false, nil)
+
 	// import.meta.hot
 	hotRead := VariableExpr("import").Prop("meta", nil).Prop("hot", nil)
 
@@ -150,20 +156,6 @@ func CompileHmrInitializer(meta R3HmrMetadata) output.Expression {
 
 	// The encoded component ID
 	componentId := encodeURIComponent(fmt.Sprintf("%s@%s", meta.FilePath, meta.ClassName))
-
-	// Wrap everything in an IIFE:
-	// (() => {
-	//   const id = <encoded-id>;
-	//   function Cmp_HmrLoad(t) {...}
-	//   ngDevMode && import.meta.hot && import.meta.hot.on(...);
-	// })()
-	// import.meta.hot.accept()
-	hotAccept := hotRead.Clone().Prop("accept", nil).
-		CallFn([]output.Expression{}, nil, false, nil)
-	// import.meta.hot.accept() || true
-	hotAcceptOrTrue := hotAccept.Or(LiteralExpr(true), nil)
-	// (import.meta.hot.accept() || true) && import.meta.hot.on(...)
-	hotListenerAndAccept := hotAcceptOrTrue.And(hotListener, nil)
 
 	body := []output.Statement{
 		// const id = <id>;
@@ -177,8 +169,10 @@ func CompileHmrInitializer(meta R3HmrMetadata) output.Expression {
 		),
 		// function Cmp_HmrLoad() {...}
 		importCallback,
-		// ngDevMode && import.meta.hot && import.meta.hot.accept() && import.meta.hot.on(...)
-		DevOnlyGuardedExpression(hotRead.And(hotListenerAndAccept, nil)).ToStmt(nil),
+		// ngDevMode && Cmp_HmrLoad(Date.now());
+		DevOnlyGuardedExpression(initialCall).ToStmt(nil),
+		// ngDevMode && import.meta.hot && import.meta.hot.on(...)
+		DevOnlyGuardedExpression(hotRead.And(hotListener, nil)).ToStmt(nil),
 	}
 
 	iife := output.NewArrowFunctionExpr(nil, body, nil, nil, nil)

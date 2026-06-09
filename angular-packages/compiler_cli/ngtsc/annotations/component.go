@@ -238,20 +238,22 @@ func (a *ComponentAnalysis) ResourceDependencies(sourceFile *ast.SourceFile) []s
 }
 
 type ComponentDecoratorHandler struct {
-	host          reflection.ReflectionHost
-	isPartial     bool
-	metaRegistry  *metadata.LocalMetadataRegistry
-	scopeRegistry *ngscope.LocalModuleScopeRegistry
-	enableHmr     bool
+	host             reflection.ReflectionHost
+	isPartial        bool
+	metaRegistry     *metadata.LocalMetadataRegistry
+	scopeRegistry    *ngscope.LocalModuleScopeRegistry
+	resourceRegistry *metadata.ResourceRegistry
+	enableHmr        bool
 }
 
-func NewComponentDecoratorHandler(host reflection.ReflectionHost, isPartial bool, metaRegistry *metadata.LocalMetadataRegistry, scopeRegistry *ngscope.LocalModuleScopeRegistry, enableHmr bool) *ComponentDecoratorHandler {
+func NewComponentDecoratorHandler(host reflection.ReflectionHost, isPartial bool, metaRegistry *metadata.LocalMetadataRegistry, scopeRegistry *ngscope.LocalModuleScopeRegistry, resourceRegistry *metadata.ResourceRegistry, enableHmr bool) *ComponentDecoratorHandler {
 	return &ComponentDecoratorHandler{
-		host:          host,
-		isPartial:     isPartial,
-		metaRegistry:  metaRegistry,
-		scopeRegistry: scopeRegistry,
-		enableHmr:     enableHmr,
+		host:             host,
+		isPartial:        isPartial,
+		metaRegistry:     metaRegistry,
+		scopeRegistry:    scopeRegistry,
+		resourceRegistry: resourceRegistry,
+		enableHmr:        enableHmr,
 	}
 }
 
@@ -704,6 +706,48 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 			},
 		})
 	}
+
+	if h.resourceRegistry != nil {
+		sourceFile := ast.GetSourceFileOfNode(node.AsNode())
+		baseDir := filepath.Dir(sourceFile.FileName())
+
+		var templateResource *metadata.Resource
+		if analysis.TemplateUrl != "" {
+			templateResource = &metadata.Resource{
+				Path: filepath.Clean(filepath.Join(baseDir, analysis.TemplateUrl)),
+				Node: node.AsNode(),
+			}
+		} else {
+			templateResource = &metadata.Resource{
+				Path: "",
+				Node: node.AsNode(),
+			}
+		}
+
+		var styleResources []*metadata.Resource
+		for _, styleUrl := range analysis.StyleUrls {
+			if styleUrl != "" {
+				styleResources = append(styleResources, &metadata.Resource{
+					Path: filepath.Clean(filepath.Join(baseDir, styleUrl)),
+					Node: node.AsNode(),
+				})
+			}
+		}
+		for _, style := range analysis.Styles {
+			if style != "" {
+				styleResources = append(styleResources, &metadata.Resource{
+					Path: "",
+					Node: node.AsNode(),
+				})
+			}
+		}
+
+		h.resourceRegistry.RegisterResources(metadata.DirectiveResources{
+			Template: templateResource,
+			Styles:   styleResources,
+		}, node.AsNode())
+	}
+
 	sort.SliceStable(analysis.Queries, func(i, j int) bool {
 		return analysis.Queries[i].First && !analysis.Queries[j].First
 	})

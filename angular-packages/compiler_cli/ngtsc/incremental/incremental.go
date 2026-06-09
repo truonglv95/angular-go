@@ -151,7 +151,7 @@ func (c *IncrementalCompilation) PriorAnalysisFor(sf *ast.SourceFile) []any {
 	fileName := sf.FileName()
 
 	// If the file is affected by code or resource changes, we cannot reuse its prior analysis
-	if c.affectedFiles != nil && c.affectedFiles[fileName] {
+	if c.affectedFiles != nil && c.affectedFiles[canonicalizePath(fileName)] {
 		return nil
 	}
 
@@ -190,7 +190,7 @@ func (c *IncrementalCompilation) PriorTypeCheckingResultsFor(sf *ast.SourceFile)
 	}
 	fileName := sf.FileName()
 
-	if c.affectedFiles != nil && c.affectedFiles[fileName] {
+	if c.affectedFiles != nil && c.affectedFiles[canonicalizePath(fileName)] {
 		return nil
 	}
 
@@ -223,11 +223,12 @@ func (c *IncrementalCompilation) SafeToSkipEmit(sf *ast.SourceFile) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	if c.modifiedFiles != nil && c.modifiedFiles[fileName] {
+	canonicalName := canonicalizePath(fileName)
+	if c.modifiedFiles != nil && c.modifiedFiles[canonicalName] {
 		return false
 	}
 
-	if c.affectedFiles != nil && c.affectedFiles[fileName] {
+	if c.affectedFiles != nil && c.affectedFiles[canonicalName] {
 		return false
 	}
 

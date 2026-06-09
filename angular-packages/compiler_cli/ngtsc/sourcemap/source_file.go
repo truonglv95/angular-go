@@ -5,6 +5,10 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/microsoft/typescript-go/internal/core"
+	"github.com/microsoft/typescript-go/internal/sourcemap"
+	"github.com/microsoft/typescript-go/internal/tspath"
 )
 
 // -------------------------------------------------------------------------
@@ -476,11 +480,58 @@ func (is *IndexedSet) Add(value string) int {
 // -------------------------------------------------------------------------
 
 func DecodeMappings(mappings string) [][][]int {
-	// TODO: implement actual VLQ decoding of source map mappings.
-	return nil
+	decoder := sourcemap.DecodeMappings(mappings)
+	var decoded [][][]int
+	for {
+		m, done := decoder.Next()
+		if done {
+			break
+		}
+
+		line := m.GeneratedLine
+		for len(decoded) <= line {
+			decoded = append(decoded, [][]int{})
+		}
+
+		mappingArray := []int{
+			int(m.GeneratedCharacter),
+			int(m.SourceIndex),
+			m.SourceLine,
+			int(m.SourceCharacter),
+		}
+		if m.NameIndex >= 0 {
+			mappingArray = append(mappingArray, int(m.NameIndex))
+		}
+
+		decoded[line] = append(decoded[line], mappingArray)
+	}
+	return decoded
 }
 
 func EncodeMappings(mappings [][][]int) string {
-	// TODO: implement actual VLQ encoding of source map mappings.
-	return ""
+	gen := sourcemap.NewGenerator("", "", "", tspath.ComparePathsOptions{})
+
+	for line, lineMappings := range mappings {
+		for _, mappingArray := range lineMappings {
+			gen.AddGeneratedMapping(line, core.UTF16Offset(mappingArray[0]))
+			if len(mappingArray) >= 4 {
+				sourceIndex := mappingArray[1]
+				originalLine := mappingArray[2]
+				originalColumn := mappingArray[3]
+
+				// Ensure the generator has all sources registered
+				for len(gen.Sources()) <= sourceIndex {
+					gen.AddSource("")
+				}
+
+				if len(mappingArray) == 5 {
+					nameIndex := mappingArray[4]
+					gen.AddNamedSourceMapping(line, core.UTF16Offset(mappingArray[0]), sourcemap.SourceIndex(sourceIndex), originalLine, core.UTF16Offset(originalColumn), sourcemap.NameIndex(nameIndex))
+				} else {
+					gen.AddSourceMapping(line, core.UTF16Offset(mappingArray[0]), sourcemap.SourceIndex(sourceIndex), originalLine, core.UTF16Offset(originalColumn))
+				}
+			}
+		}
+	}
+	return gen.RawSourceMap().Mappings
 }

@@ -165,3 +165,88 @@ func TestLocalModuleScopeRegistry_StandaloneComponent(t *testing.T) {
 	assert.Len(t, compilationScope.Pipes, 1)
 	assert.Equal(t, "imported-pipe", compilationScope.Pipes[0].Name)
 }
+
+func TestLocalModuleScopeRegistry_NotTreatExportedAsImported(t *testing.T) {
+	metaRegistry := metadata.NewLocalMetadataRegistry()
+	scopeRegistry := scope.NewLocalModuleScopeRegistry(metaRegistry)
+
+	moduleA := &ast.Node{}
+	moduleB := &ast.Node{}
+	dirB := &ast.Node{}
+	compA := &ast.Node{}
+
+	// Register metadata
+	metaRegistry.RegisterDirective(dirB, &metadata.DirectiveMeta{
+		Selector: "dir-b",
+	})
+	metaRegistry.RegisterNgModule(moduleB, &metadata.NgModuleMeta{
+		Ref:          metadata.Reference{Node: moduleB},
+		Declarations: []metadata.Reference{{Node: dirB}},
+		Exports:      []metadata.Reference{{Node: dirB}},
+	})
+	// ModuleA exports ModuleB, but imports is empty!
+	metaRegistry.RegisterNgModule(moduleA, &metadata.NgModuleMeta{
+		Ref:          metadata.Reference{Node: moduleA},
+		Declarations: []metadata.Reference{{Node: compA}},
+		Exports:      []metadata.Reference{{Node: moduleB}},
+	})
+
+	scopeRegistry.RegisterComponentDeclaration(compA, moduleA)
+
+	compilationScope := scopeRegistry.GetCompilationScope(compA)
+	assert.NotNil(t, compilationScope)
+	// Since ModuleB is exported but NOT imported by ModuleA,
+	// compA (declared in ModuleA) should NOT see dirB in its template compilation scope!
+	assert.Empty(t, compilationScope.Directives)
+}
+
+func TestLocalModuleScopeRegistry_DeduplicateDeclarationsAndExports(t *testing.T) {
+	metaRegistry := metadata.NewLocalMetadataRegistry()
+	scopeRegistry := scope.NewLocalModuleScopeRegistry(metaRegistry)
+
+	moduleA := &ast.Node{}
+	moduleB := &ast.Node{}
+	moduleC := &ast.Node{}
+	dirA := &ast.Node{}
+	dirB := &ast.Node{}
+	compA := &ast.Node{}
+
+	metaRegistry.RegisterDirective(dirA, &metadata.DirectiveMeta{
+		Selector: "dir-a",
+	})
+	metaRegistry.RegisterDirective(dirB, &metadata.DirectiveMeta{
+		Selector: "dir-b",
+	})
+
+	metaRegistry.RegisterNgModule(moduleB, &metadata.NgModuleMeta{
+		Ref:          metadata.Reference{Node: moduleB},
+		Declarations: []metadata.Reference{{Node: dirB}},
+		Exports:      []metadata.Reference{{Node: dirB}},
+	})
+	metaRegistry.RegisterNgModule(moduleC, &metadata.NgModuleMeta{
+		Ref:     metadata.Reference{Node: moduleC},
+		Exports: []metadata.Reference{{Node: moduleB}},
+	})
+
+	// ModuleA imports both ModuleB and ModuleC (which also exports ModuleB).
+	// ModuleA also declares dirA twice in its declarations (deduplication check).
+	metaRegistry.RegisterNgModule(moduleA, &metadata.NgModuleMeta{
+		Ref:          metadata.Reference{Node: moduleA},
+		Declarations: []metadata.Reference{{Node: dirA}, {Node: dirA}},
+		Imports:      []metadata.Reference{{Node: moduleB}, {Node: moduleC}},
+	})
+
+	scopeRegistry.RegisterComponentDeclaration(compA, moduleA)
+
+	compilationScope := scopeRegistry.GetCompilationScope(compA)
+	assert.NotNil(t, compilationScope)
+
+	// Directives should be deduplicated: only 1 dir-a and 1 dir-b should be present.
+	assert.Len(t, compilationScope.Directives, 2)
+	var selectors []string
+	for _, d := range compilationScope.Directives {
+		selectors = append(selectors, d.Selector)
+	}
+	assert.Contains(t, selectors, "dir-a")
+	assert.Contains(t, selectors, "dir-b")
+}

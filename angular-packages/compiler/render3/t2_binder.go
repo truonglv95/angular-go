@@ -807,8 +807,15 @@ func (db *directiveBinder[DirectiveT]) visitElementOrTemplate(
 	}
 
 	for _, ref := range references {
-		if ref.Value == "" {
-			db.references[ref] = node
+		if strings.TrimSpace(ref.Value) == "" {
+			var target any = node
+			for _, dir := range matched {
+				if dir.IsComponent() {
+					target = dir
+					break
+				}
+			}
+			db.references[ref] = target
 		} else {
 			var target any = node
 			for _, dir := range matched {

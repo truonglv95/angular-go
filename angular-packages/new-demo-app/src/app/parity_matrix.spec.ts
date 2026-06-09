@@ -19,7 +19,7 @@ import {
   PipeTransform,
   Type
 } from '@angular/core';
-import { GoTestBed, renderComponent } from 'angular-go/testbed';
+import { GoTestBed, renderComponent } from '@angular-go/build/testbed';
 import { TestBed } from '@angular/core/testing';
 import { BrowserTestingModule, platformBrowserTesting } from '@angular/platform-browser/testing';
 import { FormsModule, ReactiveFormsModule, FormControl } from '@angular/forms';

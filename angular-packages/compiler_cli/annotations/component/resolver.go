@@ -16,7 +16,7 @@ func legacyAnimationTriggerResolver(fn *ast.Node, callExpr *ast.CallExpression, 
 		}
 	} else if fn.Kind == ast.KindPropertyAccessExpression {
 		prop := fn.AsPropertyAccessExpression()
-		if prop.Name().AsIdentifier().Text == "trigger" && callExpr.Arguments != nil && len(callExpr.Arguments.Nodes) > 0 {
+		if prop.Name().Kind == ast.KindIdentifier && prop.Name().AsIdentifier().Text == "trigger" && callExpr.Arguments != nil && len(callExpr.Arguments.Nodes) > 0 {
 			res := make(partial_evaluator.ResolvedValueMap)
 			res["name"] = resolve(callExpr.Arguments.Nodes[0])
 			return res

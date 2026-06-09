@@ -97,7 +97,7 @@ func TestIntegration_StandaloneBootstrap(t *testing.T) {
 	metaRegistry := metadata.NewLocalMetadataRegistry()
 	scopeRegistry := scope.NewLocalModuleScopeRegistry(metaRegistry)
 
-	compHandler := annotations.NewComponentDecoratorHandler(host, false, metaRegistry, scopeRegistry, false)
+	compHandler := annotations.NewComponentDecoratorHandler(host, false, metaRegistry, scopeRegistry, nil, false)
 	dirHandler := annotations.NewDirectiveDecoratorHandler(host, metaRegistry)
 	pipeHandler := annotations.NewPipeDecoratorHandler(host, metaRegistry)
 
@@ -310,7 +310,7 @@ func TestIntegration_DeferBlocks(t *testing.T) {
 	host := reflection.NewTypeScriptReflectionHost(result.Checker)
 	metaRegistry := metadata.NewLocalMetadataRegistry()
 	scopeRegistry := scope.NewLocalModuleScopeRegistry(metaRegistry)
-	compHandler := annotations.NewComponentDecoratorHandler(host, false, metaRegistry, scopeRegistry, false)
+	compHandler := annotations.NewComponentDecoratorHandler(host, false, metaRegistry, scopeRegistry, nil, false)
 
 	sfApp := ngtsctest.RequireSourceFile(t, result, "/app.component.ts")
 	classApp := ngtsctest.FindNamedClassDeclaration(sfApp, "AppComponent")
@@ -363,7 +363,7 @@ func TestIntegration_SignalInputs(t *testing.T) {
 	host := reflection.NewTypeScriptReflectionHost(result.Checker)
 	metaRegistry := metadata.NewLocalMetadataRegistry()
 	scopeRegistry := scope.NewLocalModuleScopeRegistry(metaRegistry)
-	compHandler := annotations.NewComponentDecoratorHandler(host, false, metaRegistry, scopeRegistry, false)
+	compHandler := annotations.NewComponentDecoratorHandler(host, false, metaRegistry, scopeRegistry, nil, false)
 
 	sfApp := ngtsctest.RequireSourceFile(t, result, "/app.component.ts")
 	classApp := ngtsctest.FindNamedClassDeclaration(sfApp, "AppComponent")

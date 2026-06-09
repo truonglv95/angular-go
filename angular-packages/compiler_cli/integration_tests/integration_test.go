@@ -10,6 +10,7 @@ import (
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsctest"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/annotations"
 	ngdiagnostics "github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/diagnostics"
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/imports"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/metadata"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/scope"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/partial_evaluator"
@@ -160,10 +161,9 @@ func TestIntegration_AngularAppCompilation(t *testing.T) {
 	// Build NgModuleMeta by mapping resolved declarations to References
 	var declRefs []metadata.Reference
 	for _, declVal := range moduleData.Declarations {
-		// In actual compiler compilation, these values are resolved to class nodes.
-		// For our integration test, the evaluator resolves the arrays of local identifiers
-		// directly to their local class declarations.
-		if declNode, ok := declVal.(*ast.Node); ok {
+		if ref, ok := declVal.(*imports.Reference); ok {
+			declRefs = append(declRefs, metadata.Reference{Node: ref.Node})
+		} else if declNode, ok := declVal.(*ast.Node); ok {
 			declRefs = append(declRefs, metadata.Reference{Node: declNode})
 		}
 	}
@@ -258,7 +258,7 @@ func TestIntegration_NgModuleDiagnostics(t *testing.T) {
 	metaRegistry := metadata.NewLocalMetadataRegistry()
 	scopeRegistry := scope.NewLocalModuleScopeRegistry(metaRegistry)
 
-	compHandler := annotations.NewComponentDecoratorHandler(host, false, metaRegistry, scopeRegistry, false)
+	compHandler := annotations.NewComponentDecoratorHandler(host, false, metaRegistry, scopeRegistry, nil, false)
 	moduleHandler := annotations.NewNgModuleDecoratorHandler(host, metaRegistry, scopeRegistry)
 
 	sfComponent := ngtsctest.RequireSourceFile(t, result, "/app.component.ts")

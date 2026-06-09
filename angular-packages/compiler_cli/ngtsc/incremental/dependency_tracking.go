@@ -2,7 +2,10 @@ package incremental
 
 import (
 	"fmt"
+	"runtime"
 	"sync"
+
+	"github.com/microsoft/typescript-go/internal/tspath"
 )
 
 type FileDependencyGraph struct {
@@ -24,17 +27,29 @@ func NewFileDependencyGraph() *FileDependencyGraph {
 	}
 }
 
+func canonicalizePath(path string) string {
+	if path == "" {
+		return ""
+	}
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		return tspath.GetCanonicalFileName(path, false)
+	}
+	return tspath.GetCanonicalFileName(path, true)
+}
+
 func getPath(v any) string {
 	if v == nil {
 		return ""
 	}
+	var path string
 	if s, ok := v.(string); ok {
-		return s
+		path = s
+	} else if sf, ok := v.(interface{ FileName() string }); ok {
+		path = sf.FileName()
+	} else {
+		path = fmt.Sprintf("%v", v)
 	}
-	if sf, ok := v.(interface{ FileName() string }); ok {
-		return sf.FileName()
-	}
-	return fmt.Sprintf("%v", v)
+	return canonicalizePath(path)
 }
 
 func (recv *FileDependencyGraph) ensureInitialized() {
@@ -85,19 +100,20 @@ func (recv *FileDependencyGraph) AddResourceDependency(from any, resource string
 	recv.ensureInitialized()
 
 	fromPath := getPath(from)
-	if fromPath == "" || resource == "" {
+	resourcePath := canonicalizePath(resource)
+	if fromPath == "" || resourcePath == "" {
 		return nil
 	}
 
 	if recv.resourceDepsByFile[fromPath] == nil {
 		recv.resourceDepsByFile[fromPath] = make(map[string]bool)
 	}
-	recv.resourceDepsByFile[fromPath][resource] = true
+	recv.resourceDepsByFile[fromPath][resourcePath] = true
 
-	if recv.reverseResourceDeps[resource] == nil {
-		recv.reverseResourceDeps[resource] = make(map[string]bool)
+	if recv.reverseResourceDeps[resourcePath] == nil {
+		recv.reverseResourceDeps[resourcePath] = make(map[string]bool)
 	}
-	recv.reverseResourceDeps[resource][fromPath] = true
+	recv.reverseResourceDeps[resourcePath][fromPath] = true
 
 	return nil
 }

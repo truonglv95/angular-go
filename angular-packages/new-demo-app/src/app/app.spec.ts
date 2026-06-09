@@ -1,4 +1,4 @@
-import { renderComponent, GoTestBed } from 'angular-go/testbed';
+import { renderComponent, GoTestBed } from '@angular-go/build/testbed';
 import { provideRouter } from '@angular/router';
 import { App } from './app';
 

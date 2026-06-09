@@ -10,9 +10,9 @@ import (
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/annotations"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/core"
 	ngdiagnostics "github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/diagnostics"
-	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsctest"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/metadata"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/scope"
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsctest"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/reflection"
 	"github.com/microsoft/typescript-go/internal/bundled"
 	internalcompiler "github.com/microsoft/typescript-go/internal/compiler"
@@ -109,7 +109,7 @@ func TestIntegration_ComponentTemplateDiagnostics(t *testing.T) {
 	metaRegistry := metadata.NewLocalMetadataRegistry()
 	scopeRegistry := scope.NewLocalModuleScopeRegistry(metaRegistry)
 
-	compHandler := annotations.NewComponentDecoratorHandler(host, false, metaRegistry, scopeRegistry, false)
+	compHandler := annotations.NewComponentDecoratorHandler(host, false, metaRegistry, scopeRegistry, nil, false)
 
 	sfComponent := ngtsctest.RequireSourceFile(t, result, "/app.component.ts")
 
@@ -125,11 +125,11 @@ func TestIntegration_ComponentTemplateDiagnostics(t *testing.T) {
 		if className == "ChildComponent" {
 			// Register child component metadata
 			metaRegistry.RegisterDirective(classDecl.AsNode(), &metadata.DirectiveMeta{
-				Name:        className,
-				Selector:    "child-cmp",
-				Standalone:  true,
-				IsComponent: true,
-				Inputs:      map[string]string{"reqVal": "reqVal"},
+				Name:           className,
+				Selector:       "child-cmp",
+				Standalone:     true,
+				IsComponent:    true,
+				Inputs:         map[string]string{"reqVal": "reqVal"},
 				RequiredInputs: []string{"reqVal"},
 				Ref: metadata.Reference{
 					Name: className,
@@ -141,11 +141,11 @@ func TestIntegration_ComponentTemplateDiagnostics(t *testing.T) {
 			childDecl := ngtsctest.FindNamedClassDeclaration(sfComponent, "ChildComponent")
 			require.NotNil(t, childDecl)
 			metaRegistry.RegisterDirective(childDecl.AsNode(), &metadata.DirectiveMeta{
-				Name:        "ChildComponent",
-				Selector:    "child-cmp",
-				Standalone:  true,
-				IsComponent: true,
-				Inputs:      map[string]string{"reqVal": "reqVal"},
+				Name:           "ChildComponent",
+				Selector:       "child-cmp",
+				Standalone:     true,
+				IsComponent:    true,
+				Inputs:         map[string]string{"reqVal": "reqVal"},
 				RequiredInputs: []string{"reqVal"},
 				Ref: metadata.Reference{
 					Name: "ChildComponent",
@@ -249,7 +249,7 @@ func TestIntegration_ComponentTemplateTypeChecking(t *testing.T) {
 
 	options := core.NgCompilerOptions{
 		CompilationMode: "global",
-		StrictTemplates:  true,
+		StrictTemplates: true,
 	}
 	compiler, err := core.NewNgCompiler(result.Program, options, nil)
 	require.NoError(t, err)
@@ -267,7 +267,8 @@ func TestIntegration_ComponentTemplateTypeChecking(t *testing.T) {
 
 	for _, d := range resolveDiags {
 		msg := d.String()
-		if strings.Contains(msg, "Type 'number' is not assignable to type 'string'") {
+		if strings.Contains(msg, "Type 'number' is not assignable to type 'string'") ||
+			strings.Contains(msg, "Argument of type 'number' is not assignable to parameter of type 'string'") {
 			hasInputTypeMismatch = true
 		}
 		if strings.Contains(msg, "Property 'nonExistentProp' does not exist on type 'TcbTestComponent'") {
@@ -316,7 +317,7 @@ func TestIntegration_IncrementalCompilationParity(t *testing.T) {
 			`,
 		},
 		{
-			Name: appComponentHtmlPath,
+			Name:     appComponentHtmlPath,
 			Contents: `<h1>{{ title }}</h1>`,
 		},
 	}
@@ -368,7 +369,7 @@ func TestIntegration_IncrementalCompilationParity(t *testing.T) {
 
 	opts1 := core.NgCompilerOptions{
 		CompilationMode: "global",
-		StrictTemplates:  true,
+		StrictTemplates: true,
 	}
 	comp1, err := core.NewNgCompiler(prog1, opts1, nil)
 	require.NoError(t, err)
@@ -385,7 +386,7 @@ func TestIntegration_IncrementalCompilationParity(t *testing.T) {
 
 	opts2 := core.NgCompilerOptions{
 		CompilationMode: "global",
-		StrictTemplates:  true,
+		StrictTemplates: true,
 	}
 	comp2, err := core.NewNgCompiler(prog2, opts2, comp1)
 	require.NoError(t, err)
@@ -404,7 +405,7 @@ func TestIntegration_IncrementalCompilationParity(t *testing.T) {
 
 	opts3 := core.NgCompilerOptions{
 		CompilationMode:  "global",
-		StrictTemplates:   true,
+		StrictTemplates:  true,
 		InvalidatedFiles: map[string]bool{appComponentHtmlPath: true},
 	}
 	comp3, err := core.NewNgCompiler(prog3, opts3, comp2)
@@ -431,7 +432,7 @@ func TestIntegration_IncrementalCompilationParity(t *testing.T) {
 
 	opts4 := core.NgCompilerOptions{
 		CompilationMode:  "global",
-		StrictTemplates:   true,
+		StrictTemplates:  true,
 		InvalidatedFiles: map[string]bool{appComponentHtmlPath: true},
 	}
 	comp4, err := core.NewNgCompiler(prog4, opts4, comp3)
@@ -541,7 +542,7 @@ func TestIntegration_IncrementalSemanticInvalidation(t *testing.T) {
 
 	opts1 := core.NgCompilerOptions{
 		CompilationMode: "global",
-		StrictTemplates:  true,
+		StrictTemplates: true,
 	}
 	comp1, err := core.NewNgCompiler(prog1, opts1, nil)
 	require.NoError(t, err)
@@ -565,12 +566,12 @@ func TestIntegration_IncrementalSemanticInvalidation(t *testing.T) {
 
 	opts2 := core.NgCompilerOptions{
 		CompilationMode: "global",
-		StrictTemplates:  true,
+		StrictTemplates: true,
 	}
 	comp2, err := core.NewNgCompiler(prog2, opts2, comp1)
 	require.NoError(t, err)
 	require.Empty(t, comp2.AnalyzeSync())
-	
+
 	resolveDiags2 := comp2.Resolve()
 	assert.NotEmpty(t, resolveDiags2, "Expected semantic invalidation to catch the binding error")
 }

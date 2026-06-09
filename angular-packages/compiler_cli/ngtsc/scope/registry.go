@@ -67,26 +67,34 @@ func (r *LocalModuleScopeRegistry) GetCompilationScope(component *ast.Node) *Com
 	if compMeta := r.metaReader.GetDirectiveMetadata(component); compMeta != nil && compMeta.Standalone {
 		scope := &CompilationScope{}
 		visited := make(map[*ast.Node]bool)
+		seenDirs := make(map[*ast.Node]bool)
+		seenPipes := make(map[*ast.Node]bool)
 		for _, ref := range compMeta.Imports {
 			if ref.Node == nil {
 				continue
 			}
 			if dirMeta := r.metaReader.GetDirectiveMetadata(ref.Node); dirMeta != nil {
-				dirMetaCopy := *dirMeta
-				if ref.OwningModule != "" {
-					dirMetaCopy.Ref.OwningModule = ref.OwningModule
+				if !seenDirs[ref.Node] {
+					seenDirs[ref.Node] = true
+					dirMetaCopy := *dirMeta
+					if ref.OwningModule != "" {
+						dirMetaCopy.Ref.OwningModule = ref.OwningModule
+					}
+					scope.Directives = append(scope.Directives, dirMetaCopy)
 				}
-				scope.Directives = append(scope.Directives, dirMetaCopy)
 			}
 			if pipeMeta := r.metaReader.GetPipeMetadata(ref.Node); pipeMeta != nil {
-				pipeMetaCopy := *pipeMeta
-				if ref.OwningModule != "" {
-					pipeMetaCopy.Ref.OwningModule = ref.OwningModule
+				if !seenPipes[ref.Node] {
+					seenPipes[ref.Node] = true
+					pipeMetaCopy := *pipeMeta
+					if ref.OwningModule != "" {
+						pipeMetaCopy.Ref.OwningModule = ref.OwningModule
+					}
+					scope.Pipes = append(scope.Pipes, pipeMetaCopy)
 				}
-				scope.Pipes = append(scope.Pipes, pipeMetaCopy)
 			}
 			if r.metaReader.GetNgModuleMetadata(ref.Node) != nil {
-				r.collectModuleExports(ref.Node, ref.OwningModule, &scope.Directives, &scope.Pipes, visited)
+				r.collectModuleExports(ref.Node, ref.OwningModule, &scope.Directives, &scope.Pipes, visited, seenDirs, seenPipes)
 			}
 		}
 		return scope
@@ -103,6 +111,8 @@ func (r *LocalModuleScopeRegistry) GetCompilationScope(component *ast.Node) *Com
 
 	scope := &CompilationScope{}
 	visited := make(map[*ast.Node]bool)
+	seenDirs := make(map[*ast.Node]bool)
+	seenPipes := make(map[*ast.Node]bool)
 
 	// Direct declarations of this module
 	for _, ref := range moduleMeta.Declarations {
@@ -110,18 +120,24 @@ func (r *LocalModuleScopeRegistry) GetCompilationScope(component *ast.Node) *Com
 			continue
 		}
 		if dirMeta := r.metaReader.GetDirectiveMetadata(ref.Node); dirMeta != nil {
-			dirMetaCopy := *dirMeta
-			if ref.OwningModule != "" {
-				dirMetaCopy.Ref.OwningModule = ref.OwningModule
+			if !seenDirs[ref.Node] {
+				seenDirs[ref.Node] = true
+				dirMetaCopy := *dirMeta
+				if ref.OwningModule != "" {
+					dirMetaCopy.Ref.OwningModule = ref.OwningModule
+				}
+				scope.Directives = append(scope.Directives, dirMetaCopy)
 			}
-			scope.Directives = append(scope.Directives, dirMetaCopy)
 		}
 		if pipeMeta := r.metaReader.GetPipeMetadata(ref.Node); pipeMeta != nil {
-			pipeMetaCopy := *pipeMeta
-			if ref.OwningModule != "" {
-				pipeMetaCopy.Ref.OwningModule = ref.OwningModule
+			if !seenPipes[ref.Node] {
+				seenPipes[ref.Node] = true
+				pipeMetaCopy := *pipeMeta
+				if ref.OwningModule != "" {
+					pipeMetaCopy.Ref.OwningModule = ref.OwningModule
+				}
+				scope.Pipes = append(scope.Pipes, pipeMetaCopy)
 			}
-			scope.Pipes = append(scope.Pipes, pipeMetaCopy)
 		}
 	}
 
@@ -132,30 +148,36 @@ func (r *LocalModuleScopeRegistry) GetCompilationScope(component *ast.Node) *Com
 		}
 		// If it's directly a directive
 		if dirMeta := r.metaReader.GetDirectiveMetadata(ref.Node); dirMeta != nil {
-			dirMetaCopy := *dirMeta
-			if ref.OwningModule != "" {
-				dirMetaCopy.Ref.OwningModule = ref.OwningModule
+			if !seenDirs[ref.Node] {
+				seenDirs[ref.Node] = true
+				dirMetaCopy := *dirMeta
+				if ref.OwningModule != "" {
+					dirMetaCopy.Ref.OwningModule = ref.OwningModule
+				}
+				scope.Directives = append(scope.Directives, dirMetaCopy)
 			}
-			scope.Directives = append(scope.Directives, dirMetaCopy)
 		}
 		// If it's directly a pipe
 		if pipeMeta := r.metaReader.GetPipeMetadata(ref.Node); pipeMeta != nil {
-			pipeMetaCopy := *pipeMeta
-			if ref.OwningModule != "" {
-				pipeMetaCopy.Ref.OwningModule = ref.OwningModule
+			if !seenPipes[ref.Node] {
+				seenPipes[ref.Node] = true
+				pipeMetaCopy := *pipeMeta
+				if ref.OwningModule != "" {
+					pipeMetaCopy.Ref.OwningModule = ref.OwningModule
+				}
+				scope.Pipes = append(scope.Pipes, pipeMetaCopy)
 			}
-			scope.Pipes = append(scope.Pipes, pipeMetaCopy)
 		}
 		// If it's a module, collect all its exported declarations recursively
 		if r.metaReader.GetNgModuleMetadata(ref.Node) != nil {
-			r.collectModuleExports(ref.Node, ref.OwningModule, &scope.Directives, &scope.Pipes, visited)
+			r.collectModuleExports(ref.Node, ref.OwningModule, &scope.Directives, &scope.Pipes, visited, seenDirs, seenPipes)
 		}
 	}
 
 	return scope
 }
 
-func (r *LocalModuleScopeRegistry) collectModuleExports(moduleNode *ast.Node, owningModule string, directives *[]metadata.DirectiveMeta, pipes *[]metadata.PipeMeta, visited map[*ast.Node]bool) {
+func (r *LocalModuleScopeRegistry) collectModuleExports(moduleNode *ast.Node, owningModule string, directives *[]metadata.DirectiveMeta, pipes *[]metadata.PipeMeta, visited map[*ast.Node]bool, seenDirs map[*ast.Node]bool, seenPipes map[*ast.Node]bool) {
 	if moduleNode == nil || visited[moduleNode] {
 		return
 	}
@@ -178,23 +200,29 @@ func (r *LocalModuleScopeRegistry) collectModuleExports(moduleNode *ast.Node, ow
 
 		// 1. Is it a directive?
 		if dirMeta := r.metaReader.GetDirectiveMetadata(expRef.Node); dirMeta != nil {
-			dirMetaCopy := *dirMeta
-			if targetOwningModule != "" {
-				dirMetaCopy.Ref.OwningModule = targetOwningModule
+			if !seenDirs[expRef.Node] {
+				seenDirs[expRef.Node] = true
+				dirMetaCopy := *dirMeta
+				if targetOwningModule != "" {
+					dirMetaCopy.Ref.OwningModule = targetOwningModule
+				}
+				*directives = append(*directives, dirMetaCopy)
 			}
-			*directives = append(*directives, dirMetaCopy)
 		}
 		// 2. Is it a pipe?
 		if pipeMeta := r.metaReader.GetPipeMetadata(expRef.Node); pipeMeta != nil {
-			pipeMetaCopy := *pipeMeta
-			if targetOwningModule != "" {
-				pipeMetaCopy.Ref.OwningModule = targetOwningModule
+			if !seenPipes[expRef.Node] {
+				seenPipes[expRef.Node] = true
+				pipeMetaCopy := *pipeMeta
+				if targetOwningModule != "" {
+					pipeMetaCopy.Ref.OwningModule = targetOwningModule
+				}
+				*pipes = append(*pipes, pipeMetaCopy)
 			}
-			*pipes = append(*pipes, pipeMetaCopy)
 		}
 		// 3. Is it another module?
 		if r.metaReader.GetNgModuleMetadata(expRef.Node) != nil {
-			r.collectModuleExports(expRef.Node, targetOwningModule, directives, pipes, visited)
+			r.collectModuleExports(expRef.Node, targetOwningModule, directives, pipes, visited, seenDirs, seenPipes)
 		}
 	}
 }
@@ -210,6 +238,8 @@ func (r *LocalModuleScopeRegistry) GetStandaloneScope(node *ast.Node) *Standalon
 	}
 
 	visited := make(map[*ast.Node]bool)
+	seenDirs := make(map[*ast.Node]bool)
+	seenPipes := make(map[*ast.Node]bool)
 	var dirs []metadata.DirectiveMeta
 	var pipes []metadata.PipeMeta
 
@@ -221,21 +251,27 @@ func (r *LocalModuleScopeRegistry) GetStandaloneScope(node *ast.Node) *Standalon
 		targetOwningModule := ref.OwningModule
 
 		if dirMeta := r.metaReader.GetDirectiveMetadata(ref.Node); dirMeta != nil {
-			dirMetaCopy := *dirMeta
-			if targetOwningModule != "" {
-				dirMetaCopy.Ref.OwningModule = targetOwningModule
+			if !seenDirs[ref.Node] {
+				seenDirs[ref.Node] = true
+				dirMetaCopy := *dirMeta
+				if targetOwningModule != "" {
+					dirMetaCopy.Ref.OwningModule = targetOwningModule
+				}
+				dirs = append(dirs, dirMetaCopy)
 			}
-			dirs = append(dirs, dirMetaCopy)
 		}
 		if pipeMeta := r.metaReader.GetPipeMetadata(ref.Node); pipeMeta != nil {
-			pipeMetaCopy := *pipeMeta
-			if targetOwningModule != "" {
-				pipeMetaCopy.Ref.OwningModule = targetOwningModule
+			if !seenPipes[ref.Node] {
+				seenPipes[ref.Node] = true
+				pipeMetaCopy := *pipeMeta
+				if targetOwningModule != "" {
+					pipeMetaCopy.Ref.OwningModule = targetOwningModule
+				}
+				pipes = append(pipes, pipeMetaCopy)
 			}
-			pipes = append(pipes, pipeMetaCopy)
 		}
 		if r.metaReader.GetNgModuleMetadata(ref.Node) != nil {
-			r.collectModuleExports(ref.Node, targetOwningModule, &dirs, &pipes, visited)
+			r.collectModuleExports(ref.Node, targetOwningModule, &dirs, &pipes, visited, seenDirs, seenPipes)
 		}
 	}
 

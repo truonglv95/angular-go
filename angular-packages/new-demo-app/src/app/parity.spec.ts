@@ -18,7 +18,7 @@ import {
   Pipe,
   PipeTransform
 } from '@angular/core';
-import { GoTestBed, renderComponent } from 'angular-go/testbed';
+import { GoTestBed, renderComponent } from '@angular-go/build/testbed';
 import { FormsModule, ReactiveFormsModule, FormControl } from '@angular/forms';
 import { CommonModule, UpperCasePipe } from '@angular/common';
 import { RouterModule, Router } from '@angular/router';

@@ -153,7 +153,7 @@ func NewRegularExpressionLiteral(span ParseSpan, sourceSpan AbsoluteSourceSpan, 
 }
 
 func NewPropertyRead(span ParseSpan, sourceSpan AbsoluteSourceSpan, nameSpan AbsoluteSourceSpan, receiver AST, name string) *PropertyRead {
-	return &PropertyRead{ASTNodeBase: ASTNodeBase{SpanData: span, SourceSpan: sourceSpan}, Receiver: receiver, Name: name}
+	return &PropertyRead{ASTNodeBase: ASTNodeBase{SpanData: span, SourceSpan: sourceSpan}, Receiver: receiver, Name: name, NameSpan: nameSpan}
 }
 
 func NewTemplateBindingParseResult(args ...any) *TemplateBindingParseResult {

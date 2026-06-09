@@ -1,3 +1,3 @@
-import { setupAngularGoTestbed } from 'angular-go/testbed/setup';
+import { setupAngularGoTestbed } from '@angular-go/build/testbed/setup';
 
 setupAngularGoTestbed();

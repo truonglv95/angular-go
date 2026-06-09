@@ -32,10 +32,16 @@ go run ./angular-packages/compiler_cli/tools/parity_compare --kind linker --all 
 echo "Building Vite plugin..."
 npm run build --prefix angular-packages/angular-go
 
+echo "Running angular-go package unit tests..."
+(command cd angular-packages/angular-go && npx vitest run)
+
 echo "Building new-demo-app through Vite..."
 (command cd angular-packages/new-demo-app && npx vite build --config vite.config.ts)
 
-echo "Running Playwright smoke..."
-(command cd angular-packages/new-demo-app && npx playwright test)
+echo "Running Playwright dev smoke..."
+(command cd angular-packages/new-demo-app && npx playwright test --config playwright.config.ts)
+
+echo "Running Playwright production preview smoke..."
+(command cd angular-packages/new-demo-app && npx playwright test --config playwright.prod.config.ts)
 
 echo "CI checks passed."

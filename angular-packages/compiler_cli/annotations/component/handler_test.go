@@ -66,3 +66,45 @@ export class AppComponent {}
 		t.Errorf("Expected template '<h1>Hello</h1>', got '%s'", data.Template)
 	}
 }
+
+func TestComponentDecoratorHandler_PrivateIdentifierPanic(t *testing.T) {
+	sourceText := `
+@Component({
+	selector: 'app-root',
+	standalone: true,
+	template: '<h1>Hello</h1>',
+	animations: [
+		this.#trigger()
+	]
+})
+export class AppComponent {}
+`
+	opts := ast.SourceFileParseOptions{
+		FileName: "/app.component.ts",
+	}
+
+	sourceFile := parser.ParseSourceFile(opts, sourceText, core.ScriptKindTS)
+	if sourceFile == nil {
+		t.Fatal("Failed to parse source file")
+	}
+
+	var classNode *ast.Node
+	for _, stmt := range sourceFile.Statements.Nodes {
+		if ast.IsClassDeclaration(stmt) {
+			classNode = stmt
+			break
+		}
+	}
+
+	if classNode == nil {
+		t.Fatal("Could not find class in AST")
+	}
+
+	host := reflection.NewTypeScriptReflectionHost(nil)
+	evaluator := partial_evaluator.NewPartialEvaluator(host, nil, nil)
+	handler := component.NewComponentDecoratorHandler(host, evaluator)
+
+	// This should run without panic
+	_, _ = handler.Analyze(classNode)
+}
+
