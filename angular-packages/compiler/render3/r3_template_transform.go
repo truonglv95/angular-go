@@ -82,7 +82,7 @@ func HtmlAstToRender3Ast(htmlNodes []ml_parser.Node, bindingParser *template_par
 	allErrors := []*parse_util.ParseError{}
 	allErrors = append(allErrors, transformer.errors...)
 
-	var mappedIvyNodes []Node
+	mappedIvyNodes := make([]Node, 0)
 	for _, n := range ivyNodes {
 		if n != nil {
 			mappedIvyNodes = append(mappedIvyNodes, n.(Node))
