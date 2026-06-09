@@ -365,3 +365,6 @@ func (h *ComponentLocalDecoratorHandler) GetSemanticReferenceSymbols(node *ast.C
 	globalHandler := annotations.NewComponentDecoratorHandler(h.host, h.isCore, h.metaRegistry, h.scopeRegistry, nil, h.enableHmr, h.styleIncludePaths)
 	return globalHandler.GetSemanticReferenceSymbols(node, analysis, resolution)
 }
+
+func (h *ComponentLocalDecoratorHandler) Register(node *ast.ClassDeclaration, analysisData any) {
+}

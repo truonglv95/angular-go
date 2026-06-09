@@ -92,6 +92,9 @@ func (h *InjectableDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorat
 	return analysis, nil
 }
 
+func (h *InjectableDecoratorHandler) Register(node *ast.ClassDeclaration, analysisData any) {
+}
+
 func (h *InjectableDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysisData any) (any, []ast.Diagnostic) {
 	return &InjectableResolution{}, nil
 }

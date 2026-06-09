@@ -276,3 +276,6 @@ func (h *DirectiveLocalDecoratorHandler) GetSemanticSymbol(node *ast.ClassDeclar
 	return globalHandler.GetSemanticSymbol(node, analysis)
 }
 
+
+func (h *DirectiveLocalDecoratorHandler) Register(node *ast.ClassDeclaration, analysisData any) {
+}

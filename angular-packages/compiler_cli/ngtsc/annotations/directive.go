@@ -468,6 +468,17 @@ func (h *DirectiveDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 		}
 	}
 
+	sort.SliceStable(analysis.Queries, func(i, j int) bool {
+		return analysis.Queries[i].First && !analysis.Queries[j].First
+	})
+	sort.SliceStable(analysis.ViewQueries, func(i, j int) bool {
+		return analysis.ViewQueries[i].First && !analysis.ViewQueries[j].First
+	})
+	return analysis, nil
+}
+
+func (h *DirectiveDecoratorHandler) Register(node *ast.ClassDeclaration, analysisData any) {
+	analysis := analysisData.(*DirectiveAnalysis)
 	if h.metaRegistry != nil {
 		var metaImports []metadata.Reference
 		for _, imp := range analysis.Imports {
@@ -498,13 +509,6 @@ func (h *DirectiveDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 			},
 		})
 	}
-	sort.SliceStable(analysis.Queries, func(i, j int) bool {
-		return analysis.Queries[i].First && !analysis.Queries[j].First
-	})
-	sort.SliceStable(analysis.ViewQueries, func(i, j int) bool {
-		return analysis.ViewQueries[i].First && !analysis.ViewQueries[j].First
-	})
-	return analysis, nil
 }
 
 func (h *DirectiveDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysisData any) (any, []ast.Diagnostic) {

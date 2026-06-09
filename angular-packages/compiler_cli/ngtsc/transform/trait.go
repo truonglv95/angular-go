@@ -78,6 +78,8 @@ type DecoratorHandler interface {
 	Resolve(node *ast.ClassDeclaration, analysis any) (any, []ast.Diagnostic)
 
 	// CompileFull sinh ra các hàm Ivy như ɵcmp, ɵfac, ɵdir...
+	Register(node *ast.ClassDeclaration, analysis any)
+
 	CompileFull(node *ast.ClassDeclaration, analysis any, resolution any, pool *compiler.ConstantPool, importMgr *imports.ImportManager, factory *ast.NodeFactory) ([]CompileResult, []ast.Diagnostic)
 }
 

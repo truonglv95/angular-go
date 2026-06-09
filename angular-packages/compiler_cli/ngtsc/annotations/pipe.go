@@ -112,6 +112,11 @@ func (h *PipeDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorator *re
 		}
 	}
 
+	return analysis, nil
+}
+
+func (h *PipeDecoratorHandler) Register(node *ast.ClassDeclaration, analysisData any) {
+	analysis := analysisData.(*PipeAnalysis)
 	if h.metaRegistry != nil {
 		h.metaRegistry.RegisterPipe(node.AsNode(), &metadata.PipeMeta{
 			Ref: metadata.Reference{
@@ -123,7 +128,6 @@ func (h *PipeDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorator *re
 			Standalone: analysis.IsStandalone,
 		})
 	}
-	return analysis, nil
 }
 
 func (h *PipeDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysisData any) (any, []ast.Diagnostic) {

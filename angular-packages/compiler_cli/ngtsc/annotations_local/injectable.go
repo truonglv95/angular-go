@@ -93,3 +93,6 @@ func (h *InjectableLocalDecoratorHandler) CompileFull(node *ast.ClassDeclaration
 	globalHandler := annotations.NewInjectableDecoratorHandler(h.host)
 	return globalHandler.CompileFull(node, analysisData, resolutionData, pool, importMgr, factory)
 }
+
+func (h *InjectableLocalDecoratorHandler) Register(node *ast.ClassDeclaration, analysisData any) {
+}

@@ -1,3 +1,6 @@
+import { ComplexFeatureComponent } from "./complex-feature";
+import { LibraryTestComponent } from "./library-test";
+
 import { Component, signal } from '@angular/core';
 import { NgIf, NgFor } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -41,7 +44,7 @@ interface Product {
   quantity: number;
 }
 
-type DemoView = 'button' | 'input' | 'table' | 'form' | 'accordion' | 'dialog' | 'tabs' | 'misc' | 'tree' | 'extra' | 'advanced' | 'defer' | 'knob';
+type DemoView = 'button' | 'input' | 'table' | 'form' | 'accordion' | 'dialog' | 'tabs' | 'misc' | 'tree' | 'extra' | 'advanced' | 'defer' | 'knob' | 'syntax' | 'complex' | 'library';
 
 @Component({
   selector: 'app-root',
@@ -49,7 +52,8 @@ type DemoView = 'button' | 'input' | 'table' | 'form' | 'accordion' | 'dialog' |
     RouterOutlet, RouterLink, NgIf, FormsModule, Menu, Button, Ripple, InputText, TableModule, 
     Checkbox, RadioButton, Select, ToggleButton, AccordionModule, Dialog, TabsModule, 
     Slider, ProgressBar, TreeModule, Rating, ToggleSwitch, DatePicker, Badge, Avatar,
-    Tag, Card, Tooltip, Carousel, PickList, OrderList, TreeTableModule, Panel, Fieldset, Splitter, Knob
+    Tag, Card, Tooltip, Carousel, PickList, OrderList, TreeTableModule, Panel, Fieldset, Splitter, Knob,
+    ComplexFeatureComponent, LibraryTestComponent
   ],
   templateUrl: './app.html',
   styleUrl: './app.scss'
@@ -170,10 +174,35 @@ export class App {
       { label: 'Tree', icon: 'pi pi-fw pi-sitemap', command: () => this.activeView = 'tree' },
       { label: 'Extra', icon: 'pi pi-fw pi-plus', command: () => this.activeView = 'extra' },
       { label: 'Advanced', icon: 'pi pi-fw pi-star', command: () => this.activeView = 'advanced' },
-      { label: 'Defer', icon: 'pi pi-fw pi-clock', command: () => this.activeView = 'defer' }
+      { label: 'Defer', icon: 'pi pi-fw pi-clock', command: () => this.activeView = 'defer' },
+      { label: 'Angular Syntax', icon: 'pi pi-fw pi-code', command: () => this.activeView = 'syntax' },
+      { label: 'Complex Features', icon: 'pi pi-fw pi-cog', command: () => this.activeView = 'complex' },
+      { label: 'External Libraries', icon: 'pi pi-fw pi-box', command: () => this.activeView = 'library' }
   ];
+
+  // Syntax showcase properties
+  itemsList = ['Apple', 'Banana', 'Cherry'];
+  emptyList: string[] = [];
+  userStatus = 'active';
+  currentTime = new Date();
+  jsonData = { key: 'value', numbers: [1, 2, 3] };
+  counter = signal(0);
+
+  increment() {
+    this.counter.update(c => c + 1);
+  }
 }
 // test invalidate
 // test phase 8
 // test phase 8 final
-// Trigger HMR 5
+// trigger HMR 185
+
+// trigger hmr
+
+// trigger hmr 2
+
+// trigger hmr 3
+
+// trigger hmr 4
+
+// trigger hmr 5

@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/incremental/semantic_graph"
+	"fmt"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/metadata"
 	"github.com/microsoft/typescript-go/internal/ast"
 )
@@ -230,6 +231,7 @@ func (r *LocalModuleScopeRegistry) collectModuleExports(moduleNode *ast.Node, ow
 func (r *LocalModuleScopeRegistry) GetStandaloneScope(node *ast.Node) *StandaloneScope {
 	compMeta := r.metaReader.GetDirectiveMetadata(node)
 	if compMeta == nil || !compMeta.Standalone {
+		fmt.Printf("[DEBUG-SCOPE] GetStandaloneScope returned nil for node %v. compMeta is nil? %v\n", node, compMeta == nil)
 		return nil
 	}
 

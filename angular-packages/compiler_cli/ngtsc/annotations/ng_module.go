@@ -184,7 +184,12 @@ func (h *NgModuleDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorator
 		}
 	}
 
-	// Register module metadata
+	return analysis, nil
+}
+
+func (h *NgModuleDecoratorHandler) Register(node *ast.ClassDeclaration, analysisData any) {
+	analysis := analysisData.(*NgModuleAnalysis)
+
 	if h.metaRegistry != nil {
 		classes := topLevelClassByName(ast.GetSourceFileOfNode(node.AsNode()))
 
@@ -270,8 +275,6 @@ func (h *NgModuleDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorator
 			}
 		}
 	}
-
-	return analysis, nil
 }
 
 func (h *NgModuleDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysisData any) (any, []ast.Diagnostic) {

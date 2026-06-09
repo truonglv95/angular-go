@@ -58,6 +58,7 @@ func extractHmrDependencies(
 
 	// Collect into a sorted list first so the order is stable across builds.
 	localNames := make([]string, 0, len(visitor.allReads))
+	fmt.Printf("[DEBUG-HMR] Class %s, allReads: %v, availableTopLevel: %v\n", className, visitor.allReads, availableTopLevel)
 	for readName := range visitor.allReads {
 		if readName != className && !seenLocals[readName] && availableTopLevel[readName] {
 			localNames = append(localNames, readName)
@@ -124,6 +125,46 @@ func (v *potentialTopLevelReadsVisitor) VisitExternalExpr(astExpr *output.Extern
 		v.namespaceReads[*astExpr.Value.ModuleName] = true
 	}
 	return v.RecursiveAstVisitor.VisitExternalExpr(astExpr, context)
+}
+
+func (v *potentialTopLevelReadsVisitor) VisitInvokeFunctionExpr(astExpr *output.InvokeFunctionExpr, context any) any {
+	astExpr.Fn.VisitExpression(v, context)
+	for _, arg := range astExpr.Args {
+		arg.VisitExpression(v, context)
+	}
+	return v.RecursiveAstVisitor.VisitInvokeFunctionExpr(astExpr, context)
+}
+
+func (v *potentialTopLevelReadsVisitor) VisitLiteralMapExpr(astExpr *output.LiteralMapExpr, context any) any {
+	for _, entry := range astExpr.Entries {
+		if prop, ok := entry.(*output.LiteralMapPropertyAssignment); ok {
+			prop.Value.VisitExpression(v, context)
+		} else if spread, ok := entry.(*output.LiteralMapSpreadAssignment); ok {
+			spread.Expression.VisitExpression(v, context)
+		}
+	}
+	return v.RecursiveAstVisitor.VisitLiteralMapExpr(astExpr, context)
+}
+
+func (v *potentialTopLevelReadsVisitor) VisitFunctionExpr(astExpr *output.FunctionExpr, context any) any {
+	for _, stmt := range astExpr.Statements {
+		stmt.VisitStatement(v, context)
+	}
+	return v.RecursiveAstVisitor.VisitFunctionExpr(astExpr, context)
+}
+
+func (v *potentialTopLevelReadsVisitor) VisitReturnStmt(stmt *output.ReturnStatement, context any) any {
+	if stmt.Value != nil {
+		stmt.Value.VisitExpression(v, context)
+	}
+	return v.RecursiveAstVisitor.VisitReturnStmt(stmt, context)
+}
+
+func (v *potentialTopLevelReadsVisitor) VisitLiteralArrayExpr(astExpr *output.LiteralArrayExpr, context any) any {
+	for _, entry := range astExpr.Entries {
+		entry.VisitExpression(v, context)
+	}
+	return v.RecursiveAstVisitor.VisitLiteralArrayExpr(astExpr, context)
 }
 
 func (v *potentialTopLevelReadsVisitor) VisitReadVarExpr(astExpr *output.ReadVarExpr, context any) any {

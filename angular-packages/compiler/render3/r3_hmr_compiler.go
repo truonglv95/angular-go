@@ -185,7 +185,7 @@ func CompileHmrUpdateCallback(
 	constantStatements []output.Statement,
 	meta R3HmrMetadata,
 ) *output.DeclareFunctionStmt {
-	namespaces := "ɵɵnamespaces"
+	namespaces := "__hmr_namespaces"
 	params := []*output.FnParam{
 		output.NewFnParam(meta.ClassName, output.DYNAMIC_TYPE),
 		output.NewFnParam(namespaces, output.DYNAMIC_TYPE),

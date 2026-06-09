@@ -366,6 +366,71 @@
             }
         </div>
 
+        <div *ngIf="activeView === 'syntax'" class="card mt-5 flex flex-col gap-6">
+            <h3>Angular Syntax Showcase</h3>
+            
+            <div class="flex flex-col gap-4">
+                <h4>1. Control Flow (&#64;if, &#64;else if, &#64;else)</h4>
+                @if (userStatus === 'active') {
+                    <p-tag severity="success" value="User is Active" />
+                } @else if (userStatus === 'inactive') {
+                    <p-tag severity="warn" value="User is Inactive" />
+                } @else {
+                    <p-tag severity="danger" value="Unknown Status" />
+                }
+                <div class="flex gap-2">
+                    <p-button label="Set Active" (onClick)="userStatus = 'active'" size="small" />
+                    <p-button label="Set Inactive" (onClick)="userStatus = 'inactive'" severity="warn" size="small" />
+                    <p-button label="Set Unknown" (onClick)="userStatus = 'unknown'" severity="danger" size="small" />
+                </div>
+            </div>
+
+            <div class="flex flex-col gap-4 mt-4">
+                <h4>2. Control Flow (&#64;for with &#64;empty)</h4>
+                <ul>
+                    @for (item of itemsList; track item) {
+                        <li>{{ item }}</li>
+                    } @empty {
+                        <li>List is empty!</li>
+                    }
+                </ul>
+
+                <ul>
+                    @for (item of emptyList; track item) {
+                        <li>{{ item }}</li>
+                    } @empty {
+                        <li>Empty List is empty!</li>
+                    }
+                </ul>
+            </div>
+
+            <div class="flex flex-col gap-4 mt-4">
+                <h4>3. Signals & Event Binding</h4>
+                <p>Counter (Signal): {{ counter() }}</p>
+                <p-button label="Increment Signal" (onClick)="increment()" />
+            </div>
+
+            <div class="flex flex-col gap-4 mt-4">
+                <h4>4. Pipes (JSON Pipe disabled due to typecheck limitation)</h4>
+                <p>JSON Data: {{ jsonData.key }}</p>
+            </div>
+            
+            <div class="flex flex-col gap-4 mt-4">
+                <h4>5. Template Reference Variables</h4>
+                <input #myInput pInputText placeholder="Type something..." />
+                <p>You typed: {{ myInput.value }}</p>
+                <p-button label="Clear Input" (onClick)="myInput.value = ''" size="small" />
+            </div>
+        </div>
+
+        <div *ngIf="activeView === 'complex'" class="card mt-5">
+            <app-complex-feature></app-complex-feature>
+        </div>
+
+        <div *ngIf="activeView === 'library'" class="card mt-5">
+            <app-library-test></app-library-test>
+        </div>
+
         <router-outlet></router-outlet>
     </div>
 </div>

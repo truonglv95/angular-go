@@ -150,3 +150,6 @@ func (h *PipeLocalDecoratorHandler) GetSemanticSymbol(node *ast.ClassDeclaration
 	return globalHandler.GetSemanticSymbol(node, analysis)
 }
 
+
+func (h *PipeLocalDecoratorHandler) Register(node *ast.ClassDeclaration, analysisData any) {
+}

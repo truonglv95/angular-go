@@ -532,8 +532,11 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 				}
 			}
 		case "styleUrl":
+			fmt.Fprintf(os.Stderr, ">>> [DEBUG] Found styleUrl: kind %v\n", assign.Initializer.Kind)
 			if assign.Initializer.Kind == ast.KindStringLiteral {
 				analysis.StyleUrls = append(analysis.StyleUrls, assign.Initializer.AsStringLiteral().Text)
+			} else if assign.Initializer.Kind == ast.KindNoSubstitutionTemplateLiteral {
+				analysis.StyleUrls = append(analysis.StyleUrls, assign.Initializer.AsNoSubstitutionTemplateLiteral().Text)
 			}
 		case "animations":
 			analysis.Animations = output.NewWrappedNodeExpr(assign.Initializer, nil, nil, nil)
@@ -742,6 +745,17 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 		}
 	}
 
+	sort.SliceStable(analysis.Queries, func(i, j int) bool {
+		return analysis.Queries[i].First && !analysis.Queries[j].First
+	})
+	sort.SliceStable(analysis.ViewQueries, func(i, j int) bool {
+		return analysis.ViewQueries[i].First && !analysis.ViewQueries[j].First
+	})
+	return analysis, nil
+}
+
+func (h *ComponentDecoratorHandler) Register(node *ast.ClassDeclaration, analysisData any) {
+	analysis := analysisData.(*ComponentAnalysis)
 	if h.metaRegistry != nil {
 		var metaImports []metadata.Reference
 		for _, imp := range analysis.Imports {
@@ -813,14 +827,6 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 			Styles:   styleResources,
 		}, node.AsNode())
 	}
-
-	sort.SliceStable(analysis.Queries, func(i, j int) bool {
-		return analysis.Queries[i].First && !analysis.Queries[j].First
-	})
-	sort.SliceStable(analysis.ViewQueries, func(i, j int) bool {
-		return analysis.ViewQueries[i].First && !analysis.ViewQueries[j].First
-	})
-	return analysis, nil
 }
 
 func (h *ComponentDecoratorHandler) getMetadataReader() metadata.MetadataReader {
@@ -1960,12 +1966,14 @@ var (
 )
 
 func readAndCompileStyle(stylePath string, includePaths []string) (string, error) {
+	fmt.Fprintf(os.Stderr, ">>> [DEBUG] readAndCompileStyle called for: %s\n", stylePath)
 	ext := filepath.Ext(stylePath)
 	isSass := ext == ".scss" || ext == ".sass"
 	isLess := ext == ".less"
 
 	stat, statErr := os.Stat(stylePath)
 	if statErr != nil {
+		fmt.Fprintf(os.Stderr, ">>> [DEBUG] stat error: %v\n", statErr)
 		return "", statErr
 	}
 	mtime := stat.ModTime()
@@ -1995,7 +2003,9 @@ func readAndCompileStyle(stylePath string, includePaths []string) (string, error
 		cmd.Stderr = &stderr
 		if err = cmd.Run(); err == nil {
 			content = stdout.Bytes()
+			fmt.Fprintf(os.Stderr, ">>> [DEBUG] sass success. Output len: %d\n", len(content))
 		} else {
+			fmt.Fprintf(os.Stderr, ">>> [DEBUG] sass error: %v, stderr: %s\n", err, stderr.String())
 			if strings.Contains(err.Error(), "executable file not found") || strings.Contains(err.Error(), "command not found") {
 				npxArgs := append([]string{"sass"}, args...)
 				cmdNpx := exec.Command("npx", npxArgs...)
@@ -2005,7 +2015,9 @@ func readAndCompileStyle(stylePath string, includePaths []string) (string, error
 				cmdNpx.Stderr = &stderr
 				if err = cmdNpx.Run(); err == nil {
 					content = stdout.Bytes()
+					fmt.Fprintf(os.Stderr, ">>> [DEBUG] npx sass success. Output len: %d\n", len(content))
 				} else {
+					fmt.Fprintf(os.Stderr, ">>> [DEBUG] npx sass error: %v, stderr: %s\n", err, stderr.String())
 					return "", fmt.Errorf("sass compilation failed:\n%s", stderr.String())
 				}
 			} else {

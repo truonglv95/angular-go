@@ -1157,6 +1157,7 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
           // C3 FIX: Only enable HMR when explicitly requested in serve mode.
           hmr: enableHmr,
           preserveImports,
+          styleIncludePaths: options.styleIncludePaths,
         });
 
         // M1 FIX: Register SIGINT/SIGTERM handlers so the daemon is cleanly shut down

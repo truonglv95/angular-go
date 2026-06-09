@@ -117,8 +117,18 @@ func (tc *TraitCompiler) AnalyzeSync(sf *ast.SourceFile) {
 				if oldTraits, ok := tc.oldTc.classes[classDecl]; ok {
 					var newTraits []*Trait
 					for _, oldTrait := range oldTraits {
+						var handler DecoratorHandler
+						for _, h := range tc.handlers {
+							if h.Name() == oldTrait.Handler.Name() {
+								handler = h
+								break
+							}
+						}
+						if handler == nil {
+							handler = oldTrait.Handler
+						}
 						newTraits = append(newTraits, &Trait{
-							Handler:     oldTrait.Handler,
+							Handler:     handler,
 							Decorator:   oldTrait.Decorator,
 							State:       TraitStateAnalyzed, // Re-run Resolve
 							Analysis:    oldTrait.Analysis,  // Reuse analysis!
@@ -175,7 +185,7 @@ func (tc *TraitCompiler) AnalyzeSync(sf *ast.SourceFile) {
 									newTraits = append(newTraits, &Trait{
 										Handler:     handler,
 										Decorator:   dec,
-										State:       TraitState(pt.State),
+										State:       TraitStateAnalyzed, // Re-run Resolve!
 										Analysis:    pt.Analysis,
 										Diagnostics: pt.Diagnostics,
 									})
@@ -243,32 +253,84 @@ func (tc *TraitCompiler) AnalyzeSyncLocal(sf *ast.SourceFile) {
 	}
 
 	tc.mu.Lock()
-	if !isAffected && tc.oldTc != nil && tc.oldTc.files[sf] {
-		reused := false
-		sf.AsNode().ForEachChild(func(node *ast.Node) bool {
-			if node.Kind == ast.KindClassDeclaration {
-				classDecl := node.AsClassDeclaration()
-				if oldTraits, ok := tc.oldTc.classes[classDecl]; ok {
-					var newTraits []*Trait
-					for _, oldTrait := range oldTraits {
-						newTraits = append(newTraits, &Trait{
-							Handler:     oldTrait.Handler,
-							Decorator:   oldTrait.Decorator,
-							State:       TraitStateAnalyzed, // Re-run Resolve
-							Analysis:    oldTrait.Analysis,  // Reuse analysis!
-							Diagnostics: oldTrait.Diagnostics,
-						})
-					}
-					tc.classes[classDecl] = newTraits
-					reused = true
-				}
+	if !isAffected && tc.oldTc != nil {
+		wasInOld := false
+		for oldSf := range tc.oldTc.files {
+			if oldSf.FileName() == sf.FileName() {
+				wasInOld = true
+				break
 			}
-			return false
-		})
-		if reused {
-			tc.files[sf] = true
-			tc.mu.Unlock()
-			return
+		}
+
+		if wasInOld {
+			reused := false
+			sf.AsNode().ForEachChild(func(node *ast.Node) bool {
+				if node.Kind == ast.KindClassDeclaration {
+					classDecl := node.AsClassDeclaration()
+					className := ""
+					if classDecl.Name() != nil {
+						className = classDecl.Name().AsIdentifier().Text
+					}
+					
+					var oldTraits []*Trait
+					for oldClass, traits := range tc.oldTc.classes {
+						oldName := ""
+						if oldClass.Name() != nil {
+							oldName = oldClass.Name().AsIdentifier().Text
+						}
+						if oldName == className {
+							oldSf := ast.GetSourceFileOfNode(oldClass.AsNode())
+							if oldSf.FileName() == sf.FileName() {
+								oldTraits = traits
+								break
+							}
+						}
+					}
+
+					if len(oldTraits) > 0 {
+						var newTraits []*Trait
+						for _, oldTrait := range oldTraits {
+							var handler DecoratorHandler
+							for _, h := range tc.handlers {
+								if h.Name() == oldTrait.Handler.Name() {
+									handler = h
+									break
+								}
+							}
+							if handler == nil {
+								handler = oldTrait.Handler
+							}
+							newTraits = append(newTraits, &Trait{
+								Handler:     handler,
+								Decorator:   oldTrait.Decorator,
+								State:       TraitStateAnalyzed,
+								Analysis:    oldTrait.Analysis,
+								Diagnostics: oldTrait.Diagnostics,
+							})
+						}
+						tc.classes[classDecl] = newTraits
+						reused = true
+					}
+				}
+				return false
+			})
+			if reused {
+				tc.files[sf] = true
+				tc.mu.Unlock()
+				sf.AsNode().ForEachChild(func(node *ast.Node) bool {
+					if node.Kind == ast.KindClassDeclaration {
+						classDecl := node.AsClassDeclaration()
+						tc.mu.RLock()
+						traits := tc.classes[classDecl]
+						tc.mu.RUnlock()
+						if len(traits) > 0 {
+							tc.registerSemanticSymbols(classDecl, traits)
+						}
+					}
+					return false
+				})
+				return
+			}
 		}
 	}
 	tc.mu.Unlock()
@@ -309,7 +371,7 @@ func (tc *TraitCompiler) AnalyzeSyncLocal(sf *ast.SourceFile) {
 									newTraits = append(newTraits, &Trait{
 										Handler:     handler,
 										Decorator:   dec,
-										State:       TraitState(pt.State),
+										State:       TraitStateAnalyzed, // Re-run Resolve!
 										Analysis:    pt.Analysis,
 										Diagnostics: pt.Diagnostics,
 									})

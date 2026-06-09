@@ -158,3 +158,6 @@ func (h *NgModuleLocalDecoratorHandler) CompileFull(node *ast.ClassDeclaration, 
 	globalHandler := annotations.NewNgModuleDecoratorHandler(h.host, h.metaRegistry, h.scopeRegistry)
 	return globalHandler.CompileFull(node, analysisData, resolutionData, pool, importMgr, factory)
 }
+
+func (h *NgModuleLocalDecoratorHandler) Register(node *ast.ClassDeclaration, analysisData any) {
+}

@@ -4,6 +4,7 @@ import (
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/incremental/semantic_graph"
 	"github.com/microsoft/typescript-go/internal/ast"
 	"github.com/microsoft/typescript-go/internal/checker"
+	"fmt"
 	"github.com/microsoft/typescript-go/internal/core"
 )
 
@@ -114,6 +115,8 @@ func propertyNameText(node *ast.Node) string {
 	switch node.Kind {
 	case ast.KindIdentifier:
 		return node.AsIdentifier().Text
+	case ast.KindPrivateIdentifier:
+		return node.AsPrivateIdentifier().Text
 	case ast.KindStringLiteral:
 		return node.AsStringLiteral().Text
 	default:
@@ -131,7 +134,7 @@ func (r *DtsMetadataReader) GetDirectiveMetadata(classNode *ast.Node) *Directive
 			continue
 		}
 		prop := member.AsPropertyDeclaration()
-		propName := prop.Name().AsIdentifier().Text
+		propName := propertyNameText(prop.Name())
 		if propName == "ɵcmp" || propName == "ɵdir" {
 			isComponent := propName == "ɵcmp"
 			typeNode := prop.Type
@@ -195,7 +198,7 @@ func (r *DtsMetadataReader) GetNgModuleMetadata(classNode *ast.Node) *NgModuleMe
 			continue
 		}
 		prop := member.AsPropertyDeclaration()
-		propName := prop.Name().AsIdentifier().Text
+		propName := propertyNameText(prop.Name())
 		if propName == "ɵmod" {
 			typeNode := prop.Type
 			if typeNode == nil || typeNode.Kind != ast.KindTypeReference {
@@ -236,7 +239,7 @@ func (r *DtsMetadataReader) GetPipeMetadata(classNode *ast.Node) *PipeMeta {
 			continue
 		}
 		prop := member.AsPropertyDeclaration()
-		propName := prop.Name().AsIdentifier().Text
+		propName := propertyNameText(prop.Name())
 		if propName == "ɵpipe" {
 			typeNode := prop.Type
 			if typeNode == nil || typeNode.Kind != ast.KindTypeReference {
@@ -357,6 +360,8 @@ func (r *DtsMetadataReader) resolveReference(exprName *ast.Node) Reference {
 			} else if len(sym.Declarations) > 0 {
 				targetNode = sym.Declarations[0]
 			}
+		} else {
+			fmt.Printf("[DEBUG-DTS] GetSymbolAtLocation returned nil for node kind %v in module %s\n", exprName.Kind, owningModule)
 		}
 	}
 

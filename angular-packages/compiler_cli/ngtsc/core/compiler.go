@@ -207,6 +207,15 @@ func (c *NgCompiler) AnalyzeSync() []*ast.Diagnostic {
 	}
 	wg.Wait()
 
+	// Register all traits (newly analyzed or reused)
+	for classDecl, traits := range c.traitCompiler.GetClasses() {
+		for _, trait := range traits {
+			if trait.State == transform.TraitStateAnalyzed || trait.State == transform.TraitStateResolved {
+				fmt.Printf(">>> [DEBUG-REGISTER] Registered %v\n", classDecl.Name().AsIdentifier().Text); trait.Handler.Register(classDecl, trait.Analysis)
+			}
+		}
+	}
+
 	if c.traitCompiler.SemanticUpdater != nil {
 		res := c.traitCompiler.SemanticUpdater.Finalize()
 		if c.incrementalCompilation != nil && c.incrementalCompilation.State != nil {

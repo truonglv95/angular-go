@@ -12,6 +12,8 @@ import (
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli"
 	"github.com/microsoft/typescript-go/internal/ast"
 	"github.com/microsoft/typescript-go/internal/diagnosticwriter"
+	"github.com/microsoft/typescript-go/internal/locale"
+
 	"github.com/microsoft/typescript-go/internal/execute/tsc"
 	"github.com/microsoft/typescript-go/internal/tspath"
 )
@@ -121,7 +123,7 @@ func main() {
 			if d.File() != nil {
 				file = d.File().FileName()
 			}
-			key := fmt.Sprintf("%s:%d:%d:%s", file, d.Code(), d.Pos(), d.String())
+			key := fmt.Sprintf("%s:%d:%d:%s", file, d.Code(), d.Pos(), safeLocalizeAST(d, config.Locale))
 			if !seen[key] {
 				seen[key] = true
 				uniqueDiags = append(uniqueDiags, d)
@@ -174,7 +176,7 @@ func main() {
 			diags = append(diags, DiagnosticMessage{
 				Category:  category,
 				Code:      int(d.Code()),
-				Message:   d.Localize(config.Locale),
+				Message:   safeLocalizeAST(d, config.Locale),
 				File:      file,
 				Formatted: formattedStr,
 			})
@@ -191,8 +193,88 @@ func main() {
 		exitWith(int(result.Status))
 	} else {
 		if len(result.Diagnostics) > 0 {
-			diagnosticwriter.FormatDiagnosticsWithColorAndContext(os.Stderr, diagnosticwriter.FromASTDiagnostics(result.Diagnostics), formatOpts)
+			diagnosticwriter.FormatDiagnosticsWithColorAndContext(os.Stderr, getSafeDiagnostics(result.Diagnostics), formatOpts)
 		}
 		exitWith(int(result.Status))
 	}
+}
+
+type safeDiagnostic struct {
+	diagnosticwriter.Diagnostic
+	astDiag *ast.Diagnostic
+}
+
+func (s *safeDiagnostic) Localize(loc locale.Locale) string {
+	var text string
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				if s.astDiag != nil && len(s.astDiag.MessageArgs()) > 0 {
+					text = s.astDiag.MessageArgs()[0]
+				} else {
+					text = "Unknown Error"
+				}
+			}
+		}()
+		text = s.Diagnostic.Localize(loc)
+	}()
+	return text
+}
+
+func (s *safeDiagnostic) MessageChain() []diagnosticwriter.Diagnostic {
+	chain := s.Diagnostic.MessageChain()
+	var astChain []*ast.Diagnostic
+	if s.astDiag != nil {
+		astChain = s.astDiag.MessageChain()
+	}
+	for i, c := range chain {
+		var childAst *ast.Diagnostic
+		if i < len(astChain) {
+			childAst = astChain[i]
+		}
+		chain[i] = &safeDiagnostic{Diagnostic: c, astDiag: childAst}
+	}
+	return chain
+}
+
+func (s *safeDiagnostic) RelatedInformation() []diagnosticwriter.Diagnostic {
+	related := s.Diagnostic.RelatedInformation()
+	var astRelated []*ast.Diagnostic
+	if s.astDiag != nil {
+		astRelated = s.astDiag.RelatedInformation()
+	}
+	for i, r := range related {
+		var childAst *ast.Diagnostic
+		if i < len(astRelated) {
+			childAst = astRelated[i]
+		}
+		related[i] = &safeDiagnostic{Diagnostic: r, astDiag: childAst}
+	}
+	return related
+}
+
+func safeLocalizeAST(d *ast.Diagnostic, loc locale.Locale) string {
+	var text string
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				if len(d.MessageArgs()) > 0 {
+					text = d.MessageArgs()[0]
+				} else {
+					text = "Unknown error"
+				}
+			}
+		}()
+		text = d.Localize(loc)
+	}()
+	return text
+}
+
+func getSafeDiagnostics(diags []*ast.Diagnostic) []diagnosticwriter.Diagnostic {
+	result := make([]diagnosticwriter.Diagnostic, len(diags))
+	for i, d := range diags {
+		base := diagnosticwriter.FromASTDiagnostics([]*ast.Diagnostic{d})[0]
+		result[i] = &safeDiagnostic{Diagnostic: base, astDiag: d}
+	}
+	return result
 }
