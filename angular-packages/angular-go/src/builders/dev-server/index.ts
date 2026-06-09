@@ -348,6 +348,7 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
         createLoaderPlugin(buildOptions.loader)
       ],
       resolve: {
+        tsconfigPaths: true,
         mainFields: ['module'],
         alias: [],
         preserveSymlinks: buildOptions.preserveSymlinks === true || options.preserveSymlinks === true

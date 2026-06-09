@@ -185,6 +185,7 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
         createLoaderPlugin(options.loader)
       ],
       resolve: {
+        tsconfigPaths: true,
         mainFields: ['module'],
         conditions: Array.isArray(options.conditions) ? options.conditions : undefined,
         alias: [],
