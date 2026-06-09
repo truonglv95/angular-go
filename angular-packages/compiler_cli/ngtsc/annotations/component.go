@@ -58,6 +58,7 @@ type ComponentAnalysis struct {
 	PropDecorators      map[string][]*ast.Node
 	CompilationMode     string
 	Encapsulation       int
+	HostDirectives      []metadata.HostDirectiveMeta
 	ChangeDetection     output.Expression
 	PreserveWhitespaces *bool
 	RawImports          output.Expression
@@ -619,6 +620,68 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 					}
 				}
 			}
+		case "hostDirectives":
+			if assign.Initializer.Kind == ast.KindArrayLiteralExpression {
+				arr := assign.Initializer.AsArrayLiteralExpression()
+				if arr.Elements != nil {
+					for _, elem := range arr.Elements.Nodes {
+						hd := metadata.HostDirectiveMeta{}
+						if elem.Kind == ast.KindIdentifier {
+							decl := h.host.GetDeclarationOfIdentifier(elem)
+							if decl != nil && decl.Node != nil {
+								hd.Directive = metadata.Reference{Name: elem.AsIdentifier().Text, Node: decl.Node, OwningModule: decl.ViaModule}
+							}
+						} else if elem.Kind == ast.KindObjectLiteralExpression {
+							obj := elem.AsObjectLiteralExpression()
+							if obj.Properties != nil {
+								for _, p := range obj.Properties.Nodes {
+									if p.Kind == ast.KindPropertyAssignment {
+										pa := p.AsPropertyAssignment()
+										if pa.Name().Kind == ast.KindIdentifier {
+											pName := pa.Name().AsIdentifier().Text
+											if pName == "directive" && pa.Initializer.Kind == ast.KindIdentifier {
+												decl := h.host.GetDeclarationOfIdentifier(pa.Initializer)
+												if decl != nil && decl.Node != nil {
+													hd.Directive = metadata.Reference{Name: pa.Initializer.AsIdentifier().Text, Node: decl.Node, OwningModule: decl.ViaModule}
+												}
+											} else if pName == "inputs" && pa.Initializer.Kind == ast.KindArrayLiteralExpression {
+												hd.Inputs = make(map[string]string)
+												for _, ip := range pa.Initializer.AsArrayLiteralExpression().Elements.Nodes {
+													if ip.Kind == ast.KindStringLiteral {
+														parts := strings.Split(ip.AsStringLiteral().Text, ":")
+														internalName := strings.TrimSpace(parts[0])
+														publicName := internalName
+														if len(parts) > 1 {
+															publicName = strings.TrimSpace(parts[1])
+														}
+														hd.Inputs[internalName] = publicName
+													}
+												}
+											} else if pName == "outputs" && pa.Initializer.Kind == ast.KindArrayLiteralExpression {
+												hd.Outputs = make(map[string]string)
+												for _, op := range pa.Initializer.AsArrayLiteralExpression().Elements.Nodes {
+													if op.Kind == ast.KindStringLiteral {
+														parts := strings.Split(op.AsStringLiteral().Text, ":")
+														internalName := strings.TrimSpace(parts[0])
+														publicName := internalName
+														if len(parts) > 1 {
+															publicName = strings.TrimSpace(parts[1])
+														}
+														hd.Outputs[internalName] = publicName
+													}
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+						if hd.Directive.Node != nil {
+							analysis.HostDirectives = append(analysis.HostDirectives, hd)
+						}
+					}
+				}
+			}
 		case "host":
 			if assign.Initializer.Kind == ast.KindObjectLiteralExpression {
 				hostMap := make(map[string]interface{})
@@ -702,6 +765,7 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 			Outputs:        analysis.Outputs,
 			ExportAs:       analysis.ExportAs,
 			RequiredInputs: reqInputs,
+			HostDirectives: analysis.HostDirectives,
 			Ref: metadata.Reference{
 				Name: node.Name().AsIdentifier().Text,
 				Node: node.AsNode(),
@@ -1400,6 +1464,7 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 			Queries:          analysis.Queries,
 			ViewQueries:      analysis.ViewQueries,
 			Providers:        analysis.Providers,
+			HostDirectives:   render3HostDirectives(analysis.HostDirectives),
 		},
 		Template: render3.Template{
 			Children: parsedTemplate.Nodes,

@@ -405,6 +405,7 @@ func getFileVersions(tsProgram *compiler.Program) map[string]string {
 
 type directiveMetaAdapter struct {
 	meta *metadata.DirectiveMeta
+	matchSource render3.MatchSource
 }
 
 func (d directiveMetaAdapter) GetName() string { return d.meta.Name }
@@ -445,7 +446,7 @@ func (d directiveMetaAdapter) GetAnimationTriggerNames() *render3.LegacyAnimatio
 	return nil
 }
 func (d directiveMetaAdapter) GetMatchSource() render3.MatchSource {
-	return render3.MatchSourceSelector
+	return d.matchSource
 }
 
 func canonicalizePath(path string) string {
@@ -550,7 +551,19 @@ func (c *NgCompiler) runTemplateTypeChecking() map[string][]*ast.Diagnostic {
 				if dir.Selector == "" {
 					continue
 				}
-				matcher.AddSelectables(render3.CssSelectorParse(dir.Selector), []directiveMetaAdapter{{meta: dir}})
+				selectorParsed := render3.CssSelectorParse(dir.Selector)
+				matcher.AddSelectables(selectorParsed, []directiveMetaAdapter{{meta: dir, matchSource: render3.MatchSourceSelector}})
+
+				for _, hd := range dir.HostDirectives {
+					hdMeta := c.metaRegistry.GetDirectiveMetadata(hd.Directive.Node)
+					if hdMeta != nil {
+						// Create a copy of the host directive meta with the mapped inputs/outputs
+						clonedMeta := *hdMeta
+						clonedMeta.Inputs = hd.Inputs
+						clonedMeta.Outputs = hd.Outputs
+						matcher.AddSelectables(selectorParsed, []directiveMetaAdapter{{meta: &clonedMeta, matchSource: render3.MatchSourceHostDirective}})
+					}
+				}
 			}
 			binderObj := render3.NewR3TargetBinder[directiveMetaAdapter](matcher, nil)
 			bound := binderObj.Bind(render3.Target[directiveMetaAdapter]{Template: analysis.ParsedTemplate.Nodes})

@@ -36,6 +36,15 @@ type DirectiveMeta struct {
 	IsComponent  bool
 	Imports      []Reference
 	RequiredInputs []string
+	HostDirectives []HostDirectiveMeta
+}
+
+// HostDirectiveMeta represents a host directive applied to a component or directive.
+type HostDirectiveMeta struct {
+	Directive          Reference
+	IsForwardReference bool
+	Inputs             map[string]string // internalName -> publicName
+	Outputs            map[string]string // internalName -> publicName
 }
 
 // NgModuleMeta represents metadata collected for an NgModule.
