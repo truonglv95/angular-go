@@ -950,6 +950,7 @@ func render3HostDirectives(hds []metadata.HostDirectiveMeta) []render3.R3HostDir
 		r3hd := render3.R3HostDirectiveMetadata{
 			Directive: render3.R3Reference{
 				Value: output.NewReadVarExpr(hd.Directive.Name, nil, nil, nil),
+				Type:  output.NewReadVarExpr(hd.Directive.Name, nil, nil, nil),
 			},
 			IsForwardReference: hd.IsForwardReference,
 			Inputs:             hd.Inputs,
