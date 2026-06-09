@@ -20,7 +20,7 @@ import (
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/typecheck"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/reflection"
 	"github.com/microsoft/typescript-go/internal/ast"
-	"github.com/microsoft/typescript-go/internal/binder"
+	"github.com/microsoft/typescript-go/angular-packages/compiler/parse_util"
 	"github.com/microsoft/typescript-go/internal/checker"
 	"github.com/microsoft/typescript-go/internal/compiler"
 	"github.com/microsoft/typescript-go/internal/core"
@@ -126,7 +126,7 @@ func NewNgCompiler(tsProgram *compiler.Program, options NgCompilerOptions, oldCo
 	if incrementalComp != nil && incrementalComp.AffectedFiles() != nil {
 		affectedFiles = make(map[string]bool)
 		for k, v := range incrementalComp.AffectedFiles() {
-			affectedFiles[k] = v
+			affectedFiles[canonicalizePath(k)] = v
 		}
 	}
 
@@ -312,7 +312,7 @@ func (c *NgCompiler) mergeSemanticAffectedFiles(res semantic_graph.SemanticDepen
 		c.affectedFiles = make(map[string]bool)
 	}
 	for _, f := range res.GetAffectedFiles() {
-		c.affectedFiles[f] = true
+		c.affectedFiles[canonicalizePath(f)] = true
 	}
 }
 
@@ -468,8 +468,36 @@ func (c *NgCompiler) isFileAffected(fileName string) bool {
 	return c.affectedFiles[canonicalizePath(fileName)]
 }
 
+type overlayCompilerHost struct {
+	compiler.CompilerHost
+	virtualFiles map[tspath.Path]string
+}
+
+func (h *overlayCompilerHost) GetSourceFile(opts ast.SourceFileParseOptions) *ast.SourceFile {
+	if content, ok := h.virtualFiles[opts.Path]; ok {
+		return parser.ParseSourceFile(opts, content, core.GetScriptKindFromFileName(opts.FileName))
+	}
+	return h.CompilerHost.GetSourceFile(opts)
+}
+
+type fileTcbData struct {
+	tcbCodes []string
+	blocks   []tcbBlockData
+	sf       *ast.SourceFile
+}
+
+type tcbBlockData struct {
+	className       string
+	tcbCode         string
+	lineSpans       map[int]parse_util.ParseSourceSpan
+	analysis        *annotations.ComponentAnalysis
+	classDecl       *ast.ClassDeclaration
+	startCharOffset int
+}
+
 func (c *NgCompiler) runTemplateTypeChecking() map[string][]*ast.Diagnostic {
 	res := make(map[string][]*ast.Diagnostic)
+	filesData := make(map[string]*fileTcbData)
 
 	classesMap := c.traitCompiler.GetClasses()
 	for classDecl, traits := range classesMap {
@@ -589,130 +617,156 @@ func (c *NgCompiler) runTemplateTypeChecking() map[string][]*ast.Diagnostic {
 		if tcbCode == "" {
 			continue
 		}
-		originalFiles := c.tsProgram.SourceFiles()
-		originalFilesByPath := c.tsProgram.FilesByPath()
 
-		fileIdx := -1
-		for idx, f := range originalFiles {
-			if f == sf {
-				fileIdx = idx
-				break
-			}
+		fileName := sf.FileName()
+		data, ok := filesData[fileName]
+		if !ok {
+			data = &fileTcbData{sf: sf}
+			filesData[fileName] = data
 		}
-		if fileIdx == -1 {
+
+		startOffset := len(sf.Text()) + 1
+		for _, prevCode := range data.tcbCodes {
+			startOffset += len(prevCode) + 1
+		}
+
+		data.tcbCodes = append(data.tcbCodes, tcbCode)
+		data.blocks = append(data.blocks, tcbBlockData{
+			className:       className,
+			tcbCode:         tcbCode,
+			lineSpans:       lineSpans,
+			analysis:        analysis,
+			classDecl:       classDecl,
+			startCharOffset: startOffset,
+		})
+	}
+
+	if len(filesData) == 0 {
+		return res
+	}
+
+	virtualFiles := make(map[tspath.Path]string)
+	for _, data := range filesData {
+		content := data.sf.Text()
+		for _, code := range data.tcbCodes {
+			content += "\n" + code
+		}
+		virtualFiles[data.sf.Path()] = content
+	}
+
+	overlayHost := &overlayCompilerHost{
+		CompilerHost: c.tsProgram.Host(),
+		virtualFiles: virtualFiles,
+	}
+
+	typecheckProgram := c.tsProgram
+	for path := range virtualFiles {
+		var ok bool
+		typecheckProgram, ok = typecheckProgram.UpdateProgram(path, overlayHost, nil)
+		if !ok {
+			continue
+		}
+	}
+
+	freshChecker, _ := typecheckProgram.GetTypeChecker(context.TODO())
+
+	for fileName, data := range filesData {
+		sf := typecheckProgram.GetSourceFileByPath(data.sf.Path())
+		if sf == nil {
 			continue
 		}
 
-		text := sf.Text() + "\n" + tcbCode
-		opts := ast.SourceFileParseOptions{
-			FileName: sf.FileName(),
-			Path:     sf.Path(),
-		}
-		parsedFile := parser.ParseSourceFile(opts, text, sf.ScriptKind)
-		if parsedFile == nil {
-			continue
-		}
-
-		binder.BindSourceFile(parsedFile)
-		originalFiles[fileIdx] = parsedFile
-		originalFilesByPath[sf.Path()] = parsedFile
-
-		freshChecker := c.checker
-		if freshChecker == nil {
-			freshChecker, _ = checker.NewChecker(c.tsProgram, nil)
-		}
-		checkerDiags := freshChecker.GetDiagnostics(context.TODO(), parsedFile)
-
-		originalFiles[fileIdx] = sf
-		originalFilesByPath[sf.Path()] = sf
-		binder.BindSourceFile(sf)
+		checkerDiags := freshChecker.GetDiagnostics(context.TODO(), sf)
 
 		for _, d := range checkerDiags {
-			if d.Pos() >= len(sf.Text())+1 {
-				tcbOffset := d.Pos() - (len(sf.Text()) + 1)
-				tcbLines := strings.Split(tcbCode, "\n")
-				charOffset := 0
-				diagnosticLine := 1
-				for idx, line := range tcbLines {
-					lineLen := len(line) + 1
-					if tcbOffset >= charOffset && tcbOffset < charOffset+lineLen {
-						diagnosticLine = idx + 1
-						break
-					}
-					charOffset += lineLen
-				}
-
-				if span, ok := lineSpans[diagnosticLine]; ok && span.Start != nil {
-					startOffset := span.Start.Offset
-					endOffset := span.End.Offset
-
-					var targetFile *ast.SourceFile
-					var targetLoc core.TextRange
-
-					if analysis.TemplateUrl == "" {
-						templateStart := strings.Index(sf.Text(), analysis.Template)
-						if templateStart != -1 {
-							targetFile = sf
-							targetLoc = core.NewTextRange(templateStart+startOffset, templateStart+endOffset)
-						} else {
-							targetFile = sf
-							targetLoc = core.NewTextRange(classDecl.Pos(), classDecl.End())
+			for _, block := range data.blocks {
+				if d.Pos() >= block.startCharOffset && d.Pos() < block.startCharOffset+len(block.tcbCode) {
+					tcbOffset := d.Pos() - block.startCharOffset
+					tcbLines := strings.Split(block.tcbCode, "\n")
+					charOffset := 0
+					diagnosticLine := 1
+					for idx, line := range tcbLines {
+						lineLen := len(line) + 1
+						if tcbOffset >= charOffset && tcbOffset < charOffset+lineLen {
+							diagnosticLine = idx + 1
+							break
 						}
-					} else {
-						templatePath := span.Start.File.Url
-						templateContent := span.Start.File.Content
-						templateSf := parser.ParseSourceFile(ast.SourceFileParseOptions{
-							FileName: templatePath,
-							Path:     tspath.Path(templatePath),
-						}, templateContent, core.ScriptKindJS)
-						if templateSf != nil {
-							targetFile = templateSf
-							targetLoc = core.NewTextRange(startOffset, endOffset)
+						charOffset += lineLen
+					}
+
+					if span, ok := block.lineSpans[diagnosticLine]; ok && span.Start != nil {
+						startOffset := span.Start.Offset
+						endOffset := span.End.Offset
+
+						var targetFile *ast.SourceFile
+						var targetLoc core.TextRange
+
+						if block.analysis.TemplateUrl == "" {
+							templateStart := strings.Index(data.sf.Text(), block.analysis.Template)
+							if templateStart != -1 {
+								targetFile = data.sf
+								targetLoc = core.NewTextRange(templateStart+startOffset, templateStart+endOffset)
+							} else {
+								targetFile = data.sf
+								targetLoc = core.NewTextRange(block.classDecl.Pos(), block.classDecl.End())
+							}
 						} else {
-							targetFile = sf
-							targetLoc = core.NewTextRange(classDecl.Pos(), classDecl.End())
+							templatePath := span.Start.File.Url
+							templateContent := span.Start.File.Content
+							templateSf := parser.ParseSourceFile(ast.SourceFileParseOptions{
+								FileName: templatePath,
+								Path:     tspath.Path(templatePath),
+							}, templateContent, core.ScriptKindJS)
+							if templateSf != nil {
+								targetFile = templateSf
+								targetLoc = core.NewTextRange(startOffset, endOffset)
+							} else {
+								targetFile = data.sf
+								targetLoc = core.NewTextRange(block.classDecl.Pos(), block.classDecl.End())
+							}
 						}
-					}
 
-					relatedNode := findTemplatePropertyNode(analysis.DecoratorNode)
-					if relatedNode == nil {
-						relatedNode = classDecl.AsNode()
-					}
-					var relatedFile *ast.SourceFile
-					var relatedLoc core.TextRange
-					if relatedNode != nil {
-						relatedFile = ast.GetSourceFileOfNode(relatedNode)
-						start := scanner.GetTokenPosOfNode(relatedNode, relatedFile, false)
-						relatedLoc = core.NewTextRange(start, relatedNode.End())
-					}
-					relatedDiag := ast.NewDiagnosticFromSerialized(
-						relatedFile,
-						relatedLoc,
-						0,
-						3, // CategoryMessage
-						"",
-						[]string{"Error occurs in the template of component " + className + "."},
-						nil,
-						nil,
-						false,
-						false,
-						false,
-					)
+						relatedNode := findTemplatePropertyNode(block.analysis.DecoratorNode)
+						if relatedNode == nil {
+							relatedNode = block.classDecl.AsNode()
+						}
+						var relatedFile *ast.SourceFile
+						var relatedLoc core.TextRange
+						if relatedNode != nil {
+							relatedFile = ast.GetSourceFileOfNode(relatedNode)
+							start := scanner.GetTokenPosOfNode(relatedNode, relatedFile, false)
+							relatedLoc = core.NewTextRange(start, relatedNode.End())
+						}
+						relatedDiag := ast.NewDiagnosticFromSerialized(
+							relatedFile,
+							relatedLoc,
+							0,
+							3, // CategoryMessage
+							"",
+							[]string{"Error occurs in the template of component " + block.className + "."},
+							nil,
+							nil,
+							false,
+							false,
+							false,
+						)
 
-					mappedDiag := ast.NewDiagnosticFromSerialized(
-						targetFile,
-						targetLoc,
-						d.Code(),
-						d.Category(),
-						d.MessageKey(),
-						d.MessageArgs(),
-						d.MessageChain(),
-						[]*ast.Diagnostic{relatedDiag},
-						d.ReportsUnnecessary(),
-						d.ReportsDeprecated(),
-						d.SkippedOnNoEmit(),
-					)
-					res[sf.FileName()] = append(res[sf.FileName()], mappedDiag)
+						mappedDiag := ast.NewDiagnosticFromSerialized(
+							targetFile,
+							targetLoc,
+							d.Code(),
+							d.Category(),
+							d.MessageKey(),
+							d.MessageArgs(),
+							d.MessageChain(),
+							[]*ast.Diagnostic{relatedDiag},
+							d.ReportsUnnecessary(),
+							d.ReportsDeprecated(),
+							d.SkippedOnNoEmit(),
+						)
+						res[fileName] = append(res[fileName], mappedDiag)
+					}
+					break
 				}
 			}
 		}

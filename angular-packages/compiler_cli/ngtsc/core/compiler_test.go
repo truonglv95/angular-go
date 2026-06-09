@@ -3,6 +3,8 @@ package core_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/core"
@@ -12,6 +14,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const (
+	basicTcbCode = "export function _tcb1(ctx: import(\"./cmp\").TestCmp) { ctx.prop; }"
+)
+
+func canonicalizeTestPath(p string) string {
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		return strings.ToLower(p)
+	}
+	return p
+}
 
 func createProgramWithOSFiles(t *testing.T, files []ngtsctest.ProgramFile) (*ngtsctest.ProgramResult, func()) {
 	// Write all files to OS filesystem first
@@ -440,8 +453,8 @@ func TestNgCompiler_GetResourceDependencies(t *testing.T) {
 
 	deps := compiler.GetResourceDependencies(sf)
 	require.Len(t, deps, 2)
-	assert.Contains(t, deps, templateHtmlPath)
-	assert.Contains(t, deps, stylePath)
+	assert.Contains(t, deps, canonicalizeTestPath(templateHtmlPath))
+	assert.Contains(t, deps, canonicalizeTestPath(stylePath))
 }
 
 func TestNgCompiler_ResourceOnlyChanges(t *testing.T) {
@@ -504,7 +517,7 @@ func TestNgCompiler_ResourceOnlyChanges(t *testing.T) {
 	optionsB := core.NgCompilerOptions{
 		StrictTemplates: true,
 		InvalidatedFiles: map[string]bool{
-			templateHtmlPath: true,
+			canonicalizeTestPath(templateHtmlPath): true,
 		},
 	}
 	compilerB, err := core.NewNgCompiler(result.Program, optionsB, compilerA)

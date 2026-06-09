@@ -109,7 +109,7 @@ func TestIntegration_ComponentTemplateDiagnostics(t *testing.T) {
 	metaRegistry := metadata.NewLocalMetadataRegistry()
 	scopeRegistry := scope.NewLocalModuleScopeRegistry(metaRegistry)
 
-	compHandler := annotations.NewComponentDecoratorHandler(host, false, metaRegistry, scopeRegistry, nil, false)
+	compHandler := annotations.NewComponentDecoratorHandler(host, false, metaRegistry, scopeRegistry, nil, false, nil)
 
 	sfComponent := ngtsctest.RequireSourceFile(t, result, "/app.component.ts")
 

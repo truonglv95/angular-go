@@ -81,7 +81,7 @@ func Incremental(
 		// 2. Detect changed resources
 		for file := range modifiedResourceFiles {
 			if !strings.HasSuffix(file, ".ts") {
-				changedResources[file] = true
+				changedResources[canonicalizePath(file)] = true
 			} else {
 				changedTs[file] = true
 			}
