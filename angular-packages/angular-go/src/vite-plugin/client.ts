@@ -90,6 +90,10 @@ export function createGoNgcClient(compilerPath: string, projectRoot: string): Go
         buffer = buffer.slice(newlineIdx + 1);
         if (!line.trim()) continue;
         try {
+          if (!line.trim().startsWith('{')) {
+            console.log(`[go-ngc] ${line}`);
+            continue;
+          }
           const res = JSON.parse(line);
           const pending = pendingRequests.get(res.id);
           if (pending) {
@@ -102,7 +106,7 @@ export function createGoNgcClient(compilerPath: string, projectRoot: string): Go
             }
           }
         } catch {
-          console.error('[go-ngc] Failed to parse daemon response:', line);
+          console.log(`[go-ngc] ${line}`);
         }
       }
     });

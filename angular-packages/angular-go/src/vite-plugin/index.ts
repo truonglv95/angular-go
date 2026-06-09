@@ -1255,6 +1255,24 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
                 const result = await (sharedDaemonClient as GoNgcClient).getHmrUpdate(sharedDaemonContextId, c);
                 if (result && result.code) {
                   let code = `import { ɵɵreplaceMetadata as ɵɵreplaceMetadata_hmr } from '@angular/core';\n` + result.code;
+                  
+                  // Rewrite relative imports to absolute paths relative to Vite's config.root
+                  // because virtual module ID doesn't have a correct directory for Vite resolution.
+                  const fileDir = path.dirname(filePath); // e.g. src/app
+                  const absFileDir = path.resolve(projectRoot, fileDir);
+                  let viteBasePath = path.relative(config.root, absFileDir);
+                  if (viteBasePath) viteBasePath = '/' + viteBasePath.replace(/\\/g, '/');
+                  else viteBasePath = '';
+
+                  code = code.replace(/from\s+['"](\.[^'"]+)['"]/g, (match, relPath) => {
+                    const resolved = path.posix.join(viteBasePath || '/', relPath);
+                    return `from '${resolved}'`;
+                  });
+                  code = code.replace(/import\s*\(\s*['"](\.[^'"]+)['"]\s*\)/g, (match, relPath) => {
+                    const resolved = path.posix.join(viteBasePath || '/', relPath);
+                    return `import('${resolved}')`;
+                  });
+
                   if (enableHmr) {
                     const encodedId = encodeURIComponent(c);
                     code += `
@@ -1475,7 +1493,7 @@ if (import.meta.hot) {
 
       if (transformed.includes('ɵɵreplaceMetadata')) {
         transformed = transformed.replace(
-          /\.then\(\s*\(?\s*([a-zA-Z0-9_$]+)\s*\)?\s*=>\s*\1\.default\s*&&\s*([a-zA-Z0-9_$]*\.)?ɵɵreplaceMetadata\(\s*([^,]+)\s*,\s*\1\.default\s*,\s*([^,]+)\s*,\s*([^,]+)\s*,\s*import\.meta\s*,\s*([a-zA-Z0-9_$]+)\s*\)\)/g,
+          /\.then\(\s*\(?\s*([a-zA-Z0-9_$]+)\s*\)?\s*=>\s*\1\.default\s*&&\s*([a-zA-Z0-9_$]*\.)?ɵɵreplaceMetadata\(\s*([a-zA-Z0-9_$]+)\s*,\s*\1\.default\s*,\s*(\[[\s\S]*?\])\s*,\s*(\[[\s\S]*?\])\s*,\s*import\.meta\s*,\s*([a-zA-Z0-9_$]+)\s*\)\)/g,
           (match, mVar, corePrefix, compType, namespaces, locals, idVar) => {
             const prefix = corePrefix || '';
             isDebug && console.log('[angular-go:compile] transform: intercepting ɵɵreplaceMetadata for:', idVar);
@@ -1522,7 +1540,7 @@ if (import.meta.hot) {
       }
 
 
-      console.error(`[angular-go] handleHotUpdate file: ${filePath}, hasHtml: ${htmlToTs.has(filePath)}, keys: ${Array.from(htmlToTs.keys()).join(', ')}`);
+
 
       // Check 1: Component Template (.html)
       if (filePath.endsWith('.html') && htmlToTs.has(filePath)) {

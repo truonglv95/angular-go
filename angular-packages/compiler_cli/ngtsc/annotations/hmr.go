@@ -58,7 +58,7 @@ func extractHmrDependencies(
 
 	// Collect into a sorted list first so the order is stable across builds.
 	localNames := make([]string, 0, len(visitor.allReads))
-	fmt.Printf("[DEBUG-HMR] Class %s, allReads: %v, availableTopLevel: %v\n", className, visitor.allReads, availableTopLevel)
+
 	for readName := range visitor.allReads {
 		if readName != className && !seenLocals[readName] && availableTopLevel[readName] {
 			localNames = append(localNames, readName)
