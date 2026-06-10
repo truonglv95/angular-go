@@ -229,3 +229,36 @@ export declare class MyComp {
 	assert.NotNil(t, meta2)
 	assert.Equal(t, "dts-selector", meta2.Selector)
 }
+
+func TestDtsMetadataReader_MalformedAST_PrivateIdentifierName(t *testing.T) {
+	// A class with a private identifier name (#PrivatePipe) is invalid TS,
+	// but we test that our metadata reader does not panic if such a node occurs.
+	dtsSource := `
+export declare class #PrivatePipe {
+  static ɵpipe: i0.ɵɵPipeDeclaration<any, "my-pipe-name", false, true>;
+}
+`
+	opts := ast.SourceFileParseOptions{
+		FileName: "/malformed.d.ts",
+	}
+
+	sourceFile := parser.ParseSourceFile(opts, dtsSource, core.ScriptKindTS)
+	if sourceFile == nil {
+		t.Skip("Parser did not produce a file")
+	}
+
+	var pipeNode *ast.Node
+	for _, stmt := range sourceFile.Statements.Nodes {
+		if stmt.Kind == ast.KindClassDeclaration {
+			pipeNode = stmt
+			break
+		}
+	}
+
+	if pipeNode != nil {
+		reader := metadata.NewDtsMetadataReader(nil)
+		// This should not panic!
+		pipeMeta := reader.GetPipeMetadata(pipeNode)
+		_ = pipeMeta
+	}
+}
