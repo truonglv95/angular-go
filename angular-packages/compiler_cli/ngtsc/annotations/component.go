@@ -297,7 +297,29 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 		if baseExpr := h.host.GetBaseClassExpression(currentClass.AsNode()); baseExpr != nil {
 			if decl := h.host.GetDeclarationOfIdentifier(baseExpr); decl != nil && decl.Node != nil {
 				if decl.Node.Kind == ast.KindClassDeclaration {
-					currentClass = decl.Node.AsClassDeclaration()
+					baseClassNode := decl.Node.AsClassDeclaration()
+					sf := ast.GetSourceFileOfNode(baseClassNode.AsNode())
+					if sf != nil && strings.HasSuffix(sf.FileName(), ".d.ts") {
+						// Base class is external, use MetadataReader to extract its already flattened inputs/outputs
+						if baseMeta := h.metaRegistry.GetDirectiveMetadata(baseClassNode.AsNode()); baseMeta != nil {
+							for k, v := range baseMeta.Inputs {
+								// Note: DtsReader returns map[string]string for Inputs
+								// but component analysis needs map[string]R3InputMetadata.
+								// In dts_reader, inputs map is: ClassPropertyName -> BindingPropertyName
+								analysis.Inputs[k] = render3.R3InputMetadata{
+									BindingPropertyName: v,
+									ClassPropertyName:   k,
+									Required:            false, // Simplification for external inherited inputs without required info
+								}
+							}
+							for k, v := range baseMeta.Outputs {
+								analysis.Outputs[k] = v
+							}
+						}
+						// Since .d.ts metadata is already flattened (contains all its base inputs), we stop traversing.
+						break
+					}
+					currentClass = baseClassNode
 					continue
 				}
 			}
