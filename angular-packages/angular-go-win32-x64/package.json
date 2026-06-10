@@ -1,6 +1,6 @@
 {
   "name": "@angular-go/win32-x64",
-  "version": "1.0.17",
+  "version": "1.0.18",
   "description": "Windows x64 binary for angular-go",
   "bin": {
     "go-ngc": "bin/go-ngc.exe"

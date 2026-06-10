@@ -2381,7 +2381,8 @@ func (w *templateDiagnosticWalker) checkElement(n *render3.Element) {
 		} else {
 			msg += fmt.Sprintf("2. To allow any element add 'NO_ERRORS_SCHEMA' to the %s of this component.", schemasText)
 		}
-		w.makeTemplateDiagnostic(n.GetSourceSpan(), ngdiagnostics.ErrorCode_SCHEMA_INVALID_ELEMENT, msg)
+		// TEMPORARILY DISABLED BY REQUEST:
+		// w.makeTemplateDiagnostic(n.GetSourceSpan(), ngdiagnostics.ErrorCode_SCHEMA_INVALID_ELEMENT, msg)
 	}
 
 	// 2. Unknown Property / Attribute Binding Check
@@ -2439,7 +2440,8 @@ func (w *templateDiagnosticWalker) checkElement(n *render3.Element) {
 				errorMsg += fmt.Sprintf("\n2. If '%s' is a Web Component then add 'CUSTOM_ELEMENTS_SCHEMA' to the %s of this component to suppress this message.", n.Name, schemas)
 				errorMsg += fmt.Sprintf("\n3. To allow any property add 'NO_ERRORS_SCHEMA' to the %s of this component.", schemas)
 			}
-			w.makeTemplateDiagnostic(prop.SourceSpan, ngdiagnostics.ErrorCode_SCHEMA_INVALID_ATTRIBUTE, errorMsg)
+			// TEMPORARILY DISABLED BY REQUEST:
+			// w.makeTemplateDiagnostic(prop.SourceSpan, ngdiagnostics.ErrorCode_SCHEMA_INVALID_ATTRIBUTE, errorMsg)
 		}
 	}
 
@@ -2562,7 +2564,8 @@ func (w *templateDiagnosticWalker) checkTemplate(n *render3.Template) {
 			errorMsg := fmt.Sprintf("Can't bind to '%s' since it isn't a known property of 'ng-template'.", prop.Name)
 			errorMsg += fmt.Sprintf("\n1. If '%s' is an Angular directive, then add 'CommonModule' to the '%s.imports' of this component.", prop.Name, decorator)
 			errorMsg += fmt.Sprintf("\n2. To allow any property add 'NO_ERRORS_SCHEMA' to the %s of this component.", schemas)
-			w.makeTemplateDiagnostic(prop.SourceSpan, ngdiagnostics.ErrorCode_SCHEMA_INVALID_ATTRIBUTE, errorMsg)
+			// TEMPORARILY DISABLED BY REQUEST:
+			// w.makeTemplateDiagnostic(prop.SourceSpan, ngdiagnostics.ErrorCode_SCHEMA_INVALID_ATTRIBUTE, errorMsg)
 		}
 	}
 

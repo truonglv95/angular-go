@@ -1,6 +1,6 @@
 {
   "name": "@angular-go/darwin-x64",
-  "version": "1.0.17",
+  "version": "1.0.18",
   "description": "macOS x64 binary for angular-go",
   "bin": {
     "go-ngc": "bin/go-ngc"
