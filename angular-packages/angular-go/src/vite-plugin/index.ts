@@ -1017,6 +1017,19 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
       if (!compileArgs.find(arg => arg.startsWith('--compilationMode'))) {
         compileArgs.push(`--compilationMode=${compilationMode}`);
       }
+      if (!options.styleIncludePaths) {
+        options.styleIncludePaths = [];
+      }
+      // Add node_modules by default so SASS can resolve external package imports
+      const nodeModulesPath = path.join(process.cwd(), 'node_modules');
+      const rootNodeModulesPath = path.join(process.cwd(), '../../node_modules'); // For monorepos
+      if (!options.styleIncludePaths.includes(nodeModulesPath)) {
+        options.styleIncludePaths.push(nodeModulesPath);
+      }
+      if (!options.styleIncludePaths.includes(rootNodeModulesPath)) {
+        options.styleIncludePaths.push(rootNodeModulesPath);
+      }
+      
       if (options.styleIncludePaths && options.styleIncludePaths.length > 0) {
         compileArgs.push(`--style-include-paths=${options.styleIncludePaths.join(',')}`);
       }
