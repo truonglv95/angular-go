@@ -1,6 +1,7 @@
 import { Component, forwardRef, Input, signal, computed, effect } from '@angular/core';
 import { ControlValueAccessor, NG_VALUE_ACCESSOR, FormsModule } from '@angular/forms';
 import { format } from 'date-fns';
+import { BaseComponent } from './base.component';
 
 @Component({
   selector: 'app-custom-input',
@@ -15,7 +16,7 @@ import { format } from 'date-fns';
   ],
   template: `
     <div class="custom-input-container">
-      <label i18n="@@customInputLabel">{{ label }} (YYYY-MM-DD):</label>
+      <label i18n="@@customInputLabel">{{ baseTitle }} (YYYY-MM-DD):</label>
       <input 
         [ngModel]="value()" 
         (ngModelChange)="onInput($event)"
@@ -30,9 +31,7 @@ import { format } from 'date-fns';
     .formatted-date { color: #007bff; font-weight: bold; }
   `]
 })
-export class CustomInputComponent implements ControlValueAccessor {
-  // Traditional Input (bypassing go-ngc signal input type-check strictness)
-  @Input() label: string = 'Default Label';
+export class CustomInputComponent extends BaseComponent implements ControlValueAccessor {
   
   // Internal State with Signals
   value = signal<string>('');
@@ -54,6 +53,7 @@ export class CustomInputComponent implements ControlValueAccessor {
   onTouched = () => {};
 
   constructor() {
+    super();
     effect(() => {
       console.log('Value changed to:', this.value());
     });

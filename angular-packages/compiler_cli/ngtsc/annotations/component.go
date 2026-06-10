@@ -288,8 +288,25 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 		CompilationMode: "global",
 	}
 
-	if node.Members != nil {
-		for _, member := range node.Members.Nodes {
+	var allMembers []*ast.Node
+	currentClass := node
+	for {
+		if currentClass.Members != nil {
+			allMembers = append(allMembers, currentClass.Members.Nodes...)
+		}
+		if baseExpr := h.host.GetBaseClassExpression(currentClass.AsNode()); baseExpr != nil {
+			if decl := h.host.GetDeclarationOfIdentifier(baseExpr); decl != nil && decl.Node != nil {
+				if decl.Node.Kind == ast.KindClassDeclaration {
+					currentClass = decl.Node.AsClassDeclaration()
+					continue
+				}
+			}
+		}
+		break
+	}
+
+	if len(allMembers) > 0 {
+		for _, member := range allMembers {
 			if member.Kind == ast.KindPropertyDeclaration || member.Kind == ast.KindMethodDeclaration {
 				var modifiers *ast.ModifierList
 				var nameNode *ast.Node

@@ -5,6 +5,7 @@ import { CommonModule, NgTemplateOutlet } from '@angular/common';
 import { NxWelcome } from '@demo/nx-welcome';
 import { IcuDemoComponent } from './icu-demo.component';
 import { CustomInputComponent } from './custom-input.component';
+import { BaseComponent } from './base.component';
 
 @Component({
   imports: [NxWelcome, RouterModule, IcuDemoComponent, ReactiveFormsModule, CustomInputComponent, CommonModule, NgTemplateOutlet],
@@ -12,7 +13,7 @@ import { CustomInputComponent } from './custom-input.component';
   templateUrl: './app.html',
   styleUrl: './app.scss',
 })
-export class App {
+export class App extends BaseComponent {
   protected title = 'demo';
   
   dateControl = new FormControl('2024-01-01');

@@ -6,7 +6,7 @@
   <label i18n="@@formLabel">Reactive Form + ControlValueAccessor + Signals + forwardRef:</label>
   <br/><br/>
   
-  <app-custom-input [formControl]="dateControl" [label]="'Birth Date'" [attr.data-test-id]="'my-test-id'"></app-custom-input>
+  <app-custom-input [formControl]="dateControl" [baseTitle]="'Birth Date'" [attr.data-test-id]="'my-test-id'"></app-custom-input>
   
   <br/>
   <p i18n="@@controlValue">Control Value in Parent: {{ dateControl.value }}</p>
