@@ -367,6 +367,9 @@ func (r *DomElementSchemaRegistry) HasProperty(tagName string, propName string, 
 		elementProperties = r.schema["unknown"]
 	}
 	_, has := elementProperties[propName]
+	if !has {
+		_, has = elementProperties[r.GetMappedPropName(propName)]
+	}
 	return has
 }
 
