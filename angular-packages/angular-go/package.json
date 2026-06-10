@@ -1,6 +1,6 @@
 {
   "name": "@angular-go/build",
-  "version": "1.0.18",
+  "version": "1.0.19",
   "description": "Unified toolchain for angular-go: compile, linker, testbed, vitest, and builders",
   "type": "module",
   "main": "./dist/index.js",

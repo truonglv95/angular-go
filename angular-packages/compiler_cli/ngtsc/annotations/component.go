@@ -2416,7 +2416,8 @@ func (w *templateDiagnosticWalker) checkElement(n *render3.Element) {
 
 		report := render3.ElementRegistry.ValidateProperty(prop.Name)
 		if report.Error {
-			w.makeTemplateDiagnostic(prop.SourceSpan, ngdiagnostics.ErrorCode_SCHEMA_INVALID_ATTRIBUTE, *report.Msg)
+			// TEMPORARILY DISABLED BY REQUEST:
+			// w.makeTemplateDiagnostic(prop.SourceSpan, ngdiagnostics.ErrorCode_SCHEMA_INVALID_ATTRIBUTE, *report.Msg)
 			continue
 		}
 
@@ -2550,7 +2551,8 @@ func (w *templateDiagnosticWalker) checkTemplate(n *render3.Template) {
 
 		report := render3.ElementRegistry.ValidateProperty(prop.Name)
 		if report.Error {
-			w.makeTemplateDiagnostic(prop.SourceSpan, ngdiagnostics.ErrorCode_SCHEMA_INVALID_ATTRIBUTE, *report.Msg)
+			// TEMPORARILY DISABLED BY REQUEST:
+			// w.makeTemplateDiagnostic(prop.SourceSpan, ngdiagnostics.ErrorCode_SCHEMA_INVALID_ATTRIBUTE, *report.Msg)
 			continue
 		}
 

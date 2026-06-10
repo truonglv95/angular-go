@@ -1,15 +1,16 @@
-import { Component, Input } from '@angular/core';
-
-@Component({ template: '' })
-export class BaseComponent {
-  @Input() someBaseProp = 'base';
-}
+import { Component, inject } from '@angular/core';
+import { BaseDirective } from '@demo/base.directive';
 
 @Component({
   selector: 'app-child',
   standalone: true,
-  template: '<div>{{ someBaseProp }}</div>',
+  template: '<div>child</div>',
 })
-export class ChildComponent extends BaseComponent {
-  @Input() someChildProp = 'child';
+export class ChildComponent extends BaseDirective {
+  ngOnInit() {
+    console.log(this.fb);
+    const form = this.fb.group({
+      name: ['']
+    });
+  }
 }
