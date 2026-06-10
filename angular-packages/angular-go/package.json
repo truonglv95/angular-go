@@ -51,10 +51,10 @@
     "vite-tsconfig-paths": "^6.1.1"
   },
   "optionalDependencies": {
-    "@angular-go/darwin-arm64": "1.0.12",
-    "@angular-go/darwin-x64": "1.0.12",
-    "@angular-go/linux-x64": "1.0.12",
-    "@angular-go/win32-x64": "1.0.12"
+    "@angular-go/darwin-arm64": "1.0.15",
+    "@angular-go/darwin-x64": "1.0.15",
+    "@angular-go/linux-x64": "1.0.15",
+    "@angular-go/win32-x64": "1.0.15"
   },
   "peerDependencies": {
     "@angular/common": "^21.0.0",
