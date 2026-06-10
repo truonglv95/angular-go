@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/schema",
+  "cli": "nx",
+  "title": "Angular-Go Extract i18n Builder",
+  "description": "Extracts i18n messages from source code.",
+  "type": "object",
+  "properties": {
+    "browserTarget": {
+      "type": "string",
+      "description": "A browser builder target to extract i18n messages from in the format of `project:target[:configuration]`. You can also pass in more than one configuration name as a comma-separated list. Example: `project:build:production,es5`."
+    },
+    "outFile": {
+      "type": "string",
+      "description": "Name of the file to output (e.g. messages.xlf)."
+    }
+  },
+  "required": ["browserTarget"]
+}

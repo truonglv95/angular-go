@@ -2372,6 +2372,14 @@ func (w *templateDiagnosticWalker) checkElement(n *render3.Element) {
 		if prop.Type == 4 || prop.Type == 6 {
 			continue
 		}
+		if prop.Type == 1 || prop.Type == 2 || prop.Type == 3 {
+			// Attribute, Class, Style bindings do not need schema validation
+			continue
+		}
+		if strings.HasPrefix(prop.Name, "data-") || strings.HasPrefix(prop.Name, "aria-") {
+			// data- and aria- properties are always valid
+			continue
+		}
 		matched := false
 		for _, dir := range directives {
 			for _, bindingName := range dir.meta.Inputs {

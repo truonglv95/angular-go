@@ -26,10 +26,12 @@ func WrapI18nIcus(job compilation.CompilationJob) {
 					addedI18nId = &id
 					i18nStart := &ir.I18nStartOp{
 						I18nOpBase: ir.I18nOpBase{
-							Xref:       id,
-							Message:    o.Message,
-							Root:       id,
-							SourceSpan: nil,
+							Xref:         id,
+							Message:      o.Message,
+							Root:         id,
+							SourceSpan:   nil,
+							TargetSlot:   &ir.SlotHandle{},
+							NumSlotsUsed: 1,
 						},
 					}
 					newOps = append(newOps, i18nStart)

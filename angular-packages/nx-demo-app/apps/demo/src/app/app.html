@@ -1,3 +1,33 @@
-<h1 i18n="@@greeting">Hello World</h1>
+<h1 i18n="@@greeting">Hello from nx-demo-app!</h1>
 <p>Nx Angular App running with angular-go/build</p>
+
+<div style="margin-top: 20px; padding: 20px; border: 1px dashed #aaa;">
+  <h2 i18n="@@advancedFeatures">Advanced Angular Features</h2>
+  <label i18n="@@formLabel">Reactive Form + ControlValueAccessor + Signals + forwardRef:</label>
+  <br/><br/>
+  
+  <app-custom-input [formControl]="dateControl" [label]="'Birth Date'" [attr.data-test-id]="'my-test-id'"></app-custom-input>
+  
+  <br/>
+  <p i18n="@@controlValue">Control Value in Parent: {{ dateControl.value }}</p>
+  <button (click)="setToToday()" i18n="@@setToTodayBtn">Set to Today</button>
+</div>
+
+<icu-demo></icu-demo>
+
+<div style="margin-top: 20px; padding: 20px; border: 1px dashed #4caf50;">
+  <h2>Testing ngTemplateOutlet with Context</h2>
+  
+  <ng-template #myTemplate let-name="name" let-role="role">
+    <div style="background-color: #e8f5e9; padding: 10px; margin-bottom: 10px;">
+      <strong>Template rendered content!</strong>
+      <p>Name: <span style="color: green">{{ name }}</span></p>
+      <p>Role: {{ role }}</p>
+    </div>
+  </ng-template>
+
+  <ng-container *ngTemplateOutlet="myTemplate; context: { name: 'Angular Go Compiler', role: 'Advanced CLI Tool' }"></ng-container>
+  <ng-container *ngTemplateOutlet="myTemplate; context: { name: 'Gopher', role: 'Mascot' }"></ng-container>
+</div>
+
 <router-outlet></router-outlet>

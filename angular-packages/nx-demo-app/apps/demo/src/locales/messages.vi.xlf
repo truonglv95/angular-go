@@ -1,10 +1,18 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<xliff version="1.2" xmlns="urn:oasis:names:tc:xliff:document:1.2">
-  <file source-language="en-US" target-language="vi" datatype="plaintext" original="ng2.template">
+<xliff xmlns="urn:oasis:names:tc:xliff:document:1.2" version="1.2">
+  <file source-language="en-US" datatype="plaintext" original="ng2.template">
     <body>
+      <trans-unit id="itemCount" datatype="html">
+        <source>{VAR_PLURAL, plural, =0 {no items} =1 {one item} other {{$INTERPOLATION} items}}</source>
+        <target state="new">{VAR_PLURAL, plural, =0 {no items} =1 {one item} other {{$INTERPOLATION} items}}</target>
+      </trans-unit>
       <trans-unit id="greeting" datatype="html">
-        <source>Hello World</source>
-        <target>Chào Thế Giới</target>
+        <source>Hello from nx-demo-app!</source>
+        <target state="new">Hello from nx-demo-app!</target>
+      </trans-unit>
+      <trans-unit id="greeting-hello" datatype="html">
+        <source>Hello from nx-demo-app!</source>
+        <target state="new">Hello from nx-demo-app!</target>
       </trans-unit>
     </body>
   </file>

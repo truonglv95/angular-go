@@ -88,10 +88,12 @@ func wrapTemplateWithI18n(
 		id := cJob.AllocateXrefId()
 		i18nStart := &ir.I18nStartOp{
 			I18nOpBase: ir.I18nOpBase{
-				Xref:       id,
-				Message:    parentI18n.Message,
-				Root:       parentI18n.Root,
-				SourceSpan: nil,
+				Xref:         id,
+				Message:      parentI18n.Message,
+				Root:         parentI18n.Root,
+				SourceSpan:   nil,
+				TargetSlot:   &ir.SlotHandle{},
+				NumSlotsUsed: 1,
 			},
 		}
 		i18nEnd := &ir.I18nEndOp{

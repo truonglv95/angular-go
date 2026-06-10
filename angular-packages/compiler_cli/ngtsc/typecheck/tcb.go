@@ -145,11 +145,14 @@ func GenerateTcbWithOptions(
 				if exprStr != "" {
 					if consumerClass, classPropName, hasConsumer := getBindingConsumer(n, prop); hasConsumer {
 						if dId, ok := dirClassToId[consumerClass]; ok {
-							writeLine(fmt.Sprintf("%s  _assign(_dir%d.%s, (%s));", indent, dId, classPropName, exprStr), prop.SourceSpan)
+							writeLine(fmt.Sprintf("%s  _assign(_dir%d[%q], (%s));", indent, dId, classPropName, exprStr), prop.SourceSpan)
 						}
 					} else {
-						if prop.Type != 2 && prop.Type != 3 && prop.Name != "style" && prop.Name != "class" {
-							writeLine(fmt.Sprintf("%s  _assign(_el%d.%s, (%s));", indent, myElId, prop.Name, exprStr), prop.SourceSpan)
+						if prop.Type != 1 && prop.Type != 2 && prop.Type != 3 && prop.Name != "style" && prop.Name != "class" {
+							writeLine(fmt.Sprintf("%s  _assign(_el%d[%q], (%s));", indent, myElId, prop.Name, exprStr), prop.SourceSpan)
+						} else {
+							// For attributes, class, and style, just typecheck the expression without assigning to the DOM element
+							writeLine(fmt.Sprintf("%s  (%s);", indent, exprStr), prop.SourceSpan)
 						}
 					}
 				}
@@ -203,12 +206,21 @@ func GenerateTcbWithOptions(
 				writeLine(fmt.Sprintf("%s  var %s: any = null!;", indent, v.Name), v.SourceSpan)
 			}
 
+			// Typecheck local references
+			for _, ref := range n.References {
+				targetVar := fmt.Sprintf("_el%d", myElId)
+				if ref.Value != "" && len(matchedDirs) > 0 {
+					targetVar = fmt.Sprintf("_dir%d", matchedDirs[0])
+				}
+				writeLine(fmt.Sprintf("%s  var %s = %s;", indent, ref.Name, targetVar), ref.SourceSpan)
+			}
+
 			for _, prop := range n.Inputs {
 				exprStr := astToStringWithOptions(prop.Value, "this", newScopeVars, absoluteOffset, emitSpans, pipeVars, sourceTemplate)
 				if exprStr != "" {
 					if consumerClass, classPropName, hasConsumer := getBindingConsumer(n, prop); hasConsumer {
 						if dId, ok := dirClassToId[consumerClass]; ok {
-							writeLine(fmt.Sprintf("%s  _assign(_dir%d.%s, (%s));", indent, dId, classPropName, exprStr), prop.SourceSpan)
+							writeLine(fmt.Sprintf("%s  _assign(_dir%d[%q], (%s));", indent, dId, classPropName, exprStr), prop.SourceSpan)
 						}
 					}
 				}
@@ -219,7 +231,7 @@ func GenerateTcbWithOptions(
 					if exprStr != "" {
 						if consumerClass, classPropName, hasConsumer := getBindingConsumer(n, prop); hasConsumer {
 							if dId, ok := dirClassToId[consumerClass]; ok {
-								writeLine(fmt.Sprintf("%s  _assign(_dir%d.%s, (%s));", indent, dId, classPropName, exprStr), prop.SourceSpan)
+								writeLine(fmt.Sprintf("%s  _assign(_dir%d[%q], (%s));", indent, dId, classPropName, exprStr), prop.SourceSpan)
 							}
 						}
 					}

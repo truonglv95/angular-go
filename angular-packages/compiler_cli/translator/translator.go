@@ -273,7 +273,36 @@ func (v *ExpressionTranslatorVisitor) VisitLiteralExpr(astNode *output.LiteralEx
 }
 
 func (v *ExpressionTranslatorVisitor) VisitLocalizedString(astNode *output.LocalizedString, context any) any {
-	return v.newIdentifier("$localize")
+	ctx := context.(Context)
+	tag := v.newIdentifier("$localize")
+
+	headRaw := astNode.SerializeI18nHead().Raw
+	if len(astNode.Expressions) == 0 {
+		tpl := v.factory.NewNoSubstitutionTemplateLiteral(headRaw, 0)
+		return v.factory.NewTaggedTemplateExpression((*ast.Expression)(tag), nil, nil, (*ast.TemplateLiteral)(tpl), 0).AsNode()
+	}
+
+	head := v.factory.NewTemplateHead(headRaw, headRaw, 0)
+	var templateSpans []*ast.Node
+	for i, expr := range astNode.Expressions {
+		exprNode := expr.VisitExpression(v, ctx).(*ast.Node)
+		partRaw := astNode.SerializeI18nTemplatePart(i + 1).Raw
+
+		if i == len(astNode.Expressions)-1 {
+			// Last span is a TemplateTail
+			tail := v.factory.NewTemplateTail(partRaw, partRaw, 0)
+			span := v.factory.NewTemplateSpan((*ast.Expression)(exprNode), (*ast.LiteralLikeNode)(tail))
+			templateSpans = append(templateSpans, span)
+		} else {
+			// Intermediate span is a TemplateMiddle
+			middle := v.factory.NewTemplateMiddle(partRaw, partRaw, 0)
+			span := v.factory.NewTemplateSpan((*ast.Expression)(exprNode), (*ast.LiteralLikeNode)(middle))
+			templateSpans = append(templateSpans, span)
+		}
+	}
+
+	tplExpr := v.factory.NewTemplateExpression((*ast.TemplateHeadNode)(head), (*ast.TemplateSpanList)(v.factory.NewNodeList(templateSpans)))
+	return v.factory.NewTaggedTemplateExpression((*ast.Expression)(tag), nil, nil, (*ast.TemplateLiteral)(tplExpr), 0).AsNode()
 }
 
 func (v *ExpressionTranslatorVisitor) VisitExternalExpr(astNode *output.ExternalExpr, context any) any {

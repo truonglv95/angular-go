@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<xliff xmlns="urn:oasis:names:tc:xliff:document:1.2" version="1.2">
+  <file source-language="en-US" datatype="plaintext" original="ng2.template">
+    <body>
+      <trans-unit id="itemCount" datatype="html">
+        <source>{VAR_PLURAL, plural, =0 {no items} =1 {one item} other {{$INTERPOLATION} items}}</source>
+      </trans-unit>
+      <trans-unit id="greeting" datatype="html">
+        <source>Hello from nx-demo-app!</source>
+      </trans-unit>
+      <trans-unit id="greeting-hello" datatype="html">
+        <source>Hello from nx-demo-app!</source>
+      </trans-unit>
+    </body>
+  </file>
+</xliff>

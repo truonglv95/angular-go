@@ -76,6 +76,7 @@ func CreateI18nContexts(job compilation.CompilationJob) {
 		for _, op := range unit.GetCreate().Ops {
 			if op.Kind() == ir.OpKindI18nStart {
 				i18nStart := op.(*ir.I18nStartOp)
+				fmt.Printf("[go-ngc-debug] FOUND I18N START: Xref=%v, Root=%v, Message=%v\n", i18nStart.Xref, i18nStart.Root, i18nStart.Message != nil)
 				if i18nStart.Xref == i18nStart.Root {
 					contextOp := &ir.I18nContextOp{
 						ContextKind: ir.I18nContextKindRootI18n,
@@ -84,6 +85,7 @@ func CreateI18nContexts(job compilation.CompilationJob) {
 						Message:     i18nStart.Message,
 						SourceSpan:  nil,
 					}
+					fmt.Printf("[go-ngc-debug] CREATED ROOT I18N CONTEXT for block %v\n", i18nStart.Xref)
 					unit.GetCreate().Push(contextOp)
 					i18nStart.Context = contextOp.Xref
 					blockContextByI18nBlock[i18nStart.Xref] = contextOp

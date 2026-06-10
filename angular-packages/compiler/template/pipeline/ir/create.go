@@ -1011,12 +1011,26 @@ type I18nOpBase struct {
 	OpBase
 	ConsumesSlotOpTrait
 	Xref             XrefId
+	TargetSlot       *SlotHandle
+	NumSlotsUsed     int
 	Root             XrefId
 	Message          any
 	MessageIndex     any
 	SubTemplateIndex *int
 	Context          XrefId
 	SourceSpan       *parse_util.ParseSourceSpan
+}
+
+func (o *I18nOpBase) Handle() *SlotHandle {
+	return o.TargetSlot
+}
+
+func (o *I18nOpBase) GetNumSlotsUsed() int {
+	return o.NumSlotsUsed
+}
+
+func (o *I18nOpBase) AddNumSlotsUsed(num int) {
+	o.NumSlotsUsed += num
 }
 
 func (o *I18nOpBase) Kind() OpKind {
@@ -1057,6 +1071,8 @@ func CreateI18nStartOp(
 		I18nOpBase: I18nOpBase{
 			Xref:         xref,
 			Root:         xref,
+			TargetSlot:   &SlotHandle{},
+			NumSlotsUsed: 1,
 			Message:      message,
 			MessageIndex: messageIndex,
 			SourceSpan:   sourceSpan,

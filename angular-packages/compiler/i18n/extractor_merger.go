@@ -303,6 +303,7 @@ func (v *extractorMergerVisitor) visitElementLike(node *ml_parser.Element, conte
 	wasInImplicitNode := v.inImplicitNode
 	var childNodes []ml_parser.Node
 	var translatedChildNodes []ml_parser.Node
+	var message *Message
 
 	nodeName := node.Name
 	i18nAttr := getI18nAttr(node)
@@ -325,7 +326,7 @@ func (v *extractorMergerVisitor) visitElementLike(node *ml_parser.Element, conte
 	if !v.isInTranslatableSection() && !v.inIcu {
 		if i18nAttr != nil || isTopLevelImplicit {
 			v.inI18nNode = true
-			message := v.addMessage(node.Children, i18nMeta)
+			message = v.addMessage(node.Children, i18nMeta)
 			translatedChildNodes = v.translateMessage(node, message)
 		}
 
@@ -383,8 +384,21 @@ func (v *extractorMergerVisitor) visitElementLike(node *ml_parser.Element, conte
 			attrs = append(attrs, &copyAttr)
 		}
 
+		baseNode := node.BaseNode
+		if message != nil {
+			baseNode.I18n = message
+		} else if i18nMeta != "" {
+			// If we had i18n.I18nMeta struct, we'd assign it here. 
+			// But since we only have string right now, we leave it nil if message is nil.
+			// Currently Go port doesn't seem to pass string as I18n property.
+			// Actually TS assigns `message || i18nMeta`. In Go `I18n` is `any`. 
+			// If `message == nil` but `i18nMeta != ""`, we could assign `i18nMeta`?
+			// But for extracting i18n elements, `message != nil` is true.
+			// Let's assign `message` if it's not nil.
+		}
+
 		return &ml_parser.Element{
-			BaseNode:        node.BaseNode,
+			BaseNode:        baseNode,
 			Name:            node.Name,
 			Attrs:           attrs,
 			Children:        childNodes,

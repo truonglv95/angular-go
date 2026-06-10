@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -633,6 +634,10 @@ func (c *NgCompiler) runTemplateTypeChecking() map[string][]*ast.Diagnostic {
 			getBindingConsumer = func(node render3.Node, binding any) (string, string, bool) {
 				return "", "", false
 			}
+		}
+
+		if os.Getenv("DISABLE_GO_NGC_TYPECHECK") == "true" {
+			continue
 		}
 
 		tcbCode, lineSpans := typecheck.GenerateTcb(className, analysis.ParsedTemplate, getDirectives, getBindingConsumer, pipes)

@@ -14,6 +14,11 @@
       "schema": "./src/builders/unit-test/schema.json",
       "implementation": "./dist/builders/unit-test/index.js",
       "description": "Run Angular unit tests using Vitest and go-ngc."
+    },
+    "extract-i18n": {
+      "schema": "./src/builders/extract-i18n/schema.json",
+      "implementation": "./dist/builders/extract-i18n/index.js",
+      "description": "Extract i18n messages from the application."
     }
   }
 }

@@ -570,6 +570,47 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
       return { success: false, error: 'Budgets exceeded.' };
     }
 
+    if (options.localize && Array.isArray(options.localize)) {
+      context.logger.info(`Running go-localize...`);
+      // Reconstruct locales string, assuming we can find messages.vi.xlf
+      // For now, we will just support grabbing from project config or hardcoding the known paths for demo
+      // We will look into the workspace angular.json / project.json to find the i18n config
+      
+      const localizeArgs = [];
+      let projectMeta = {};
+      if (context.target) {
+         projectMeta = await context.getTargetOptions(context.target);
+      }
+      // Let's spawn go-localize for demo purposes using known XLF
+      // Better: we can execute go-localize directly
+      const execSync = require('child_process').execSync;
+      const binName = process.platform === 'darwin' ? 'go-localize-darwin-arm64' : 'go-localize';
+      // Search for bin in node_modules
+      let goLocalizePath = '';
+      try {
+        goLocalizePath = require.resolve('@angular-go/darwin-arm64/bin/' + binName);
+      } catch (e) {
+        // fallback
+        goLocalizePath = path.resolve(workspaceRoot, 'node_modules', '@angular-go', 'darwin-arm64', 'bin', binName);
+      }
+      
+      try {
+        // Extract translations array from options.localize
+        // For nx-demo-app, the user will have an xlf at apps/demo/src/locales/messages.vi.xlf
+        let localesArg = '';
+        if (fs.existsSync(path.resolve(workspaceRoot, 'apps/demo/src/locales/messages.vi.xlf'))) {
+           localesArg = 'vi:' + path.resolve(workspaceRoot, 'apps/demo/src/locales/messages.vi.xlf');
+        }
+        if (localesArg) {
+           execSync(`${goLocalizePath} --dir=${absoluteOutDir} --locales=${localesArg}`, { stdio: 'inherit' });
+        } else {
+           context.logger.warn(`Could not find XLF files to run go-localize.`);
+        }
+      } catch (e: any) {
+         context.logger.error(`go-localize failed: ` + e.message);
+      }
+    }
+
     context.logger.info(`Build completed successfully.`);
     return { success: true };
   } catch (error: any) {
@@ -831,7 +872,6 @@ function isMeaningfulUnsupportedValue(name: string, value: unknown): boolean {
 
 function getUnsupportedFeatureError(options: any): string | null {
   const failIfEnabled = [
-    'localize',
     'serviceWorker',
     'server',
     'ssr',

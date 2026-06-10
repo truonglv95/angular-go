@@ -1,6 +1,6 @@
 {
   "name": "@angular-go/build",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "description": "Unified toolchain for angular-go: compile, linker, testbed, vitest, and builders",
   "type": "module",
   "main": "./dist/index.js",
@@ -47,13 +47,14 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@angular-devkit/architect": "^0.2102.13"
+    "@angular-devkit/architect": "^0.2102.13",
+    "vite-tsconfig-paths": "^6.1.1"
   },
   "optionalDependencies": {
-    "@angular-go/darwin-arm64": "1.0.9",
-    "@angular-go/darwin-x64": "1.0.9",
-    "@angular-go/linux-x64": "1.0.9",
-    "@angular-go/win32-x64": "1.0.9"
+    "@angular-go/darwin-arm64": "1.0.10",
+    "@angular-go/darwin-x64": "1.0.10",
+    "@angular-go/linux-x64": "1.0.10",
+    "@angular-go/win32-x64": "1.0.10"
   },
   "peerDependencies": {
     "@angular/common": "^21.0.0",

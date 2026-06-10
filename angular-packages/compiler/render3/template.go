@@ -1,8 +1,6 @@
 package render3
 
 import (
-	"strings"
-
 	"github.com/microsoft/typescript-go/angular-packages/compiler/core"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/expression_parser"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/i18n"
@@ -40,138 +38,7 @@ type ParsedTemplate struct {
 	CommentNodes        []*Comment
 }
 
-type mockI18nMetaVisitor struct {
-	file *parse_util.ParseSourceFile
-}
 
-func (v *mockI18nMetaVisitor) VisitElement(el *ml_parser.Element, context any) any {
-	hasI18n := false
-	for _, attr := range el.Attrs {
-		if attr.Name == "i18n" {
-			hasI18n = true
-		}
-	}
-	if hasI18n {
-		el.I18n = &i18n.Message{Id: "mock-element"}
-		for _, child := range el.Children {
-			child.Visit(v, el.I18n)
-		}
-	} else {
-		for _, child := range el.Children {
-			child.Visit(v, nil)
-		}
-	}
-	return el
-}
-
-func (v *mockI18nMetaVisitor) VisitComponent(comp *ml_parser.Component, context any) any {
-	el := &comp.Element
-	hasI18n := false
-	for _, attr := range el.Attrs {
-		if attr.Name == "i18n" {
-			hasI18n = true
-		}
-	}
-	if hasI18n {
-		el.I18n = &i18n.Message{Id: "mock-element"}
-		for _, child := range el.Children {
-			child.Visit(v, el.I18n)
-		}
-	} else {
-		for _, child := range el.Children {
-			child.Visit(v, nil)
-		}
-	}
-	return comp
-}
-
-func (v *mockI18nMetaVisitor) VisitAttribute(attribute *ml_parser.Attribute, context any) any {
-	return attribute
-}
-func (v *mockI18nMetaVisitor) VisitText(text *ml_parser.Text, context any) any { return text }
-func (v *mockI18nMetaVisitor) VisitComment(comment *ml_parser.Comment, context any) any {
-	return comment
-}
-func (v *mockI18nMetaVisitor) VisitExpansion(expansion *ml_parser.Expansion, context any) any {
-	placeholders := make(map[string]*i18n.MessagePlaceholder)
-	getSpan := func(sub string) *parse_util.ParseSourceSpan {
-		idx := strings.Index(v.file.Content, sub)
-		if idx == -1 {
-			return nil
-		}
-		start := parse_util.NewParseLocation(v.file, idx, 0, 0)
-		end := parse_util.NewParseLocation(v.file, idx+len(sub), 0, 0)
-		return parse_util.NewParseSourceSpan(start, end, start, nil)
-	}
-
-	if strings.Contains(v.file.Content, "item.var") {
-		span := getSpan("item.var")
-		placeholders["VAR_PLURAL"] = &i18n.MessagePlaceholder{
-			Text:       "item.var",
-			SourceSpan: span,
-		}
-	}
-	if strings.Contains(v.file.Content, "item.placeholder") {
-		span := getSpan("{{item.placeholder}}")
-		placeholders["INTERPOLATION"] = &i18n.MessagePlaceholder{
-			Text:       "{{item.placeholder}}",
-			SourceSpan: span,
-		}
-	}
-	if strings.Contains(v.file.Content, "nestedVar") {
-		span := getSpan("nestedVar")
-		placeholders["VAR_PLURAL_1"] = &i18n.MessagePlaceholder{
-			Text:       "nestedVar",
-			SourceSpan: span,
-		}
-	}
-	if strings.Contains(v.file.Content, "nestedPlaceholder") {
-		span := getSpan("{{nestedPlaceholder}}")
-		placeholders["INTERPOLATION_1"] = &i18n.MessagePlaceholder{
-			Text:       "{{nestedPlaceholder}}",
-			SourceSpan: span,
-		}
-	}
-	if strings.Contains(v.file.Content, "count|number") {
-		span := getSpan("count|number")
-		placeholders["VAR_PLURAL"] = &i18n.MessagePlaceholder{
-			Text:       "count|number",
-			SourceSpan: span,
-		}
-	}
-	if strings.Contains(v.file.Content, "value|date") {
-		span := getSpan("{{value|date}}")
-		placeholders["INTERPOLATION"] = &i18n.MessagePlaceholder{
-			Text:       "{{value|date}}",
-			SourceSpan: span,
-		}
-	}
-
-	expansion.I18n = &i18n.Message{
-		Nodes:        []i18n.Node{},
-		Placeholders: placeholders,
-	}
-
-	for _, c := range expansion.Cases {
-		c.Visit(v, context)
-	}
-	return expansion
-}
-
-func (v *mockI18nMetaVisitor) VisitExpansionCase(expansionCase *ml_parser.ExpansionCase, context any) any {
-	for _, child := range expansionCase.Expression {
-		child.Visit(v, context)
-	}
-	return expansionCase
-}
-
-func (v *mockI18nMetaVisitor) VisitBlock(block *ml_parser.Block, context any) any { return block }
-func (v *mockI18nMetaVisitor) VisitBlockParameter(blockParameter *ml_parser.BlockParameter, context any) any {
-	return blockParameter
-}
-func (v *mockI18nMetaVisitor) VisitLetDeclaration(decl *ml_parser.LetDeclaration, context any) any {
-	return decl
-}
 
 type schemaRegistryAdapter struct {
 	registry schema.ElementSchemaRegistry
@@ -259,6 +126,8 @@ func ParseTemplate(template string, templateUrl string, options *ParseTemplateOp
 	}
 
 	htmlParser := ml_parser.NewHtmlParser()
+	i18nParser := i18n.NewI18NHtmlParser(htmlParser, nil, nil, core.MissingTranslationStrategyWarning, nil)
+	
 	tokenizeOptions := &ml_parser.TokenizeOptions{
 		TokenizeExpansionForms: true,
 		LeadingTriviaChars:     leadingTrivia,
@@ -271,19 +140,9 @@ func ParseTemplate(template string, templateUrl string, options *ParseTemplateOp
 	if url == "" {
 		url = "path:://to/template"
 	}
-	parseResult := htmlParser.Parse(template, url, tokenizeOptions)
+	parseResult := i18nParser.Parse(template, url, tokenizeOptions)
 
 	htmlNodes := parseResult.RootNodes
-	if len(htmlNodes) > 0 {
-		visitor := &mockI18nMetaVisitor{
-			file: htmlNodes[0].GetSourceSpan().Start.File,
-		}
-		var processed []ml_parser.Node
-		for _, node := range htmlNodes {
-			processed = append(processed, node.Visit(visitor, nil).(ml_parser.Node))
-		}
-		htmlNodes = processed
-	}
 
 	if !preserveWhitespaces {
 		htmlNodes = ml_parser.VisitAllWithSiblingsForNodes(ml_parser.NewWhitespaceVisitor(true), htmlNodes)

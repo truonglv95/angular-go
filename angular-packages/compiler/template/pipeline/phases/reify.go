@@ -628,6 +628,46 @@ func reifyCreateOp(unit compilation.CompilationUnit, op ir.Op) {
 		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
 		ir.OpListInsertBefore(unit.GetCreate(), stmt, op)
 		unit.GetCreate().Remove(op)
+	case ir.OpKindI18nStart, ir.OpKindI18n:
+		var i18nOp ir.I18nOpBase
+		if s, ok := op.(*ir.I18nStartOp); ok {
+			i18nOp = s.I18nOpBase
+		} else if o, ok := op.(*ir.I18nOp); ok {
+			i18nOp = o.I18nOpBase
+		}
+		name := "\u0275\u0275i18nStart"
+		if op.Kind() == ir.OpKindI18n {
+			name = "\u0275\u0275i18n"
+		}
+		fn := output.NewReadVarExpr(name, nil, nil, nil)
+		var args []output.Expression
+		slotVal := 0
+		if i18nOp.TargetSlot != nil && i18nOp.TargetSlot.Slot != nil {
+			slotVal = *i18nOp.TargetSlot.Slot
+		}
+		args = append(args, output.NewLiteralExpr(slotVal, nil, nil, nil))
+		if i18nOp.MessageIndex != nil {
+			if expr, ok := i18nOp.MessageIndex.(output.Expression); ok {
+				args = append(args, expr)
+			} else {
+				args = append(args, output.NewLiteralExpr(i18nOp.MessageIndex, nil, nil, nil))
+			}
+		} else {
+			args = append(args, output.NewLiteralExpr(0, nil, nil, nil))
+		}
+		if i18nOp.SubTemplateIndex != nil {
+			args = append(args, output.NewLiteralExpr(*i18nOp.SubTemplateIndex, nil, nil, nil))
+		}
+		call := output.NewInvokeFunctionExpr(fn, args, nil, nil, false, nil, false)
+		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
+		ir.OpListInsertBefore(unit.GetCreate(), stmt, op)
+		unit.GetCreate().Remove(op)
+	case ir.OpKindI18nEnd:
+		fn := output.NewReadVarExpr("\u0275\u0275i18nEnd", nil, nil, nil)
+		call := output.NewInvokeFunctionExpr(fn, []output.Expression{}, nil, nil, false, nil, false)
+		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
+		ir.OpListInsertBefore(unit.GetCreate(), stmt, op)
+		unit.GetCreate().Remove(op)
 	case ir.OpKindConditionalCreate:
 		cond := op.(*ir.ConditionalCreateOp)
 		fn := output.NewReadVarExpr("\u0275\u0275conditionalCreate", nil, nil, nil)
@@ -1319,6 +1359,24 @@ func reifyUpdateOp(unit compilation.CompilationUnit, opList *ir.OpList, op ir.Op
 
 		fn := output.NewReadVarExpr(fnName, nil, nil, nil)
 		call := output.NewInvokeFunctionExpr(fn, []output.Expression{deferWhen.Expr}, nil, nil, false, nil, false)
+		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
+		ir.OpListInsertBefore(opList, stmt, op)
+		opList.Remove(op)
+	case ir.OpKindI18nExpression:
+		i18nExp := op.(*ir.I18nExpressionOp)
+		fn := output.NewReadVarExpr("\u0275\u0275i18nExp", nil, nil, nil)
+		call := output.NewInvokeFunctionExpr(fn, []output.Expression{i18nExp.Expression}, nil, nil, false, nil, false)
+		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
+		ir.OpListInsertBefore(opList, stmt, op)
+		opList.Remove(op)
+	case ir.OpKindI18nApply:
+		i18nApply := op.(*ir.I18nApplyOp)
+		fn := output.NewReadVarExpr("\u0275\u0275i18nApply", nil, nil, nil)
+		var slotExpr output.Expression = output.NULL_EXPR
+		if sh, ok := i18nApply.Handle.(*ir.SlotHandle); ok && sh != nil && sh.Slot != nil {
+			slotExpr = output.NewLiteralExpr(*sh.Slot, nil, nil, nil)
+		}
+		call := output.NewInvokeFunctionExpr(fn, []output.Expression{slotExpr}, nil, nil, false, nil, false)
 		stmt := &ir.StatementOp{Statement: &output.ExpressionStatement{Expr: call}}
 		ir.OpListInsertBefore(opList, stmt, op)
 		opList.Remove(op)

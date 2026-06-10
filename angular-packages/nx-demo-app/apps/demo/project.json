@@ -27,7 +27,7 @@
           }
         ],
         "styles": ["apps/demo/src/styles.scss"],
-        "localize": false
+        "localize": ["vi"]
       },
       "configurations": {
         "production": {
@@ -83,6 +83,12 @@
         "port": 4200,
         "staticFilePath": "dist/apps/demo/browser",
         "spa": true
+      }
+    },
+    "extract-i18n": {
+      "executor": "@angular-go/build:extract-i18n",
+      "options": {
+        "browserTarget": "demo:build"
       }
     }
   }
