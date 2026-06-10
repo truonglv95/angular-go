@@ -537,7 +537,7 @@ func (c *NgCompiler) runTemplateTypeChecking() map[string][]*ast.Diagnostic {
 		}
 
 		className := ""
-		if classDecl.Name() != nil && classDecl.Name().AsIdentifier() != nil {
+		if classDecl.Name() != nil && classDecl.Name().Kind == ast.KindIdentifier {
 			className = classDecl.Name().AsIdentifier().Text
 		}
 		if className == "" {

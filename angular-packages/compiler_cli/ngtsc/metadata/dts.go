@@ -30,7 +30,7 @@ func classNameOf(classDecl *ast.ClassDeclaration) string {
 	if classDecl == nil || classDecl.Name() == nil {
 		return ""
 	}
-	return classDecl.Name().AsIdentifier().Text
+	return propertyNameText(classDecl.Name())
 }
 
 func sourcePathOf(node *ast.Node) string {
@@ -392,8 +392,8 @@ func (r *DtsMetadataReader) resolveImportAlias(exprName *ast.Node) (dtsImportAli
 		if left.Kind != ast.KindIdentifier {
 			return dtsImportAlias{}, false
 		}
-		namespaceName := left.AsIdentifier().Text
-		rightName := exprName.AsQualifiedName().Right.AsIdentifier().Text
+		namespaceName := propertyNameText(left)
+		rightName := propertyNameText(exprName.AsQualifiedName().Right)
 		for _, stmt := range sourceFile.Statements.Nodes {
 			if stmt.Kind != ast.KindImportDeclaration {
 				continue
@@ -410,7 +410,7 @@ func (r *DtsMetadataReader) resolveImportAlias(exprName *ast.Node) (dtsImportAli
 				continue
 			}
 			nsImport := namedBindings.AsNamespaceImport()
-			if nsImport.Name().AsIdentifier().Text == namespaceName {
+			if propertyNameText(nsImport.Name()) == namespaceName {
 				return dtsImportAlias{
 					name:         rightName,
 					owningModule: importDecl.ModuleSpecifier.AsStringLiteral().Text,
@@ -423,7 +423,7 @@ func (r *DtsMetadataReader) resolveImportAlias(exprName *ast.Node) (dtsImportAli
 	if exprName.Kind != ast.KindIdentifier {
 		return dtsImportAlias{}, false
 	}
-	localName := exprName.AsIdentifier().Text
+	localName := propertyNameText(exprName)
 	for _, stmt := range sourceFile.Statements.Nodes {
 		if stmt.Kind != ast.KindImportDeclaration {
 			continue
@@ -436,7 +436,7 @@ func (r *DtsMetadataReader) resolveImportAlias(exprName *ast.Node) (dtsImportAli
 			continue
 		}
 		importClause := importDecl.ImportClause.AsImportClause()
-		if importClause.Name() != nil && importClause.Name().AsIdentifier().Text == localName {
+		if importClause.Name() != nil && propertyNameText(importClause.Name()) == localName {
 			return dtsImportAlias{
 				name:         "default",
 				owningModule: importDecl.ModuleSpecifier.AsStringLiteral().Text,
@@ -450,7 +450,7 @@ func (r *DtsMetadataReader) resolveImportAlias(exprName *ast.Node) (dtsImportAli
 				continue
 			}
 			spec := element.AsImportSpecifier()
-			if spec.Name().AsIdentifier().Text != localName {
+			if propertyNameText(spec.Name()) != localName {
 				continue
 			}
 			importedName := localName
@@ -468,9 +468,9 @@ func (r *DtsMetadataReader) resolveImportAlias(exprName *ast.Node) (dtsImportAli
 
 func (r *DtsMetadataReader) extractName(exprName *ast.Node) string {
 	if exprName.Kind == ast.KindIdentifier {
-		return exprName.AsIdentifier().Text
+		return propertyNameText(exprName)
 	} else if exprName.Kind == ast.KindQualifiedName {
-		return exprName.AsQualifiedName().Right.AsIdentifier().Text
+		return propertyNameText(exprName.AsQualifiedName().Right)
 	}
 	return ""
 }
