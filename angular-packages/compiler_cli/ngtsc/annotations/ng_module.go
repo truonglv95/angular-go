@@ -91,17 +91,72 @@ func extractR3References(expr *ast.Expression) []render3.R3Reference {
 	return refs
 }
 
-func extractASTNodes(expr *ast.Expression) []*ast.Node {
+func getBaseIdentifier(node *ast.Node) *ast.Node {
+	if node == nil {
+		return nil
+	}
+	if node.Kind == ast.KindIdentifier {
+		return node
+	}
+	if node.Kind == ast.KindCallExpression {
+		callExpr := node.AsCallExpression()
+		if callExpr.Expression != nil {
+			if callExpr.Expression.Kind == ast.KindPropertyAccessExpression {
+				return getBaseIdentifier(callExpr.Expression.AsPropertyAccessExpression().Expression)
+			}
+			return getBaseIdentifier(callExpr.Expression)
+		}
+	}
+	if node.Kind == ast.KindPropertyAccessExpression {
+		return getBaseIdentifier(node.AsPropertyAccessExpression().Expression)
+	}
+	return nil
+}
+
+func extractASTNodes(expr *ast.Expression, host reflection.ReflectionHost) []*ast.Node {
 	var nodes []*ast.Node
+	if expr == nil {
+		return nodes
+	}
+
 	if expr.Kind == ast.KindArrayLiteralExpression {
 		arr := expr.AsArrayLiteralExpression()
 		if arr.Elements != nil {
 			for _, elem := range arr.Elements.Nodes {
-				nodes = append(nodes, elem)
+				nodes = append(nodes, extractASTNodesFromNode(elem, host)...)
+			}
+		}
+	} else {
+		// Single element or variable reference
+		nodes = append(nodes, extractASTNodesFromNode(expr.AsNode(), host)...)
+	}
+	return nodes
+}
+
+func extractASTNodesFromNode(node *ast.Node, host reflection.ReflectionHost) []*ast.Node {
+	var nodes []*ast.Node
+	if node == nil {
+		return nodes
+	}
+
+	if node.Kind == ast.KindSpreadElement {
+		spread := node.AsSpreadElement()
+		return extractASTNodesFromNode(spread.Expression, host)
+	}
+
+	if node.Kind == ast.KindIdentifier {
+		// Resolve the identifier to a declaration
+		decl := host.GetDeclarationOfIdentifier(node)
+		if decl != nil && decl.Node != nil && decl.Node.Kind == ast.KindVariableDeclaration {
+			varDecl := decl.Node.AsVariableDeclaration()
+			if varDecl.Initializer != nil {
+				return extractASTNodes(varDecl.Initializer, host)
 			}
 		}
 	}
-	return nodes
+
+	// Just return the node itself if it cannot be flattened further
+	return []*ast.Node{node}
 }
 
 func topLevelClassByName(sourceFile *ast.SourceFile) map[string]*ast.Node {
@@ -165,20 +220,20 @@ func (h *NgModuleDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorator
 		switch name {
 		case "declarations":
 			analysis.Declarations = extractR3References(initExpr)
-			analysis.DeclarationNodes = extractASTNodes(initExpr)
+			analysis.DeclarationNodes = extractASTNodes(initExpr, h.host)
 		case "imports":
 			analysis.Imports = extractR3References(initExpr)
-			analysis.ImportNodes = extractASTNodes(initExpr)
+			analysis.ImportNodes = extractASTNodes(initExpr, h.host)
 			analysis.ImportsExpr = output.NewWrappedNodeExpr(initExpr, nil, nil, nil)
 		case "exports":
 			analysis.Exports = extractR3References(initExpr)
-			analysis.ExportNodes = extractASTNodes(initExpr)
+			analysis.ExportNodes = extractASTNodes(initExpr, h.host)
 		case "bootstrap":
 			analysis.Bootstrap = extractR3References(initExpr)
-			analysis.BootstrapNodes = extractASTNodes(initExpr)
+			analysis.BootstrapNodes = extractASTNodes(initExpr, h.host)
 		case "schemas":
 			analysis.Schemas = extractR3References(initExpr)
-			analysis.SchemaNodes = extractASTNodes(initExpr)
+			analysis.SchemaNodes = extractASTNodes(initExpr, h.host)
 		case "providers":
 			analysis.ProvidersExpr = output.NewWrappedNodeExpr(initExpr, nil, nil, nil)
 		}
@@ -197,17 +252,18 @@ func (h *NgModuleDecoratorHandler) Register(node *ast.ClassDeclaration, analysis
 			if elem == nil {
 				return metadata.Reference{}
 			}
-			if elem.Kind == ast.KindIdentifier {
-				decl := h.host.GetDeclarationOfIdentifier(elem)
+			baseIdent := getBaseIdentifier(elem)
+			if baseIdent != nil {
+				decl := h.host.GetDeclarationOfIdentifier(baseIdent)
 				if decl != nil && decl.Node != nil {
 					return metadata.Reference{
-						Name:         elem.AsIdentifier().Text,
+						Name:         baseIdent.AsIdentifier().Text,
 						Node:         decl.Node,
 						OwningModule: decl.ViaModule,
 					}
 				}
 				// Fallback to same-file class decl
-				name := elem.AsIdentifier().Text
+				name := baseIdent.AsIdentifier().Text
 				if cNode, ok := classes[name]; ok {
 					return metadata.Reference{Name: name, Node: cNode}
 				}
@@ -250,17 +306,18 @@ func (h *NgModuleDecoratorHandler) Register(node *ast.ClassDeclaration, analysis
 			if elem == nil {
 				return metadata.Reference{}
 			}
-			if elem.Kind == ast.KindIdentifier {
-				decl := h.host.GetDeclarationOfIdentifier(elem)
+			baseIdent := getBaseIdentifier(elem)
+			if baseIdent != nil {
+				decl := h.host.GetDeclarationOfIdentifier(baseIdent)
 				if decl != nil && decl.Node != nil {
 					return metadata.Reference{
-						Name:         elem.AsIdentifier().Text,
+						Name:         baseIdent.AsIdentifier().Text,
 						Node:         decl.Node,
 						OwningModule: decl.ViaModule,
 					}
 				}
 				// Fallback to same-file class decl
-				name := elem.AsIdentifier().Text
+				name := baseIdent.AsIdentifier().Text
 				if cNode, ok := classes[name]; ok {
 					return metadata.Reference{Name: name, Node: cNode}
 				}
@@ -289,16 +346,17 @@ func (h *NgModuleDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysisD
 		if elem == nil {
 			return metadata.Reference{}
 		}
-		if elem.Kind == ast.KindIdentifier {
-			decl := h.host.GetDeclarationOfIdentifier(elem)
+		baseIdent := getBaseIdentifier(elem)
+		if baseIdent != nil {
+			decl := h.host.GetDeclarationOfIdentifier(baseIdent)
 			if decl != nil && decl.Node != nil {
 				return metadata.Reference{
-					Name:         elem.AsIdentifier().Text,
+					Name:         baseIdent.AsIdentifier().Text,
 					Node:         decl.Node,
 					OwningModule: decl.ViaModule,
 				}
 			}
-			name := elem.AsIdentifier().Text
+			name := baseIdent.AsIdentifier().Text
 			if cNode, ok := classes[name]; ok {
 				return metadata.Reference{Name: name, Node: cNode}
 			}

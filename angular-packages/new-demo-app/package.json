@@ -34,6 +34,7 @@
   "packageManager": "npm@10.9.0",
   "dependencies": {
     "@angular-go/build": "file:../angular-go",
+    "@angular-go/darwin-arm64": "file:../angular-go-darwin-arm64",
     "@angular/animations": "^21.2.15",
     "@angular/cdk": "^21.2.14",
     "@angular/common": "^21.2.0",

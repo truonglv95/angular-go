@@ -1,6 +1,8 @@
 package reflection
 
 import (
+	"strings"
+
 	"github.com/microsoft/typescript-go/internal/ast"
 	"github.com/microsoft/typescript-go/internal/checker"
 )
@@ -621,8 +623,35 @@ func getFarLeftIdentifier(node *ast.Node) *ast.Node {
 
 // GetDeclarationOfIdentifier resolves an identifier to its declaration.
 func (h *TypeScriptReflectionHost) GetDeclarationOfIdentifier(id *ast.Node) *Declaration {
-	if h.checker == nil || id == nil {
+	if id == nil {
 		return nil
+	}
+	if h.checker == nil {
+		sf := getSourceFileOfNode(id)
+		if sf == nil {
+			return nil
+		}
+		var idText string
+		if ast.IsIdentifier(id) {
+			idText = id.AsIdentifier().Text
+		} else if ast.IsPrivateIdentifier(id) {
+			idText = id.AsPrivateIdentifier().Text
+		} else {
+			return nil
+		}
+		var foundDecl *Declaration
+		if stmts := sf.Statements(); stmts != nil {
+			for _, n := range stmts {
+				if n.Kind == ast.KindClassDeclaration {
+					c := n.AsClassDeclaration()
+					if c.Name() != nil && c.Name().AsIdentifier().Text == idText {
+						foundDecl = &Declaration{Node: n, ViaModule: ""}
+						break
+					}
+				}
+			}
+		}
+		return foundDecl
 	}
 	symbol := h.checker.GetSymbolAtLocation(id)
 	if symbol == nil {
@@ -655,15 +684,18 @@ func (h *TypeScriptReflectionHost) viaModule(declaration *ast.Node, originalId *
 	if importInfo != nil && importInfo.From != "" && !isRelativePath(importInfo.From) {
 		return importInfo.From
 	}
-	// If no import info but the declaration is in a different file, it may be an ambient import.
-	if importInfo == nil && originalId != nil {
-		declSF := getSourceFileOfNode(declaration)
-		origSF := getSourceFileOfNode(originalId)
-		if declSF != nil && origSF != nil && declSF != origSF {
-			// Ambient import - but we return empty per the Go implementation.
-			return ""
+
+	// For relative paths or ambient imports, use the absolute file path
+	declSF := getSourceFileOfNode(declaration)
+	origSF := getSourceFileOfNode(originalId)
+	if declSF != nil && origSF != nil && declSF != origSF {
+		fileName := declSF.AsSourceFile().FileName()
+		if strings.HasSuffix(fileName, ".ts") {
+			fileName = fileName[:len(fileName)-3]
 		}
+		return fileName
 	}
+
 	return ""
 }
 

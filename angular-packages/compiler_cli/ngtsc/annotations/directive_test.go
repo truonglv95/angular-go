@@ -59,3 +59,47 @@ export class HighlightDirective {}
 	assert.Equal(t, "[appHighlight]", dirAnalysis.Selector)
 	assert.True(t, dirAnalysis.IsStandalone)
 }
+
+func TestDirectiveDecoratorHandler_AnalyzeExtends(t *testing.T) {
+	sourceText := `
+class BaseDirective {
+	@Input() baseProp = 'base';
+}
+
+@Directive({
+	selector: '[appHighlight]',
+	standalone: true
+})
+export class HighlightDirective extends BaseDirective {
+	@Input() childProp = 'child';
+}
+`
+	sourceFile := parser.ParseSourceFile(ast.SourceFileParseOptions{FileName: "/entry.ts"}, sourceText, core.ScriptKindTS)
+	var classNode *ast.ClassDeclaration
+	for _, stmt := range sourceFile.Statements.Nodes {
+		if ast.IsClassDeclaration(stmt) && stmt.AsClassDeclaration().Name() != nil && stmt.AsClassDeclaration().Name().AsIdentifier().Text == "HighlightDirective" {
+			classNode = stmt.AsClassDeclaration()
+			break
+		}
+	}
+	if classNode == nil {
+		t.Fatal("Could not find class in AST")
+	}
+
+	host := reflection.NewTypeScriptReflectionHost(nil)
+	metaRegistry := metadata.NewLocalMetadataRegistry()
+	handler := annotations.NewDirectiveDecoratorHandler(host, metaRegistry)
+
+	decs := host.GetDecoratorsOfDeclaration(classNode.AsNode())
+	detected := handler.Detect(classNode, decs)
+	
+	analysis, _ := handler.Analyze(classNode, detected)
+	dirAnalysis := analysis.(*annotations.DirectiveAnalysis)
+	
+	if _, ok := dirAnalysis.Inputs["childProp"]; !ok {
+		t.Error("Missing childProp")
+	}
+	if _, ok := dirAnalysis.Inputs["baseProp"]; !ok {
+		t.Error("Missing baseProp")
+	}
+}

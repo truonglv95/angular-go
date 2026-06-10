@@ -7,8 +7,14 @@ import { IcuDemoComponent } from './icu-demo.component';
 import { CustomInputComponent } from './custom-input.component';
 import { BaseComponent } from './base.component';
 
+import { ChildComponent } from './child.component';
+
+import { MyModule } from './my-module.module';
+import { ModuleA } from './module-a.module';
+import { NonStandaloneComponent } from './non-standalone.component';
+
 @Component({
-  imports: [NxWelcome, RouterModule, IcuDemoComponent, ReactiveFormsModule, CustomInputComponent, CommonModule, NgTemplateOutlet],
+  imports: [NxWelcome, RouterModule, IcuDemoComponent, ReactiveFormsModule, CustomInputComponent, ChildComponent, CommonModule, NgTemplateOutlet, MyModule, ModuleA],
   selector: 'app-root',
   templateUrl: './app.html',
   styleUrl: './app.scss',

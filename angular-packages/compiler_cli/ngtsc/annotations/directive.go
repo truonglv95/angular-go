@@ -1,6 +1,7 @@
 package annotations
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -114,6 +115,7 @@ func (h *DirectiveDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 					propName = nameNode.AsIdentifier().Text
 				}
 				if member.Kind == ast.KindPropertyDeclaration && propName != "" {
+					fmt.Printf("DEBUG: Iterating propName %s\n", propName)
 					if initVal := member.Initializer(); initVal != nil {
 						if meta, ok := parseSignalInput(initVal, propName); ok {
 							analysis.Inputs[propName] = meta
@@ -134,6 +136,7 @@ func (h *DirectiveDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 								if callExpr.Expression.Kind == ast.KindIdentifier {
 									id := callExpr.Expression.AsIdentifier()
 									if id.Text == "Input" {
+										fmt.Printf("DEBUG: Found Input on %s\n", propName)
 										alias := propName
 										required := false
 										if callExpr.Arguments != nil && len(callExpr.Arguments.Nodes) > 0 {

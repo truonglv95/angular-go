@@ -1,6 +1,7 @@
 package reflection
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/microsoft/typescript-go/internal/ast"
@@ -525,20 +526,35 @@ func (h *TypeScriptReflectionHost) GetBaseClassExpression(clazz ClassDeclaration
 func (h *TypeScriptReflectionHost) GetDeclarationOfIdentifier(id *ast.Node) *Declaration {
 	if h.checker == nil {
 		sf := ast.GetSourceFileOfNode(id)
-		if sf == nil { return nil }
+		if sf == nil { 
+			fmt.Printf("DEBUG: sf is NIL for %T\n", id)
+			return nil 
+		}
 		var idText string
 		if ast.IsIdentifier(id) {
 			idText = id.AsIdentifier().Text
 		} else if ast.IsPrivateIdentifier(id) {
 			idText = id.AsPrivateIdentifier().Text
 		} else {
+			fmt.Printf("DEBUG: id is not Identifier, kind: %d\n", id.Kind)
 			return nil
+		}
+		if sf.Statements != nil {
+			fmt.Printf("DEBUG: sf has %d statements\n", len(sf.Statements.Nodes))
+		} else {
+			fmt.Printf("DEBUG: sf.Statements is NIL!\n")
 		}
 		var foundDecl *Declaration
 		sf.ForEachChild(func(n *ast.Node) bool {
+			fmt.Printf("DEBUG: ForEachChild kind %d\n", n.Kind)
 			if n.Kind == ast.KindClassDeclaration {
 				c := n.AsClassDeclaration()
-				if c.Name() != nil && c.Name().AsIdentifier().Text == idText {
+				name := ""
+				if c.Name() != nil {
+					name = c.Name().AsIdentifier().Text
+				}
+				fmt.Printf("DEBUG: ForEachChild Class name %s\n", name)
+				if name == idText {
 					foundDecl = &Declaration{Node: n, ViaModule: ""}
 					return true // stop
 				}
