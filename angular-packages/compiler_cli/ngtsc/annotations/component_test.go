@@ -41,7 +41,7 @@ export class AppComponent {}
 	host := reflection.NewTypeScriptReflectionHost(nil)
 	metaRegistry := metadata.NewLocalMetadataRegistry()
 	scopeRegistry := scope.NewLocalModuleScopeRegistry(metaRegistry)
-	handler := annotations.NewComponentDecoratorHandler(host, false, metaRegistry, scopeRegistry, nil, false, nil)
+	handler := annotations.NewComponentDecoratorHandler(host, false, metaRegistry, metaRegistry, scopeRegistry, nil, false, nil)
 
 	// Test Name
 	assert.Equal(t, "ComponentDecoratorHandler", handler.Name())

@@ -46,12 +46,14 @@ type DirectiveResolution struct {
 type DirectiveDecoratorHandler struct {
 	host         reflection.ReflectionHost
 	metaRegistry *metadata.LocalMetadataRegistry
+	metaReader   metadata.MetadataReader
 }
 
-func NewDirectiveDecoratorHandler(host reflection.ReflectionHost, metaRegistry *metadata.LocalMetadataRegistry) *DirectiveDecoratorHandler {
+func NewDirectiveDecoratorHandler(host reflection.ReflectionHost, metaRegistry *metadata.LocalMetadataRegistry, metaReader metadata.MetadataReader) *DirectiveDecoratorHandler {
 	return &DirectiveDecoratorHandler{
 		host:         host,
 		metaRegistry: metaRegistry,
+		metaReader:   metaReader,
 	}
 }
 
@@ -94,7 +96,7 @@ func (h *DirectiveDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 					sf := ast.GetSourceFileOfNode(baseClassNode.AsNode())
 					if sf != nil && strings.HasSuffix(sf.FileName(), ".d.ts") {
 						// Base class is external, use MetadataReader
-						if baseMeta := h.metaRegistry.GetDirectiveMetadata(baseClassNode.AsNode()); baseMeta != nil {
+						if baseMeta := h.metaReader.GetDirectiveMetadata(baseClassNode.AsNode()); baseMeta != nil {
 							for k, v := range baseMeta.Inputs {
 								analysis.Inputs[k] = render3.R3InputMetadata{
 									BindingPropertyName: v,

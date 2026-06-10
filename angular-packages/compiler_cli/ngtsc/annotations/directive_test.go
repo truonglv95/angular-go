@@ -38,7 +38,7 @@ export class HighlightDirective {}
 
 	host := reflection.NewTypeScriptReflectionHost(nil)
 	metaRegistry := metadata.NewLocalMetadataRegistry()
-	handler := annotations.NewDirectiveDecoratorHandler(host, metaRegistry)
+	handler := annotations.NewDirectiveDecoratorHandler(host, metaRegistry, metaRegistry)
 
 	// Test Name
 	assert.Equal(t, "DirectiveDecoratorHandler", handler.Name())
@@ -88,7 +88,7 @@ export class HighlightDirective extends BaseDirective {
 
 	host := reflection.NewTypeScriptReflectionHost(nil)
 	metaRegistry := metadata.NewLocalMetadataRegistry()
-	handler := annotations.NewDirectiveDecoratorHandler(host, metaRegistry)
+	handler := annotations.NewDirectiveDecoratorHandler(host, metaRegistry, metaRegistry)
 
 	decs := host.GetDecoratorsOfDeclaration(classNode.AsNode())
 	detected := handler.Detect(classNode, decs)

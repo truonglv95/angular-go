@@ -242,17 +242,19 @@ type ComponentDecoratorHandler struct {
 	host              reflection.ReflectionHost
 	isPartial         bool
 	metaRegistry      *metadata.LocalMetadataRegistry
+	metaReader        metadata.MetadataReader
 	scopeRegistry     *ngscope.LocalModuleScopeRegistry
 	resourceRegistry  *metadata.ResourceRegistry
 	enableHmr         bool
 	styleIncludePaths []string
 }
 
-func NewComponentDecoratorHandler(host reflection.ReflectionHost, isPartial bool, metaRegistry *metadata.LocalMetadataRegistry, scopeRegistry *ngscope.LocalModuleScopeRegistry, resourceRegistry *metadata.ResourceRegistry, enableHmr bool, styleIncludePaths []string) *ComponentDecoratorHandler {
+func NewComponentDecoratorHandler(host reflection.ReflectionHost, isPartial bool, metaRegistry *metadata.LocalMetadataRegistry, metaReader metadata.MetadataReader, scopeRegistry *ngscope.LocalModuleScopeRegistry, resourceRegistry *metadata.ResourceRegistry, enableHmr bool, styleIncludePaths []string) *ComponentDecoratorHandler {
 	return &ComponentDecoratorHandler{
 		host:              host,
 		isPartial:         isPartial,
 		metaRegistry:      metaRegistry,
+		metaReader:        metaReader,
 		scopeRegistry:     scopeRegistry,
 		resourceRegistry:  resourceRegistry,
 		enableHmr:         enableHmr,
@@ -300,12 +302,12 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 					baseClassNode := decl.Node.AsClassDeclaration()
 					sf := ast.GetSourceFileOfNode(baseClassNode.AsNode())
 					if sf != nil && strings.HasSuffix(sf.FileName(), ".d.ts") {
+						fmt.Printf("DEBUG: Found external base class %s in %s\n", baseClassNode.Name().AsIdentifier().Text, sf.FileName())
 						// Base class is external, use MetadataReader to extract its already flattened inputs/outputs
-						if baseMeta := h.metaRegistry.GetDirectiveMetadata(baseClassNode.AsNode()); baseMeta != nil {
+						if baseMeta := h.metaReader.GetDirectiveMetadata(baseClassNode.AsNode()); baseMeta != nil {
+							fmt.Printf("DEBUG: baseMeta inputs count: %d\n", len(baseMeta.Inputs))
 							for k, v := range baseMeta.Inputs {
-								// Note: DtsReader returns map[string]string for Inputs
-								// but component analysis needs map[string]R3InputMetadata.
-								// In dts_reader, inputs map is: ClassPropertyName -> BindingPropertyName
+								fmt.Printf("DEBUG: Merging input %s -> %s\n", k, v)
 								analysis.Inputs[k] = render3.R3InputMetadata{
 									BindingPropertyName: v,
 									ClassPropertyName:   k,
@@ -315,6 +317,8 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 							for k, v := range baseMeta.Outputs {
 								analysis.Outputs[k] = v
 							}
+						} else {
+							fmt.Printf("DEBUG: GetDirectiveMetadata returned nil for %s\n", baseClassNode.Name().AsIdentifier().Text)
 						}
 						// Since .d.ts metadata is already flattened (contains all its base inputs), we stop traversing.
 						break

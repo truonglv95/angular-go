@@ -262,17 +262,17 @@ func (h *DirectiveLocalDecoratorHandler) Resolve(node *ast.ClassDeclaration, ana
 		}
 	}
 
-	globalHandler := annotations.NewDirectiveDecoratorHandler(h.host, h.metaRegistry)
+	globalHandler := annotations.NewDirectiveDecoratorHandler(h.host, h.metaRegistry, h.metaRegistry)
 	return globalHandler.Resolve(node, localAnalysis)
 }
 
 func (h *DirectiveLocalDecoratorHandler) CompileFull(node *ast.ClassDeclaration, analysisData any, resolutionData any, pool *compiler.ConstantPool, importMgr *imports.ImportManager, factory *ast.NodeFactory) ([]transform.CompileResult, []ast.Diagnostic) {
-	globalHandler := annotations.NewDirectiveDecoratorHandler(h.host, h.metaRegistry)
+	globalHandler := annotations.NewDirectiveDecoratorHandler(h.host, h.metaRegistry, h.metaRegistry)
 	return globalHandler.CompileFull(node, analysisData, resolutionData, pool, importMgr, factory)
 }
 
 func (h *DirectiveLocalDecoratorHandler) GetSemanticSymbol(node *ast.ClassDeclaration, analysis any) *semantic_graph.SemanticSymbol {
-	globalHandler := annotations.NewDirectiveDecoratorHandler(h.host, h.metaRegistry)
+	globalHandler := annotations.NewDirectiveDecoratorHandler(h.host, h.metaRegistry, h.metaRegistry)
 	return globalHandler.GetSemanticSymbol(node, analysis)
 }
 

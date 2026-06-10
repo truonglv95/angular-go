@@ -1,10 +1,11 @@
-import { Component } from '@angular/core';
+import { Component, Input } from '@angular/core';
+import { ExternalBase } from 'fake-lib';
 
 @Component({
   selector: 'app-component-a',
-  template: '<app-component-c [data]="myData"></app-component-c>',
+  template: 'A',
   standalone: false
 })
-export class ComponentA {
-  myData = 'hello';
+export class ComponentA extends ExternalBase {
+  @Input() title = 'Component A';
 }

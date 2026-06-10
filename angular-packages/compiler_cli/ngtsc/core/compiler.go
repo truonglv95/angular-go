@@ -84,8 +84,8 @@ func NewNgCompiler(tsProgram *compiler.Program, options NgCompilerOptions, oldCo
 		}
 	} else {
 		handlers = []transform.DecoratorHandler{
-			annotations.NewComponentDecoratorHandler(refHost, false, localMetaRegistry, scopeRegistry, resourceRegistry, options.EnableHmr, options.StyleIncludePaths),
-			annotations.NewDirectiveDecoratorHandler(refHost, localMetaRegistry),
+			annotations.NewComponentDecoratorHandler(refHost, false, localMetaRegistry, compoundMetaReader, scopeRegistry, resourceRegistry, options.EnableHmr, options.StyleIncludePaths),
+			annotations.NewDirectiveDecoratorHandler(refHost, localMetaRegistry, compoundMetaReader),
 			annotations.NewPipeDecoratorHandler(refHost, localMetaRegistry),
 			annotations.NewInjectableDecoratorHandler(refHost), // GLOBAL HANDLER
 			annotations.NewNgModuleDecoratorHandler(refHost, localMetaRegistry, scopeRegistry),
