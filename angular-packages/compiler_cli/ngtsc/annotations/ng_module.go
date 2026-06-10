@@ -367,6 +367,11 @@ func (h *NgModuleDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysisD
 		}
 	}
 
+	var reader metadata.MetadataReader = h.metaRegistry
+	if h.scopeRegistry != nil {
+		reader = h.scopeRegistry.MetadataReader()
+	}
+
 	// 2. Validate imports
 	for _, impExpr := range analysis.ImportNodes {
 		ref := resolveRefNode(impExpr)
@@ -381,9 +386,9 @@ func (h *NgModuleDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysisD
 			continue
 		}
 
-		isNgModule := h.metaRegistry.GetNgModuleMetadata(ref.Node) != nil
-		dirMeta := h.metaRegistry.GetDirectiveMetadata(ref.Node)
-		pipeMeta := h.metaRegistry.GetPipeMetadata(ref.Node)
+		isNgModule := reader.GetNgModuleMetadata(ref.Node) != nil
+		dirMeta := reader.GetDirectiveMetadata(ref.Node)
+		pipeMeta := reader.GetPipeMetadata(ref.Node)
 
 		isStandaloneDirectiveOrPipe := false
 		if dirMeta != nil && dirMeta.Standalone {
