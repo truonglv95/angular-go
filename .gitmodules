@@ -8,3 +8,6 @@
 [submodule "_submodules/angular-cli"]
 	path = _submodules/angular-cli
 	url = https://github.com/angular/angular-cli
+[submodule "_submodules/angular"]
+	path = _submodules/angular
+	url = https://github.com/angular/angular
