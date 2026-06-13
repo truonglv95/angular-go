@@ -50,6 +50,12 @@ func extractHmrDependencies(
 		classDebugInfo.VisitExpression(visitor, nil)
 	}
 
+	// HMR update modules re-evaluate pieces of decorator metadata and factory
+	// expressions in isolation. Some of those references originate from the TS
+	// decorator arguments rather than a translated output expression, for example
+	// @Inject(SOME_TOKEN) or providers: [forwardRef(() => Service)].
+	visitor.addDecoratorArgumentIdentifiers(node.AsNode())
+
 	sourceFile := ast.GetSourceFileOfNode(node.AsNode())
 	availableTopLevel := getTopLevelDeclarationNames(sourceFile)
 
@@ -177,6 +183,28 @@ func (v *potentialTopLevelReadsVisitor) VisitWrappedNodeExpr(astExpr *output.Wra
 	return v.RecursiveAstVisitor.VisitWrappedNodeExpr(astExpr, context)
 }
 
+func (v *potentialTopLevelReadsVisitor) addDecoratorArgumentIdentifiers(node *ast.Node) {
+	if node == nil {
+		return
+	}
+	if node.Kind == ast.KindDecorator {
+		expr := node.AsDecorator().Expression
+		if expr != nil && expr.Kind == ast.KindCallExpression {
+			call := expr.AsCallExpression()
+			if call.Arguments != nil {
+				for _, arg := range call.Arguments.Nodes {
+					v.addAllTopLevelIdentifiers(arg)
+				}
+			}
+		}
+		return
+	}
+	node.ForEachChild(func(child *ast.Node) bool {
+		v.addDecoratorArgumentIdentifiers(child)
+		return false
+	})
+}
+
 func (v *potentialTopLevelReadsVisitor) addAllTopLevelIdentifiers(node *ast.Node) {
 	if node == nil {
 		return
@@ -276,6 +304,10 @@ func (v *potentialTopLevelReadsVisitor) isTopLevelIdentifierReference(identifier
 
 	if parent.Kind == ast.KindReturnStatement {
 		return parent.AsReturnStatement().Expression == node
+	}
+
+	if parent.Kind == ast.KindArrowFunction {
+		return parent.AsArrowFunction().Body == node
 	}
 
 	if parent.Kind == ast.KindVariableDeclaration {
@@ -580,4 +612,3 @@ func findImportInfo(sourceFile *ast.SourceFile, symbol string) (moduleSpecifier 
 	}
 	return "", "", false, false, false
 }
-

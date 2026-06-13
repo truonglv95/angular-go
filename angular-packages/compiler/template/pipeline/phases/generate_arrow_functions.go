@@ -2,7 +2,6 @@ package phases
 
 import (
 	"errors"
-	"strconv"
 
 	"github.com/microsoft/typescript-go/angular-packages/compiler/output"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/template/pipeline/compilation"
@@ -10,7 +9,6 @@ import (
 )
 
 func GenerateArrowFunctions(job compilation.CompilationJob) {
-	nextFnId := 0
 	for _, unit := range job.GetUnits() {
 		for _, op := range unit.GetCreate().Ops {
 			if repeater, ok := op.(*ir.RepeaterCreateOp); ok && repeater.TrackByOps != nil {
@@ -35,13 +33,10 @@ func GenerateArrowFunctions(job compilation.CompilationJob) {
 					}
 					
 					trackByFn := output.NewArrowFunctionExpr(params, body, nil, nil, nil)
-					name := "_forTrack" + strconv.Itoa(nextFnId)
-					nextFnId++
-					
 					if pool, ok := cj.Pool.(interface {
 						GetSharedFunctionReference(fn output.Expression, name string, unique bool) output.Expression
 					}); ok {
-						repeater.TrackByFn = pool.GetSharedFunctionReference(trackByFn, name, false)
+						repeater.TrackByFn = pool.GetSharedFunctionReference(trackByFn, "_forTrack", true)
 					}
 				}
 			}

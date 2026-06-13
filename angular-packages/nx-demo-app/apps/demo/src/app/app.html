@@ -1,4 +1,38 @@
-<app-child [baseTitle]="'test'"></app-child>
-<app-child></app-child>
-<app-non-standalone></app-non-standalone>
-<app-component-a [title]="'t'" [baseInput]="'t'" [grandBaseInput]="'t'"></app-component-a>
+<main class="demo-shell">
+  <section class="style-probe">
+    <div class="style-probe__header">
+      <span class="style-probe__status"></span>
+      <div>
+        <h1>Angular Go style probe</h1>
+        <p>SCSS variables, nesting, maps, and mixins are active 2.</p>
+      </div>
+    </div>
+
+    <div class="style-probe__chips">
+      <span>local sass package</span>
+      <span>component scss</span>
+      <span>hmr visible</span>
+    </div>
+
+    <nav class="widget-nav" aria-label="Lazy widget routes">
+      <a routerLink="/widgets/module" routerLinkActive="is-active">Module widget</a>
+      <a routerLink="/widgets/standalone" routerLinkActive="is-active">Standalone widget</a>
+      <a routerLink="/compiler-stress" routerLinkActive="is-active">Compiler stress</a>
+    </nav>
+  </section>
+
+  <section class="component-grid">
+    <app-child [baseTitle]="'test'"></app-child>
+    <app-child></app-child>
+    <app-non-standalone></app-non-standalone>
+    <app-component-a [title]="'t'" [baseInput]="'t'" [grandBaseInput]="'t'"></app-component-a>
+    <app-di-case1></app-di-case1>
+    <app-di-case2></app-di-case2>
+    <app-di-case3></app-di-case3>
+    <app-di-case4></app-di-case4>
+  </section>
+
+  <section class="lazy-widget-host">
+    <router-outlet></router-outlet>
+  </section>
+</main>

@@ -266,10 +266,15 @@ func injectDependencies(deps []R3DependencyMetadata, target FactoryTarget) []out
 }
 
 func compileInjectDependency(dep R3DependencyMetadata, target FactoryTarget, index int) output.Expression {
-	if dep.Token == nil {
+	if dep.AttributeNameType != nil {
+		// @Attribute() dependencies are resolved from the host element's static
+		// attributes, not through the DI token inferred from the parameter type.
+		return ImportExpr(*Identifiers.InjectAttribute).
+			CallFn([]output.Expression{dep.AttributeNameType}, nil, false, nil)
+	} else if dep.Token == nil {
 		return ImportExpr(*Identifiers.InvalidFactoryDep).
 			CallFn([]output.Expression{LiteralExpr(index)}, nil, false, nil)
-	} else if dep.AttributeNameType == nil {
+	} else {
 		// Build up the injection flags according to the metadata.
 		flags := int(core.InjectFlagsDefault)
 		if dep.Self {
@@ -300,10 +305,6 @@ func compileInjectDependency(dep R3DependencyMetadata, target FactoryTarget, ind
 		}
 		injectFn := getInjectFn(target)
 		return ImportExpr(*injectFn).CallFn(injectArgs, nil, false, nil)
-	} else {
-		// @Attribute() dependency - use injectAttribute.
-		return ImportExpr(*Identifiers.InjectAttribute).
-			CallFn([]output.Expression{dep.Token}, nil, false, nil)
 	}
 }
 

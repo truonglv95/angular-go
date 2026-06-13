@@ -2,6 +2,7 @@ package annotations_local
 
 import (
 	"github.com/microsoft/typescript-go/angular-packages/compiler"
+	"github.com/microsoft/typescript-go/angular-packages/compiler/output"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/render3"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/imports"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/annotations"
@@ -63,11 +64,21 @@ func (h *DirectiveLocalDecoratorHandler) Analyze(node *ast.ClassDeclaration, dec
 					modifiers = member.AsMethodDeclaration().Modifiers()
 					nameNode = member.AsMethodDeclaration().Name()
 				}
-				if modifiers != nil {
-					propName := ""
-					if nameNode != nil && nameNode.Kind == ast.KindIdentifier {
-						propName = nameNode.AsIdentifier().Text
+				propName := ""
+				if nameNode != nil && nameNode.Kind == ast.KindIdentifier {
+					propName = nameNode.AsIdentifier().Text
+				}
+				if member.Kind == ast.KindPropertyDeclaration && propName != "" {
+					if initVal := member.Initializer(); initVal != nil {
+						if meta, ok := parseLocalSignalInput(initVal, propName); ok {
+							analysis.Inputs[propName] = meta
+						} else if meta, ok := parseLocalModelInput(initVal, propName); ok {
+							analysis.Inputs[propName] = meta
+							analysis.Outputs[propName] = meta.BindingPropertyName + "Change"
+						}
 					}
+				}
+				if modifiers != nil {
 					var propDecs []*ast.Node
 					for _, mod := range modifiers.Nodes {
 						if mod.Kind == ast.KindDecorator {
@@ -217,6 +228,8 @@ func (h *DirectiveLocalDecoratorHandler) Analyze(node *ast.ClassDeclaration, dec
 			} else if assign.Initializer.Kind == ast.KindFalseKeyword {
 				analysis.IsStandalone = false
 			}
+		case "providers":
+			analysis.Providers = output.NewWrappedNodeExpr(assign.Initializer, nil, nil, nil)
 		}
 	}
 
@@ -278,4 +291,7 @@ func (h *DirectiveLocalDecoratorHandler) GetSemanticSymbol(node *ast.ClassDeclar
 
 
 func (h *DirectiveLocalDecoratorHandler) Register(node *ast.ClassDeclaration, analysisData any) {
+	analysis := analysisData.(*annotations.DirectiveAnalysis)
+	globalHandler := annotations.NewDirectiveDecoratorHandler(h.host, h.metaRegistry, h.metaRegistry)
+	globalHandler.Register(node, analysis)
 }

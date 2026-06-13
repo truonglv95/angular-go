@@ -11,11 +11,16 @@ import { resolveGoNgcPath } from '../../compiler-path.js';
 const angularGo = ((angularGoModule as any).default?.default || (angularGoModule as any).default || angularGoModule) as any;
 const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+export const ANGULAR_GO_POLYFILLS_ENTRY = 'angular-go:polyfills';
 
 export interface GlobalEntry {
   input: string;
   bundleName: string;
   inject: boolean;
+}
+
+export interface GlobalStyleBundle extends GlobalEntry {
+  originalInputs: string[];
 }
 
 export default createBuilder<any, BuilderOutput>(async (options, context): Promise<BuilderOutput> => {
@@ -152,8 +157,13 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
 
     const polyfills = normalizeStringList(options.polyfills || []);
     const styles = normalizeGlobalEntries(options.styles || [], 'style');
+    const styleBundles = createGlobalStyleBundles(
+      styles,
+      workspaceRoot,
+      path.resolve(workspaceRoot, '.angular/cache/angular-go-global-styles')
+    );
     const scripts = normalizeGlobalEntries(options.scripts || [], 'script');
-    const globalStyleNames = new Set(styles.map((entry) => entry.bundleName));
+    const globalStyleNames = new Set(styleBundles.map((entry) => entry.bundleName));
 
     const viteConfig: any = {
       root: path.dirname(browserEntry),
@@ -169,7 +179,7 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
         cssMinify: cssMinify,
       },
       plugins: [
-        createPolyfillMainPlugin(browserEntry, polyfills, workspaceRoot, tsConfigPath),
+        createPolyfillBundlePlugin(polyfills, workspaceRoot, tsConfigPath),
         removeGlobalStyleJsChunksPlugin(globalStyleNames),
         angularGo({
           mode: 'server',
@@ -217,20 +227,24 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
     // Index file configuration
     let indexInput = '';
     let indexOutput = 'index.html';
+    const defaultIndexInput = path.join(path.dirname(path.relative(workspaceRoot, browserEntry)), 'index.html');
     if (options.index !== false) {
       if (typeof options.index === 'string') {
         indexInput = options.index;
       } else if (options.index && typeof options.index === 'object') {
-        indexInput = options.index.input || 'src/index.html';
+        indexInput = options.index.input || defaultIndexInput;
         indexOutput = options.index.output || 'index.html';
       } else {
-        indexInput = 'src/index.html';
+        indexInput = defaultIndexInput;
       }
     }
 
     const entryPoints: Record<string, string> = {
       main: browserEntry
     };
+    if (polyfills.length > 0) {
+      entryPoints['polyfills'] = ANGULAR_GO_POLYFILLS_ENTRY;
+    }
     if (indexInput) {
       const indexHtmlPath = path.resolve(workspaceRoot, indexInput);
       if (fs.existsSync(indexHtmlPath)) {
@@ -239,10 +253,10 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
     }
 
     // Style inputs
-    for (let i = 0; i < styles.length; i++) {
-      const stylePath = path.resolve(workspaceRoot, styles[i].input);
+    for (let i = 0; i < styleBundles.length; i++) {
+      const stylePath = path.resolve(workspaceRoot, styleBundles[i].input);
       if (fs.existsSync(stylePath)) {
-        entryPoints[styles[i].bundleName] = stylePath;
+        entryPoints[styleBundles[i].bundleName] = stylePath;
       }
     }
 
@@ -260,7 +274,7 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
       output: {
         entryFileNames: useJsHash ? 'assets/[name]-[hash].js' : 'assets/[name].js',
         chunkFileNames: useJsHash 
-          ? (namedChunks ? 'assets/[name]-[hash].js' : 'assets/[hash].js') 
+          ? (namedChunks ? 'assets/[name]-[hash].js' : 'assets/chunk-[hash].js') 
           : 'assets/[name].js',
         assetFileNames: useAssetHash
           ? `${mediaSubdir}/[name]-[hash].[ext]`
@@ -273,14 +287,37 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
 
     // Post-process index.html to inject global styles and scripts
     const finalIndexHtmlPath = path.resolve(absoluteOutDir, indexOutput);
+    if (indexInput && options.index !== false) {
+      const indexHtmlPath = path.resolve(workspaceRoot, indexInput);
+      if (!fs.existsSync(finalIndexHtmlPath) && fs.existsSync(indexHtmlPath)) {
+        fs.mkdirSync(path.dirname(finalIndexHtmlPath), { recursive: true });
+        fs.copyFileSync(indexHtmlPath, finalIndexHtmlPath);
+      }
+    }
     if (indexInput && fs.existsSync(finalIndexHtmlPath) && options.index !== false) {
       let htmlContent = fs.readFileSync(finalIndexHtmlPath, 'utf8');
+      const injectedModuleScripts: string[] = [];
+      const entryScriptOrder = polyfills.length > 0 ? ['polyfills', 'main'] : ['main'];
+
+      for (const entryName of entryScriptOrder) {
+        for (const out of outputs) {
+          const chunk = out.output.find((item: any) =>
+            item.type === 'chunk' && item.isEntry && item.name === entryName
+          );
+          if (chunk?.fileName) {
+            const src = `${assetUrlBase}${chunk.fileName}`;
+            if (!htmlContent.includes(`src="${src}"`)) {
+              injectedModuleScripts.push(src);
+            }
+          }
+        }
+      }
 
       // Find compiled CSS files for style entry points
       const injectedStyles: string[] = [];
-      for (let i = 0; i < styles.length; i++) {
-        if (!styles[i].inject) continue;
-        const bundleName = styles[i].bundleName;
+      for (let i = 0; i < styleBundles.length; i++) {
+        if (!styleBundles[i].inject) continue;
+        const bundleName = styleBundles[i].bundleName;
         for (const out of outputs) {
           for (const item of out.output) {
             if (item.type === 'asset' && item.fileName.endsWith('.css') && 
@@ -313,6 +350,11 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
       }
 
       // Inject script tags before </body>
+      if (injectedModuleScripts.length > 0) {
+        const scriptTags = injectedModuleScripts.map(src => `<script type="module" src="${src}"></script>`).join('\n  ');
+        htmlContent = htmlContent.replace('</body>', `  ${scriptTags}\n</body>`);
+      }
+
       if (injectedScripts.length > 0) {
         const scriptTags = injectedScripts.map(src => `<script src="${src}"></script>`).join('\n  ');
         htmlContent = htmlContent.replace('</body>', `  ${scriptTags}\n</body>`);
@@ -361,9 +403,11 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
       }
 
       if (preloadInitial) {
+        const injectedModuleScriptSet = new Set(injectedModuleScripts);
         const preloadTags = collectInitialChunkFiles(outputs)
           .filter(fileName => fileName.endsWith('.js') && !fileName.includes('index'))
           .map(fileName => `${assetUrlBase}${fileName}`)
+          .filter(url => !injectedModuleScriptSet.has(url))
           .filter(url => !htmlContent.includes(`href="${url}"`))
           .map(url => `<link rel="modulepreload" href="${url}">`);
         if (preloadTags.length > 0) {
@@ -372,7 +416,7 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
       }
 
       fs.writeFileSync(finalIndexHtmlPath, htmlContent, 'utf8');
-      context.logger.info(`Injected ${injectedStyles.length} styles and ${injectedScripts.length} scripts into ${indexOutput}`);
+      context.logger.info(`Injected ${injectedStyles.length} styles and ${injectedScripts.length + injectedModuleScripts.length} scripts into ${indexOutput}`);
       if (useSri) {
         context.logger.info(`Applied Subresource Integrity (SRI) hashes to script and style tags`);
       }
@@ -669,6 +713,9 @@ export default bytes;`;
 }
 
 export function normalizeStringList(value: unknown): string[] {
+  if (typeof value === 'string') {
+    return [value];
+  }
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
 }
 
@@ -688,7 +735,12 @@ export function normalizeGlobalEntries(value: unknown, fallbackPrefix: string): 
   return value.flatMap((entry, index): GlobalEntry[] => {
     const fallback = `${fallbackPrefix}-${index}`;
     if (typeof entry === 'string') {
-      return [{ input: entry, bundleName: getDefaultBundleName(entry, fallback), inject: true }];
+      const defaultBundleName = fallbackPrefix === 'style'
+        ? 'styles'
+        : fallbackPrefix === 'script'
+          ? 'scripts'
+          : getDefaultBundleName(entry, fallback);
+      return [{ input: entry, bundleName: defaultBundleName, inject: true }];
     }
     if (entry && typeof entry === 'object' && typeof (entry as any).input === 'string') {
       return [{
@@ -703,12 +755,67 @@ export function normalizeGlobalEntries(value: unknown, fallbackPrefix: string): 
   });
 }
 
-function createPolyfillMainPlugin(browserEntry: string, polyfills: string[], workspaceRoot: string, tsConfigPath: string) {
-  const normalizedBrowserEntry = path.resolve(browserEntry);
+export function createGlobalStyleBundles(entries: GlobalEntry[], workspaceRoot: string, cacheDir: string): GlobalStyleBundle[] {
+  const groups = new Map<string, GlobalEntry[]>();
+  for (const entry of entries) {
+    const key = `${entry.bundleName}\u0000${entry.inject ? 'inject' : 'no-inject'}`;
+    const group = groups.get(key);
+    if (group) {
+      group.push(entry);
+    } else {
+      groups.set(key, [entry]);
+    }
+  }
+
+  const bundles: GlobalStyleBundle[] = [];
+  for (const group of groups.values()) {
+    const first = group[0];
+    if (group.length === 1) {
+      bundles.push({ ...first, originalInputs: [first.input] });
+      continue;
+    }
+
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const generatedInput = path.join(cacheDir, `${sanitizeBundleFileName(first.bundleName)}.scss`);
+    const imports = group.map((entry, index) => {
+      const absoluteInput = path.resolve(workspaceRoot, entry.input);
+      return `@use ${JSON.stringify(toSassImportPath(cacheDir, absoluteInput))} as angularGoGlobal${index};`;
+    });
+    fs.writeFileSync(generatedInput, `${imports.join('\n')}\n`);
+    bundles.push({
+      input: generatedInput,
+      bundleName: first.bundleName,
+      inject: first.inject,
+      originalInputs: group.map((entry) => entry.input)
+    });
+  }
+
+  return bundles;
+}
+
+function sanitizeBundleFileName(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._-]/g, '-');
+}
+
+function toSassImportPath(fromDir: string, absoluteInput: string): string {
+  let relativePath = path.relative(fromDir, absoluteInput).split(path.sep).join('/');
+  if (!relativePath.startsWith('.')) {
+    relativePath = `./${relativePath}`;
+  }
+  return relativePath;
+}
+
+export function createPolyfillBundlePlugin(polyfills: string[], workspaceRoot: string, tsConfigPath: string) {
   return {
-    name: 'angular-go-polyfill-main',
-    transform(code: string, id: string) {
-      if (polyfills.length === 0 || path.resolve(id.split('?', 1)[0]) !== normalizedBrowserEntry) {
+    name: 'angular-go-polyfill-entry',
+    resolveId(id: string) {
+      if (id === ANGULAR_GO_POLYFILLS_ENTRY) {
+        return `\0${ANGULAR_GO_POLYFILLS_ENTRY}`;
+      }
+      return null;
+    },
+    load(id: string) {
+      if (polyfills.length === 0 || id !== `\0${ANGULAR_GO_POLYFILLS_ENTRY}`) {
         return null;
       }
       const imports = polyfills.map((polyfill) => {
@@ -727,7 +834,7 @@ function createPolyfillMainPlugin(browserEntry: string, polyfills: string[], wor
         return `import ${JSON.stringify(toViteImportPath(resolved))};`;
       });
       return {
-        code: `${imports.join('\n')}\n${code}`,
+        code: `${imports.join('\n')}\n`,
         map: null
       };
     }

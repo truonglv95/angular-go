@@ -193,23 +193,25 @@ func (recv *FileDependencyGraph) UpdateWithPhysicalChanges(previous FileDependen
 	var queue []string
 
 	for path := range changedTsPaths {
-		affected[path] = true
-		queue = append(queue, path)
+		cPath := canonicalizePath(path)
+		affected[cPath] = true
+		queue = append(queue, cPath)
 	}
 
 	for path := range deletedTsPaths {
-		affected[path] = true
-		queue = append(queue, path)
-		delete(recv.depsByFile, path)
-		delete(recv.resourceDepsByFile, path)
+		cPath := canonicalizePath(path)
+		affected[cPath] = true
+		queue = append(queue, cPath)
+		delete(recv.depsByFile, cPath)
+		delete(recv.resourceDepsByFile, cPath)
 		for k, v := range recv.reverseDeps {
-			delete(v, path)
+			delete(v, cPath)
 			if len(v) == 0 {
 				delete(recv.reverseDeps, k)
 			}
 		}
 		for k, v := range recv.reverseResourceDeps {
-			delete(v, path)
+			delete(v, cPath)
 			if len(v) == 0 {
 				delete(recv.reverseResourceDeps, k)
 			}

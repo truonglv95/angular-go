@@ -1,13 +1,12 @@
 package annotations
 
 import (
-
 	"github.com/microsoft/typescript-go/angular-packages/compiler"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/output"
 	"github.com/microsoft/typescript-go/angular-packages/compiler/render3"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/imports"
-	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/reflection"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/ngtsc/transform"
+	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/reflection"
 	"github.com/microsoft/typescript-go/angular-packages/compiler_cli/translator"
 	"github.com/microsoft/typescript-go/internal/ast"
 )
@@ -118,7 +117,7 @@ func (h *InjectableDecoratorHandler) CompileFull(node *ast.ClassDeclaration, ana
 
 	compiled := render3.CompileInjectableFromMetadata(meta)
 
-		visitor := translator.NewExpressionTranslatorVisitor(factory, importMgr, ast.GetSourceFileOfNode(node.AsNode()).AsNode(), translator.TranslatorOptions{})
+	visitor := translator.NewExpressionTranslatorVisitor(factory, importMgr, ast.GetSourceFileOfNode(node.AsNode()).AsNode(), translator.TranslatorOptions{})
 
 	var initializerNode *ast.Node
 	if compiled.Expression != nil {
@@ -182,8 +181,6 @@ func (h *InjectableDecoratorHandler) CompileFull(node *ast.ClassDeclaration, ana
 		}
 	}
 
-
-
 	var extraStatements []*ast.Node
 	if classMetadataNode != nil {
 		extraStatements = append(extraStatements, classMetadataNode)
@@ -228,11 +225,11 @@ func extractDependenciesInj(refHost reflection.ReflectionHost, classDecl *ast.No
 				dep.Host = true
 			case "Inject":
 				if len(dec.Args) > 0 {
-					dep.Token = extractTokenFromNodeInj(dec.Args[0])
+					dep.Token = extractDITokenFromNode(dec.Args[0])
 				}
 			case "Attribute":
 				if len(dec.Args) > 0 {
-					dep.AttributeNameType = extractTokenFromNodeInj(dec.Args[0])
+					dep.AttributeNameType = extractDITokenFromNode(dec.Args[0])
 				}
 			}
 		}
@@ -254,33 +251,13 @@ func extractDependenciesInj(refHost reflection.ReflectionHost, classDecl *ast.No
 					dep.Token = output.NewLiteralExpr("LOCAL_UNKNOWN", nil, nil, nil)
 				}
 			case *reflection.UnavailableTypeValueReference:
-				dep.Token = output.NewLiteralExpr("INVALID_TOKEN", nil, nil, nil)
+				dep.Token = nil
 			default:
-				dep.Token = output.NewLiteralExpr(nil, nil, nil, nil)
+				dep.Token = nil
 			}
 		}
 
 		deps[i] = dep
 	}
 	return deps
-}
-
-func extractTokenFromNodeInj(node *ast.Node) output.Expression {
-	if node == nil {
-		return output.NewLiteralExpr(nil, nil, nil, nil)
-	}
-	if ast.IsStringLiteral(node) {
-		return output.NewLiteralExpr(node.AsStringLiteral().Text, nil, nil, nil)
-	}
-	if ast.IsIdentifier(node) {
-		return output.NewReadVarExpr(node.AsIdentifier().Text, nil, nil, nil)
-	}
-	if ast.IsPropertyAccessExpression(node) {
-		pa := node.AsPropertyAccessExpression()
-		recv := extractTokenFromNodeInj(pa.Expression)
-		if pa.Name().Kind == ast.KindIdentifier {
-			return output.NewReadPropExpr(recv, pa.Name().AsIdentifier().Text, nil, nil, nil, false)
-		}
-	}
-	return output.NewLiteralExpr("UNKNOWN_TOKEN", nil, nil, nil)
 }

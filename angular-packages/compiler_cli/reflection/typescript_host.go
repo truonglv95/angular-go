@@ -277,6 +277,8 @@ func (h *TypeScriptReflectionHost) typeToValue(typeNode *ast.Node) TypeValueRefe
 				if lit.Literal != nil && lit.Literal.Kind == ast.KindNullKeyword {
 					continue
 				}
+			} else if t.Kind == ast.KindUndefinedKeyword {
+				continue
 			}
 			nonNullTypes = append(nonNullTypes, t)
 		}
@@ -297,6 +299,12 @@ func (h *TypeScriptReflectionHost) typeToValue(typeNode *ast.Node) TypeValueRefe
 	// Resolve to symbol and its local origin
 	local, decl, symbolNames := h.resolveTypeSymbols(typeName)
 	if local == nil || decl == nil {
+		if fallback := fallbackResolveImport(leftMostForFallback(typeName), symbolNamesForFallback(typeName)); fallback != nil {
+			return fallback
+		}
+		if fallback := fallbackResolveLocal(leftMostForFallback(typeName)); fallback != nil {
+			return fallback
+		}
 		return &UnavailableTypeValueReference{Reason: "unknown reference"}
 	}
 
@@ -307,6 +315,12 @@ func (h *TypeScriptReflectionHost) typeToValue(typeNode *ast.Node) TypeValueRefe
 	if decl.ValueDeclaration == nil {
 		// Check if it is a type-only decl
 		if len(decl.Declarations) == 0 {
+			if fallback := fallbackResolveImport(leftMostForFallback(typeName), symbolNamesForFallback(typeName)); fallback != nil {
+				return fallback
+			}
+			if fallback := fallbackResolveLocal(leftMostForFallback(typeName)); fallback != nil {
+				return fallback
+			}
 			return &UnavailableTypeValueReference{Reason: "no value declaration"}
 		}
 		d := decl.Declarations[0]
@@ -480,6 +494,173 @@ func entityNameToExpr(node *ast.Node) *ast.Node {
 	}
 	return nil
 }
+
+func leftMostForFallback(typeName *ast.Node) *ast.Node {
+	leftMost := typeName
+	for ast.IsQualifiedName(leftMost) {
+		leftMost = leftMost.AsQualifiedName().Left
+	}
+	return leftMost
+}
+
+func symbolNamesForFallback(typeName *ast.Node) []string {
+	symbolNames := []string{}
+	leftMost := typeName
+	for ast.IsQualifiedName(leftMost) {
+		qn := leftMost.AsQualifiedName()
+		symbolNames = append([]string{qn.Right.Text()}, symbolNames...)
+		leftMost = qn.Left
+	}
+	if ast.IsIdentifier(leftMost) {
+		symbolNames = append([]string{leftMost.AsIdentifier().Text}, symbolNames...)
+	}
+	return symbolNames
+}
+
+func fallbackResolveImport(leftMost *ast.Node, symbolNames []string) TypeValueReference {
+	if !ast.IsIdentifier(leftMost) {
+		return nil
+	}
+	identName := leftMost.AsIdentifier().Text
+	sourceFile := ast.GetSourceFileOfNode(leftMost)
+	if sourceFile == nil || sourceFile.Statements == nil {
+		return nil
+	}
+
+	for _, stmtNode := range sourceFile.Statements.Nodes {
+		if !ast.IsImportDeclaration(stmtNode) {
+			continue
+		}
+		importDecl := stmtNode.AsImportDeclaration()
+		if importDecl.ImportClause == nil {
+			continue
+		}
+		clause := importDecl.ImportClause.AsImportClause()
+		if clause.PhaseModifier == ast.KindTypeKeyword {
+			continue
+		}
+
+		// check default import
+		if clause.Name() != nil && clause.Name().AsIdentifier().Text == identName {
+			if len(symbolNames) > 1 {
+				return nil
+			}
+			return &LocalTypeValueReference{
+				Expression:             clause.Name(),
+				DefaultImportStatement: importDecl.AsNode(),
+			}
+		}
+
+		// check named imports
+		if clause.NamedBindings != nil {
+			if ast.IsNamedImports(clause.NamedBindings) {
+				namedImports := clause.NamedBindings.AsNamedImports()
+				for _, el := range namedImports.Elements.Nodes {
+					spec := el.AsImportSpecifier()
+					if spec.IsTypeOnly {
+						continue
+					}
+					if spec.Name().Text() == identName {
+						var importedName string
+						if spec.PropertyName != nil {
+							importedName = spec.PropertyName.Text()
+						} else {
+							importedName = spec.Name().Text()
+						}
+						moduleSpec := importDecl.ModuleSpecifier
+						if moduleSpec != nil && ast.IsStringLiteral(moduleSpec) {
+							moduleName := moduleSpec.AsStringLiteral().Text
+							
+							if len(symbolNames) > 1 {
+								return nil
+							}
+
+							return &ImportedTypeValueReference{
+								ModuleName:       moduleName,
+								ImportedName:     importedName,
+								ValueDeclaration: nil,
+							}
+						}
+					}
+				}
+			} else if ast.IsNamespaceImport(clause.NamedBindings) {
+				ns := clause.NamedBindings.AsNamespaceImport()
+				if ns.Name().Text() == identName {
+					if len(symbolNames) < 2 {
+						return &UnavailableTypeValueReference{Reason: "namespace import used directly"}
+					}
+					importedName := symbolNames[1]
+					moduleSpec := importDecl.ModuleSpecifier
+					if moduleSpec != nil && ast.IsStringLiteral(moduleSpec) {
+						moduleName := moduleSpec.AsStringLiteral().Text
+						return &ImportedTypeValueReference{
+							ModuleName:       moduleName,
+							ImportedName:     importedName,
+							ValueDeclaration: nil,
+						}
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func fallbackResolveLocal(leftMost *ast.Node) TypeValueReference {
+	if !ast.IsIdentifier(leftMost) {
+		return nil
+	}
+	identName := leftMost.AsIdentifier().Text
+	sourceFile := ast.GetSourceFileOfNode(leftMost)
+	if sourceFile == nil || sourceFile.Statements == nil {
+		return nil
+	}
+	for _, stmtNode := range sourceFile.Statements.Nodes {
+		if stmtNode.Kind == ast.KindClassDeclaration {
+			classDecl := stmtNode.AsClassDeclaration()
+			if classDecl.Name() != nil && ast.IsIdentifier(classDecl.Name()) && classDecl.Name().AsIdentifier().Text == identName {
+				return &LocalTypeValueReference{
+					Expression:             classDecl.Name(),
+					DefaultImportStatement: nil,
+				}
+			}
+		} else if stmtNode.Kind == ast.KindVariableStatement {
+			varStmt := stmtNode.AsVariableStatement()
+			if varStmt.DeclarationList != nil {
+				varList := varStmt.DeclarationList.AsVariableDeclarationList()
+				if varList.Declarations != nil {
+					for _, el := range varList.Declarations.Nodes {
+						decl := el.AsVariableDeclaration()
+						if decl.Name() != nil && ast.IsIdentifier(decl.Name()) && decl.Name().AsIdentifier().Text == identName {
+							return &LocalTypeValueReference{
+								Expression:             decl.Name(),
+								DefaultImportStatement: nil,
+							}
+						}
+					}
+				}
+			}
+		} else if stmtNode.Kind == ast.KindFunctionDeclaration {
+			funcDecl := stmtNode.AsFunctionDeclaration()
+			if funcDecl.Name() != nil && ast.IsIdentifier(funcDecl.Name()) && funcDecl.Name().AsIdentifier().Text == identName {
+				return &LocalTypeValueReference{
+					Expression:             funcDecl.Name(),
+					DefaultImportStatement: nil,
+				}
+			}
+		} else if stmtNode.Kind == ast.KindEnumDeclaration {
+			enumDecl := stmtNode.AsEnumDeclaration()
+			if enumDecl.Name() != nil && ast.IsIdentifier(enumDecl.Name()) && enumDecl.Name().AsIdentifier().Text == identName {
+				return &LocalTypeValueReference{
+					Expression:             enumDecl.Name(),
+					DefaultImportStatement: nil,
+				}
+			}
+		}
+	}
+	return nil
+}
+
 
 
 

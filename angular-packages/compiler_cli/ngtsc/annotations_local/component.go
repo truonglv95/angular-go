@@ -83,11 +83,21 @@ func (h *ComponentLocalDecoratorHandler) Analyze(node *ast.ClassDeclaration, dec
 					modifiers = member.AsMethodDeclaration().Modifiers()
 					nameNode = member.AsMethodDeclaration().Name()
 				}
-				if modifiers != nil {
-					propName := ""
-					if nameNode != nil && nameNode.Kind == ast.KindIdentifier {
-						propName = nameNode.AsIdentifier().Text
+				propName := ""
+				if nameNode != nil && nameNode.Kind == ast.KindIdentifier {
+					propName = nameNode.AsIdentifier().Text
+				}
+				if member.Kind == ast.KindPropertyDeclaration && propName != "" {
+					if initVal := member.Initializer(); initVal != nil {
+						if meta, ok := parseLocalSignalInput(initVal, propName); ok {
+							analysis.Inputs[propName] = meta
+						} else if meta, ok := parseLocalModelInput(initVal, propName); ok {
+							analysis.Inputs[propName] = meta
+							analysis.Outputs[propName] = meta.BindingPropertyName + "Change"
+						}
 					}
+				}
+				if modifiers != nil {
 					var propDecs []*ast.Node
 					for _, mod := range modifiers.Nodes {
 						if mod.Kind == ast.KindDecorator {
@@ -279,6 +289,10 @@ func (h *ComponentLocalDecoratorHandler) Analyze(node *ast.ClassDeclaration, dec
 			}
 		case "animations":
 			analysis.Animations = output.NewWrappedNodeExpr(assign.Initializer, nil, nil, nil)
+		case "providers":
+			analysis.Providers = output.NewWrappedNodeExpr(assign.Initializer, nil, nil, nil)
+		case "viewProviders":
+			analysis.ViewProviders = output.NewWrappedNodeExpr(assign.Initializer, nil, nil, nil)
 		case "imports":
 			// WE DO NOT PARSE IMPORTS HERE.
 			// Imports require the TypeChecker (to trace the identifier back to its declaration module).
@@ -367,4 +381,7 @@ func (h *ComponentLocalDecoratorHandler) GetSemanticReferenceSymbols(node *ast.C
 }
 
 func (h *ComponentLocalDecoratorHandler) Register(node *ast.ClassDeclaration, analysisData any) {
+	analysis := analysisData.(*annotations.ComponentAnalysis)
+	globalHandler := annotations.NewComponentDecoratorHandler(h.host, h.isCore, h.metaRegistry, h.metaRegistry, h.scopeRegistry, nil, h.enableHmr, h.styleIncludePaths)
+	globalHandler.Register(node, analysis)
 }

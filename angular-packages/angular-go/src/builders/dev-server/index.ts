@@ -8,7 +8,7 @@ import { resolveGoNgcPath } from '../../compiler-path.js';
 import { formatAngularDevBundleOutput, formatAngularDevServerReadyOutput } from '../shared/angular-cli-dev-output.js';
 import { bundleCompilerOutputsWithRolldown } from '../shared/app-bundler.js';
 import { collectBundleSizeSummary, CompilerOutputFile } from '../shared/bundle-stats.js';
-import { normalizeStringList, normalizeGlobalEntries } from '../application/index.js';
+import { ANGULAR_GO_POLYFILLS_ENTRY, createGlobalStyleBundles, createPolyfillBundlePlugin, normalizeStringList, normalizeGlobalEntries } from '../application/index.js';
 import { startSpinner, stopSpinner } from '../shared/spinner.js';
 
 const angularGo = ((angularGoModule as any).default?.default || (angularGoModule as any).default || angularGoModule) as any;
@@ -28,25 +28,11 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
     let buildOptions: any = {};
     if (options.buildTarget) {
       const parsed = parseBuildTarget(options.buildTarget);
-      buildOptions = await context.getTargetOptions({ project: parsed.project, target: parsed.target }) as any;
-      if (parsed.configuration) {
-        const configs = parsed.configuration.split(',');
-        for (const config of configs) {
-          const configOptions = await context.getTargetOptions({
-            project: parsed.project,
-            target: parsed.target,
-            configuration: config.trim()
-          }) as any;
-          buildOptions = {
-            ...buildOptions,
-            ...configOptions,
-            define: {
-              ...(buildOptions.define || {}),
-              ...(configOptions.define || {})
-            }
-          };
-        }
-      }
+      buildOptions = await context.getTargetOptions({
+        project: parsed.project,
+        target: parsed.target,
+        ...(parsed.configuration ? { configuration: parsed.configuration } : {})
+      }) as any;
     }
 
     const tsConfigPath = path.resolve(workspaceRoot, buildOptions.tsConfig || 'tsconfig.app.json');
@@ -100,10 +86,25 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
 
     const external = buildOptions.externalDependencies || [];
 
-    const hmrEnabled = options.hmr !== undefined ? options.hmr : (options.liveReload !== false);
+    let hmrEnabled = options.hmr !== undefined ? options.hmr : (options.liveReload !== false);
     const liveReloadEnabled = options.liveReload !== false;
+    if (
+      hmrEnabled &&
+      (buildOptions.outputHashing === 'all' || buildOptions.outputHashing === 'bundles')
+    ) {
+      hmrEnabled = false;
+      context.logger.warn(
+        `Hot Module Replacement (HMR) is disabled because the 'outputHashing' option is set to '${buildOptions.outputHashing}'. ` +
+        'HMR is incompatible with this setting.'
+      );
+    }
     const polyfills = normalizeStringList(buildOptions.polyfills || []);
     const styles = normalizeGlobalEntries(buildOptions.styles || [], 'style');
+    const styleBundles = createGlobalStyleBundles(
+      styles,
+      workspaceRoot,
+      path.resolve(workspaceRoot, '.angular/cache/angular-go-global-styles')
+    );
     const scripts = normalizeGlobalEntries(buildOptions.scripts || [], 'script');
 
     // Style preprocessor options
@@ -177,17 +178,12 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
 
 
 
-        // Polyfills entry
         if (polyfills.length > 0) {
-          const firstPolyfill = polyfills[0];
-          const polyfillPath = path.resolve(workspaceRoot, firstPolyfill);
-          if (fs.existsSync(polyfillPath)) {
-            input['polyfills'] = polyfillPath;
-          }
+          input['polyfills'] = ANGULAR_GO_POLYFILLS_ENTRY;
         }
 
         // Style entry points
-        for (const entry of styles) {
+        for (const entry of styleBundles) {
           const stylePath = path.resolve(workspaceRoot, entry.input);
           if (fs.existsSync(stylePath)) {
             input[entry.bundleName] = stylePath;
@@ -299,8 +295,7 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
           styleIncludePaths,
           appBundle: true,
           appBundleEntryFileNames: [
-            path.basename(browserEntry, path.extname(browserEntry)) + '.js',
-            ...polyfills.map(value => path.basename(value, path.extname(value)) + '.js')
+            path.basename(browserEntry, path.extname(browserEntry)) + '.js'
           ],
           devBundleSummary: false, // Turn off plugin's native console.log to avoid duplicates
           onCompileStart: () => {
@@ -338,10 +333,11 @@ export default createBuilder<any, BuilderOutput>(async (options, context): Promi
             }
           }
         }),
+        createPolyfillBundlePlugin(polyfills, workspaceRoot, tsConfigPath),
         createHtmlAssetsPlugin(
           path.dirname(browserEntry),
           polyfills,
-          styles,
+          styleBundles,
           scripts,
           workspaceRoot
         ),

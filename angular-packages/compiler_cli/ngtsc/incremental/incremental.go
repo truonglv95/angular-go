@@ -289,7 +289,7 @@ func (c *IncrementalCompilation) IsFileAffected(fileName string) bool {
 	if c.affectedFiles == nil {
 		return true
 	}
-	return c.affectedFiles[fileName]
+	return c.affectedFiles[canonicalizePath(fileName)]
 }
 
 func (c *IncrementalCompilation) AffectedFiles() map[string]bool {

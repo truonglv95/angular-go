@@ -1,0 +1,23 @@
+$project-probe-accent: #7048e8;
+$project-probe-bg: #f1edff;
+
+body::after {
+  background: $project-probe-bg;
+  border: 2px solid $project-probe-accent;
+  border-radius: 8px;
+  bottom: 14px;
+  box-shadow: 0 10px 28px rgba($project-probe-accent, 0.24);
+  color: #2f1a7a;
+  content: "project.json extra SCSS loaded";
+  font: 700 12px/1.2 system-ui, sans-serif;
+  letter-spacing: 0;
+  padding: 9px 12px;
+  position: fixed;
+  right: 14px;
+  z-index: 20;
+}
+
+.component-grid {
+  border-color: rgba($project-probe-accent, 0.32);
+  box-shadow: inset 0 0 0 2px rgba($project-probe-accent, 0.18);
+}

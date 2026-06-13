@@ -120,15 +120,21 @@ func (h *DirectiveDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 
 	if len(allMembers) > 0 {
 		for _, member := range allMembers {
-			if member.Kind == ast.KindPropertyDeclaration || member.Kind == ast.KindMethodDeclaration {
+			if member.Kind == ast.KindPropertyDeclaration || member.Kind == ast.KindMethodDeclaration || member.Kind == ast.KindGetAccessor || member.Kind == ast.KindSetAccessor {
 				var modifiers *ast.ModifierList
 				var nameNode *ast.Node
 				if member.Kind == ast.KindPropertyDeclaration {
 					modifiers = member.AsPropertyDeclaration().Modifiers()
 					nameNode = member.AsPropertyDeclaration().Name()
-				} else {
+				} else if member.Kind == ast.KindMethodDeclaration {
 					modifiers = member.AsMethodDeclaration().Modifiers()
 					nameNode = member.AsMethodDeclaration().Name()
+				} else if member.Kind == ast.KindGetAccessor {
+					modifiers = member.AsGetAccessorDeclaration().Modifiers()
+					nameNode = member.AsGetAccessorDeclaration().Name()
+				} else if member.Kind == ast.KindSetAccessor {
+					modifiers = member.AsSetAccessorDeclaration().Modifiers()
+					nameNode = member.AsSetAccessorDeclaration().Name()
 				}
 				propName := ""
 				if nameNode != nil && nameNode.Kind == ast.KindIdentifier {
@@ -533,14 +539,14 @@ func (h *DirectiveDecoratorHandler) Register(node *ast.ClassDeclaration, analysi
 			}
 		}
 		h.metaRegistry.RegisterDirective(node.AsNode(), &metadata.DirectiveMeta{
-			Name:        node.Name().AsIdentifier().Text,
-			Selector:    analysis.Selector,
-			Standalone:  analysis.IsStandalone,
-			Imports:     metaImports,
-			IsComponent: false,
-			Inputs:      metaInputs,
-			Outputs:     analysis.Outputs,
-			ExportAs:    analysis.ExportAs,
+			Name:           node.Name().AsIdentifier().Text,
+			Selector:       analysis.Selector,
+			Standalone:     analysis.IsStandalone,
+			Imports:        metaImports,
+			IsComponent:    false,
+			Inputs:         metaInputs,
+			Outputs:        analysis.Outputs,
+			ExportAs:       analysis.ExportAs,
 			RequiredInputs: reqInputs,
 			HostDirectives: analysis.HostDirectives,
 			Ref: metadata.Reference{
@@ -829,7 +835,6 @@ func (h *DirectiveDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 		extraStatements = append(extraStatements, classMetadataNode)
 	}
 
-
 	return []transform.CompileResult{
 		{
 			PropertyName: "ɵfac",
@@ -869,11 +874,11 @@ func extractDependenciesDir(refHost reflection.ReflectionHost, classDecl *ast.No
 				dep.Host = true
 			case "Inject":
 				if len(dec.Args) > 0 {
-					dep.Token = extractTokenFromNodeDir(dec.Args[0])
+					dep.Token = extractDITokenFromNode(dec.Args[0])
 				}
 			case "Attribute":
 				if len(dec.Args) > 0 {
-					dep.AttributeNameType = extractTokenFromNodeDir(dec.Args[0])
+					dep.AttributeNameType = extractDITokenFromNode(dec.Args[0])
 				}
 			}
 		}
@@ -895,36 +900,15 @@ func extractDependenciesDir(refHost reflection.ReflectionHost, classDecl *ast.No
 					dep.Token = output.NewLiteralExpr("LOCAL_UNKNOWN", nil, nil, nil)
 				}
 			case *reflection.UnavailableTypeValueReference:
-				dep.Token = output.NewLiteralExpr("INVALID_TOKEN", nil, nil, nil)
+				dep.Token = nil
 			default:
-				dep.Token = output.NewLiteralExpr(nil, nil, nil, nil)
+				dep.Token = nil
 			}
 		}
 
 		deps[i] = dep
 	}
 	return deps
-}
-
-func extractTokenFromNodeDir(node *ast.Node) output.Expression {
-	if node == nil {
-		return output.NewLiteralExpr(nil, nil, nil, nil)
-	}
-	if ast.IsStringLiteral(node) {
-		return output.NewLiteralExpr(node.AsStringLiteral().Text, nil, nil, nil)
-	}
-	if ast.IsIdentifier(node) {
-		return output.NewReadVarExpr(node.AsIdentifier().Text, nil, nil, nil)
-	}
-	if ast.IsPropertyAccessExpression(node) {
-		pa := node.AsPropertyAccessExpression()
-		recv := extractTokenFromNodeDir(pa.Expression)
-		if pa.Name().Kind == ast.KindIdentifier {
-			return output.NewReadPropExpr(recv, pa.Name().AsIdentifier().Text, nil, nil, nil, false)
-		}
-	}
-	// Fallback for complex expressions
-	return output.NewLiteralExpr("UNKNOWN_TOKEN", nil, nil, nil)
 }
 
 func (h *DirectiveDecoratorHandler) GetSemanticSymbol(node *ast.ClassDeclaration, analysis any) *semantic_graph.SemanticSymbol {

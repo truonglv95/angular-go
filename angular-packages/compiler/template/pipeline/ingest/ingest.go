@@ -1243,6 +1243,20 @@ func convertAst(
 			nil,
 			false,
 		)
+	case *expression_parser.SafeCall:
+		args := make([]output.Expression, len(a.Args))
+		for i, arg := range a.Args {
+			args[i] = convertAst(arg, job, baseSourceSpan)
+		}
+		return output.NewInvokeFunctionExpr(
+			convertAst(a.Receiver, job, baseSourceSpan),
+			args,
+			nil,
+			nil,
+			false,
+			nil,
+			true,
+		)
 	case *expression_parser.Call:
 		if _, ok := a.Receiver.(*expression_parser.ImplicitReceiver); ok {
 			panic("Unexpected ImplicitReceiver")

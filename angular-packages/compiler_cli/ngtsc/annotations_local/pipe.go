@@ -152,4 +152,7 @@ func (h *PipeLocalDecoratorHandler) GetSemanticSymbol(node *ast.ClassDeclaration
 
 
 func (h *PipeLocalDecoratorHandler) Register(node *ast.ClassDeclaration, analysisData any) {
+	analysis := analysisData.(*annotations.PipeAnalysis)
+	globalHandler := annotations.NewPipeDecoratorHandler(h.host, h.metaRegistry)
+	globalHandler.Register(node, analysis)
 }

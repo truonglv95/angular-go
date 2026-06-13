@@ -12,9 +12,12 @@ import { ChildComponent } from './child.component';
 import { MyModule } from './my-module.module';
 import { ModuleA } from './module-a.module';
 import { NonStandaloneComponent } from './non-standalone.component';
+import { Case1Component, Case2Component, Case3Component, Case4Component } from './di-demo';
+import { RocLendingApiModule } from './roc-lending.module';
+import { NonStandaloneModule } from './same-module';
 
 @Component({
-  imports: [NxWelcome, RouterModule, IcuDemoComponent, ReactiveFormsModule, CustomInputComponent, ChildComponent, CommonModule, NgTemplateOutlet, MyModule, ModuleA],
+  imports: [NxWelcome, RouterModule, IcuDemoComponent, ReactiveFormsModule, CustomInputComponent, ChildComponent, CommonModule, NgTemplateOutlet, MyModule, ModuleA, Case1Component, Case2Component, Case3Component, Case4Component, NonStandaloneModule],
   selector: 'app-root',
   templateUrl: './app.html',
   styleUrl: './app.scss',

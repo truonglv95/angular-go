@@ -26,7 +26,10 @@
             "input": "apps/demo/public"
           }
         ],
-        "styles": ["apps/demo/src/styles.scss"],
+        "styles": [
+          "apps/demo/src/styles.scss",
+          "apps/demo/src/project-probe.scss"
+        ],
         "localize": ["vi"]
       },
       "configurations": {

@@ -398,6 +398,7 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
   const htmlToTs = new Map<string, Set<string>>();
   const cssToTs = new Map<string, Set<string>>();
   const servedHmrRequests = new Set<string>();
+  const templateUpdates = new Map<string, string>();
 
   // B#11 FIX: Eagerly parse all .ts files to populate htmlToTs / cssToTs at
   // startup. Without this, style/template HMR misses the first change event
@@ -478,6 +479,15 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
         continue;
       }
 
+      try {
+        const result = await sharedDaemonClient.getHmrUpdate(sharedDaemonContextId, componentId);
+        if (result && result.code) {
+          templateUpdates.set(componentId, result.code);
+        }
+      } catch (e: any) {
+        devServer.config.logger.warn(`[angular-go] Failed to pre-fetch HMR update for ${componentId}: ${e.message}`);
+      }
+
       // Comment out invalidation to prevent Vite from sending a redundant reload request for the old virtual module.
       // The Angular HMR runtime already requests the new virtual module using the updated timestamp.
       // for (const mod of devServer.moduleGraph.idToModuleMap.values()) {
@@ -485,15 +495,14 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
       //     devServer.moduleGraph.invalidateModule(mod);
       //   }
       // }
-
-      // devServer.ws.send({
-      //   type: 'custom',
-      //   event: 'angular:component-update',
-      //   data: {
-      //     id: encodeURIComponent(componentId),
-      //     timestamp,
-      //   },
-      // });
+      devServer.ws.send({
+        type: 'custom',
+        event: 'angular:component-update',
+        data: {
+          id: encodeURIComponent(componentId),
+          timestamp,
+        },
+      });
     }
   }
 
@@ -709,9 +718,6 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
 
         if (pluginMode === 'memory' || pluginMode === 'server') {
           try {
-            memoryOutputs.clear();
-            appBundledEntryOutputs.clear();
-            appBundledPublicOutputs.clear();
             if (result.outputs) {
               for (const output of result.outputs) {
                 const absPath = path.resolve(projectRoot, output.path);
@@ -871,21 +877,40 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
 
     appBundledEntryOutputs.clear();
     appBundledPublicOutputs.clear();
+
+    // --- Entry chunks (e.g. main.js) ---
+    const entryChunkNames = new Set<string>();
     for (const entry of entries) {
       const sourceOutputPath = findOutputPathByBaseName(outputs, entry.fileName);
       const bundledItem = bundled[`${entry.name}.js`];
       if (!sourceOutputPath || !bundledItem || bundledItem.type !== 'chunk') {
         continue;
       }
+      entryChunkNames.add(`${entry.name}.js`);
       const absPath = path.resolve(projectRoot, sourceOutputPath);
       appBundledEntryOutputs.set(absPath, {
         path: absPath,
         text: bundledItem.code,
         kind: 'js',
       });
+      // Register under the .js URL (e.g. /main.js)
       appBundledPublicOutputs.set(`/${entry.fileName}`, {
         path: `/${entry.fileName}`,
         text: bundledItem.code,
+        kind: 'js',
+      });
+    }
+
+    // --- Lazy chunks (dynamic-import splits from Rolldown) ---
+    // These are NOT entry chunks but the browser requests them when the bundled
+    // main.js executes a dynamic import().  Without registering them here the
+    // middleware passes the request to Vite which can't resolve them → 404.
+    for (const [fileName, item] of Object.entries(bundled)) {
+      if ((item as any).type !== 'chunk') continue;
+      if (entryChunkNames.has(fileName)) continue; // already handled above
+      appBundledPublicOutputs.set(`/${fileName}`, {
+        path: `/${fileName}`,
+        text: (item as any).code,
         kind: 'js',
       });
     }
@@ -896,8 +921,9 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
       return;
     }
     for (const publicPath of appBundledPublicOutputs.keys()) {
-      const resolvedId = `\0angular-go-app-bundle:${publicPath}`;
-      const mod = server.moduleGraph.getModuleById(resolvedId);
+      // /@ng/bundle/* is the ID Vite's module graph tracks after transformRequest
+      const bundleId = `/@ng/bundle${publicPath}`;
+      const mod = server.moduleGraph.getModuleById(bundleId);
       if (mod) {
         server.moduleGraph.invalidateModule(mod);
       }
@@ -910,8 +936,8 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
     }
     const modules: any[] = [];
     for (const publicPath of appBundledPublicOutputs.keys()) {
-      const resolvedId = `\0angular-go-app-bundle:${publicPath}`;
-      const mod = server.moduleGraph.getModuleById(resolvedId);
+      const bundleId = `/@ng/bundle${publicPath}`;
+      const mod = server.moduleGraph.getModuleById(bundleId);
       if (mod) {
         modules.push(mod);
       }
@@ -961,12 +987,65 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
       return null;
     }
 
-    const relativePath = path.relative(projectRoot, filePath);
-    if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+    const expectedSuffix = filePath.replace(/\.ts$/, '.js');
+    const expectedName = path.basename(expectedSuffix);
+
+    // If we are in memory mode, we can search the exact key
+    if (memoryOutputs.size > 0) {
+      let bestMatchKey: string | null = null;
+      let maxMatchCount = 0;
+      const expectedNameLower = expectedName.toLowerCase();
+
+      for (const key of memoryOutputs.keys()) {
+        if (key.toLowerCase().endsWith(expectedNameLower)) {
+          // Find the longest matching directory suffix
+          const keyParts = key.toLowerCase().split(path.sep);
+          const expectedParts = expectedSuffix.toLowerCase().split(path.sep);
+          
+          let matchCount = 0;
+          for (let i = 1; i <= Math.min(keyParts.length, expectedParts.length); i++) {
+            if (keyParts[keyParts.length - i] === expectedParts[expectedParts.length - i]) {
+              matchCount++;
+            } else {
+              break;
+            }
+          }
+          if (matchCount > maxMatchCount) {
+            maxMatchCount = matchCount;
+            bestMatchKey = key; // Return the ORIGINAL case-preserving key
+          }
+        }
+      }
+      
+      if (bestMatchKey && maxMatchCount > 0) {
+        return bestMatchKey;
+      }
+    }
+
+    // Fallback logic if memoryOutputs is empty (e.g. before first compile or in default mode)
+    let relativePath = path.relative(projectRoot, filePath);
+    
+    // If it's an Nx/Angular workspace, use the workspace root for the relative path
+    const workspaceRoot = findUp(projectRoot, (dir) => fs.existsSync(path.join(dir, 'nx.json')) || fs.existsSync(path.join(dir, 'angular.json')));
+    if (workspaceRoot) {
+      relativePath = path.relative(workspaceRoot, filePath);
+    } else if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
       return null;
     }
 
     return path.join(outDir, relativePath).replace(/\.ts$/, '.js');
+  }
+
+  // Find a file by walking up directories
+  function findUp(dir: string, predicate: (dir: string) => boolean): string | null {
+    let current = path.resolve(dir);
+    while (current) {
+      if (predicate(current)) return current;
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+    return null;
   }
 
   return {
@@ -1012,7 +1091,7 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
       
       enableHmr = config.command === 'serve' && options.hmr === true;
       isDebug && console.log('[angular-go:compile] configResolved enableHmr:', enableHmr, 'options.hmr:', options.hmr, 'config.command:', config.command);
-      const compilationMode = options.compilationMode || 'global';
+      const compilationMode = options.compilationMode || 'local';
 
       if (!compileArgs.find(arg => arg.startsWith('--compilationMode'))) {
         compileArgs.push(`--compilationMode=${compilationMode}`);
@@ -1058,6 +1137,47 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
     configureServer(devServer: ViteDevServer) {
       server = devServer;
 
+      // Serve app entry bundles from the in-memory Rolldown output. The bundle
+      // keeps dynamic imports as lazy boundaries while presenting one eager
+      // main.js to the browser and to Vite's import analysis pipeline.
+      devServer.middlewares.use(async (req: any, res: any, next: any) => {
+        if (!options.appBundle) {
+          return next();
+        }
+
+        const url: string = req.url || '';
+        const qIdx = url.indexOf('?');
+        const pathname = qIdx >= 0 ? url.slice(0, qIdx) : url;
+        const publicOutput = appBundledPublicOutputs.get(pathname);
+        if (!publicOutput?.text) {
+          return next();
+        }
+
+        try {
+          await ensureFreshDevCompile(`freshness check for app bundle ${pathname}`);
+          // Use transformRequest with a /@ng/bundle/ virtual path so that
+          // Vite's import-analysis plugin runs and rewrites bare specifiers
+          // (@angular/localize/init, @angular/core, …) to their pre-bundled
+          // /.vite/deps/ paths.  A \0-prefixed virtual ID would skip import
+          // analysis; the /@ng/bundle/ prefix keeps it in Vite's normal
+          // transform pipeline without conflicting with real files.
+          const result = await devServer.transformRequest(`/@ng/bundle${pathname}`);
+          if (!result?.code) {
+            return next();
+          }
+          res.writeHead(200, {
+            'Content-Type': 'application/javascript',
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+          });
+          res.end(result.code);
+        } catch (e: any) {
+          devServer.config.logger.warn(
+            `[angular-go] Failed to serve app bundle for ${pathname}: ${e.message}`
+          );
+          return next();
+        }
+      });
+
       // ─── HMR component middleware ───────────────────────────────────────
       // When Angular does `import(/* @vite-ignore */ ɵɵgetReplaceMetadataURL(...))`,
       // Vite bypasses its resolveId/load hooks and the browser sends a raw HTTP
@@ -1085,23 +1205,26 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
         }
 
         try {
-          const result = await devServer.transformRequest(url);
-          if (result && result.code) {
-            res.writeHead(200, {
-              'Content-Type': 'application/javascript',
-              'Cache-Control': 'no-cache, no-store, must-revalidate',
-            });
-            res.end(result.code);
-            return;
+          const hmrCode = templateUpdates.get(c);
+          if (hmrCode) {
+            const result = await devServer.transformRequest(url);
+            if (result && result.code) {
+              res.writeHead(200, {
+                'Content-Type': 'application/javascript',
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+              });
+              res.end(result.code);
+              return;
+            }
           }
           res.writeHead(200, { 'Content-Type': 'application/javascript' });
-          res.end('export default null;');
+          res.end('');
         } catch (e: any) {
           devServer.config.logger.warn(
             `[angular-go] Failed to serve transformed HMR update for ${url}: ${e.message}`
           );
           res.writeHead(200, { 'Content-Type': 'application/javascript' });
-          res.end('export default null;');
+          res.end('');
         }
       });
       // ────────────────────────────────────────────────────────────────────
@@ -1138,13 +1261,32 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
       }
 
       let nextHtml = html;
+      const tagsToInject: string[] = [];
+
       for (const fileName of options.appBundleEntryFileNames || ['main.js']) {
-        const sourceName = fileName.replace(/\.js$/, '.ts');
-        nextHtml = nextHtml.replace(
-          new RegExp(`(<script\\s+[^>]*type=["']module["'][^>]*src=["'])/${escapeRegExp(sourceName)}(["'][^>]*>\\s*</script>)`, 'g'),
-          `$1/${fileName}$2`
-        );
+        // Remove any stale script tags that reference this entry (both .ts and .js
+        // variants), so we never end up with duplicates after injection.
+        const tsName = fileName.replace(/\.js$/, '.ts');
+        const removePattern = (name: string) =>
+          new RegExp(
+            `[ \t]*<script[^>]+type=["']module["'][^>]+src=["']/${escapeRegExp(name)}["'][^>]*>\\s*</script>[ \t]*(\r?\n)?`,
+            'g'
+          );
+        nextHtml = nextHtml.replace(removePattern(tsName), '');
+        nextHtml = nextHtml.replace(removePattern(fileName), '');
+
+        // Queue the canonical .js tag for injection.
+        tagsToInject.push(`  <script type="module" src="/${fileName}"></script>`);
       }
+
+      // Inject all entry script tags just before </body>.
+      if (tagsToInject.length > 0) {
+        const block = tagsToInject.join('\n');
+        nextHtml = nextHtml.includes('</body>')
+          ? nextHtml.replace('</body>', `${block}\n</body>`)
+          : nextHtml + '\n' + block;
+      }
+
       return nextHtml;
     },
 
@@ -1166,7 +1308,7 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
         }
         sharedDaemonContextId = await sharedDaemonClient.createContext({
           project: options.project || 'tsconfig.app.json',
-          compilationMode: options.compilationMode || 'global',
+          compilationMode: options.compilationMode || 'local',
           // C3 FIX: Only enable HMR when explicitly requested in serve mode.
           hmr: enableHmr,
           preserveImports,
@@ -1208,10 +1350,51 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
       }
     },
 
-    resolveId(id: string) {
+    resolveId(id: string, importer?: string) {
       if (options.appBundle) {
+        // /@ng/bundle/* is the virtual URL used by transformRequest for the
+        // pre-bundled app. Keep this in Vite's normal transform pipeline so
+        // import-analysis can rewrite bare package specifiers.
+        if (id.startsWith('/@ng/bundle/')) {
+          const publicPath = id.slice('/@ng/bundle'.length); // e.g. /main.js
+          if (appBundledPublicOutputs.has(publicPath)) {
+            return id;
+          }
+        }
+
+        // Lazy route imports inside the bundled main chunk are emitted as
+        // relative imports (e.g. ./module-dashboard.module.js). Resolve them
+        // against the public bundle path so Vite can load the generated chunk
+        // from memory instead of trying to find a sibling of the virtual id.
+        if (id.startsWith('.') && importer) {
+          const cleanImporter = cleanId(importer);
+          let importerPublicPath: string | undefined;
+          let useBundleUrl = false;
+
+          if (cleanImporter.startsWith('/@ng/bundle/')) {
+            importerPublicPath = cleanImporter.slice('/@ng/bundle'.length);
+            useBundleUrl = true;
+          } else if (cleanImporter.startsWith('\0angular-go-app-bundle:')) {
+            importerPublicPath = cleanImporter.slice('\0angular-go-app-bundle:'.length);
+          } else if (cleanImporter.startsWith('angular-go-app-bundle:')) {
+            importerPublicPath = cleanImporter.slice('angular-go-app-bundle:'.length);
+          }
+
+          if (importerPublicPath) {
+            const publicPath = path.posix.normalize(
+              path.posix.join(path.posix.dirname(importerPublicPath), id)
+            );
+            const normalizedPublicPath = publicPath.startsWith('/') ? publicPath : `/${publicPath}`;
+            if (appBundledPublicOutputs.has(normalizedPublicPath)) {
+              return useBundleUrl
+                ? `/@ng/bundle${normalizedPublicPath}`
+                : `\0angular-go-app-bundle:${normalizedPublicPath}`;
+            }
+          }
+        }
+
         const clean = cleanId(id);
-        if (appBundledPublicOutputs.has(clean)) {
+        if (!clean.startsWith('/@ng/bundle/') && appBundledPublicOutputs.has(clean)) {
           return `\0angular-go-app-bundle:${clean}`;
         }
       }
@@ -1232,9 +1415,29 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
         // file-system resolution — it will call our load() hook instead.
         return '\0' + id;
       }
+
     },
 
     async load(id: string) {
+      // /@ng/bundle/* — non-\0 virtual modules for pre-bundled app chunks.
+      // These go through Vite's full transform pipeline (including import
+      // analysis) so bare specifiers are rewritten to pre-bundled paths.
+      if (options.appBundle && id.startsWith('/@ng/bundle/')) {
+        const publicPath = id.slice('/@ng/bundle'.length); // e.g. /main.js
+        const output = appBundledPublicOutputs.get(publicPath);
+        if (output?.text !== undefined) {
+          let code = output.text;
+          if (enableHmr) {
+            code = code.replace(
+              /import\s*\(\s*([a-zA-Z0-9_$]*\.)?ɵɵgetReplaceMetadataURL/g,
+              'import(/* @vite-ignore */ $1ɵɵgetReplaceMetadataURL'
+            );
+          }
+          return { code, map: null };
+        }
+        return null;
+      }
+
       if (id.startsWith('\0angular-go-app-bundle:')) {
         const publicPath = id.slice('\0angular-go-app-bundle:'.length);
         const output = appBundledPublicOutputs.get(publicPath);
@@ -1263,91 +1466,35 @@ export function angularGoCompile(options: AngularGoCompileOptions = {}): any {
           const filePath = atIdx !== -1 ? c.slice(0, atIdx) : c;
           const compName = atIdx !== -1 ? c.slice(atIdx + 1) : '';
           if (filePath && compName) {
-            if (pluginMode === 'server' && sharedDaemonClient) {
-              try {
-                const result = await (sharedDaemonClient as GoNgcClient).getHmrUpdate(sharedDaemonContextId, c);
-                if (result && result.code) {
-                  let code = `import { ɵɵreplaceMetadata as ɵɵreplaceMetadata_hmr } from '@angular/core';\n` + result.code;
-                  
-                  // Rewrite relative imports to absolute paths relative to Vite's config.root
-                  // because virtual module ID doesn't have a correct directory for Vite resolution.
-                  const fileDir = path.dirname(filePath); // e.g. src/app
-                  const absFileDir = path.resolve(projectRoot, fileDir);
-                  let viteBasePath = path.relative(config.root, absFileDir);
-                  if (viteBasePath) viteBasePath = '/' + viteBasePath.replace(/\\/g, '/');
-                  else viteBasePath = '';
+            const hmrCode = templateUpdates.get(c);
+            if (hmrCode) {
+              let code = `import { ɵɵreplaceMetadata as ɵɵreplaceMetadata_hmr } from '@angular/core';\n` + hmrCode;
+              
+              // Rewrite relative imports to absolute paths relative to Vite's config.root
+              // because virtual module ID doesn't have a correct directory for Vite resolution.
+              const fileDir = path.dirname(filePath); // e.g. src/app
+              const absFileDir = path.resolve(projectRoot, fileDir);
+              let viteBasePath = path.relative(config.root, absFileDir);
+              if (viteBasePath) viteBasePath = '/' + viteBasePath.replace(/\\/g, '/');
+              else viteBasePath = '';
 
-                  code = code.replace(/from\s+['"](\.[^'"]+)['"]/g, (match, relPath) => {
-                    const resolved = path.posix.join(viteBasePath || '/', relPath);
-                    return `from '${resolved}'`;
-                  });
-                  code = code.replace(/import\s*\(\s*['"](\.[^'"]+)['"]\s*\)/g, (match, relPath) => {
-                    const resolved = path.posix.join(viteBasePath || '/', relPath);
-                    return `import('${resolved}')`;
-                  });
+              code = code.replace(/from\s+['"](\.[^'"]+)['"]/g, (match, relPath) => {
+                const resolved = path.posix.join(viteBasePath || '/', relPath);
+                return `from '${resolved}'`;
+              });
+              code = code.replace(/import\s*\(\s*['"](\.[^'"]+)['"]\s*\)/g, (match, relPath) => {
+                const resolved = path.posix.join(viteBasePath || '/', relPath);
+                return `import('${resolved}')`;
+              });
 
-                  if (enableHmr) {
-                    const encodedId = encodeURIComponent(c);
-                    code += `
-if (import.meta.hot) {
-  import.meta.hot.accept((newModule) => {
-    console.log('[HMR debug] hot.accept callback triggered for:', ${JSON.stringify(c)});
-    const cache = window.__angular_hmr_cache__ && window.__angular_hmr_cache__.get(${JSON.stringify(encodedId)});
-    console.log('[HMR debug] cache found:', !!cache, 'newModule:', !!newModule, 'default:', !!(newModule && newModule.default));
-    if (cache && newModule && newModule.default) {
-      try {
-        console.log('[HMR debug] cache.type:', cache.type);
-        console.log('[HMR debug] cache.type.ɵcmp:', cache.type.ɵcmp);
-        if (cache.type.ɵcmp) {
-          console.log('[HMR debug] cache.type.ɵcmp.tView:', cache.type.ɵcmp.tView);
-        }
-        
-        const hostEl = document.querySelector('app-root');
-        console.log('[HMR debug] hostEl:', hostEl);
-        if (hostEl) {
-          console.log('[HMR debug] hostEl keys:', Object.keys(hostEl).filter(k => k.includes('ng')));
-          const ngKeys = Object.keys(hostEl).filter(k => k.includes('ng'));
-          for (const k of ngKeys) {
-            console.log('[HMR debug] hostEl[' + k + ']:', hostEl[k]);
-          }
-        }
-
-        console.log('[HMR debug] calling ɵɵreplaceMetadata_hmr...');
-        console.log('[HMR debug] newModule.default:', newModule.default.toString());
-        ɵɵreplaceMetadata_hmr(cache.type, newModule.default, cache.namespaces, cache.locals, cache.importMeta, ${JSON.stringify(encodedId)});
-        console.log('[HMR debug] ɵɵreplaceMetadata_hmr finished successfully!');
-        
-        if (cache.type.ɵcmp) {
-          console.log('[HMR debug] POST-HMR cache.type.ɵcmp.tView:', cache.type.ɵcmp.tView);
-          console.log('[HMR debug] POST-HMR cache.type.ɵcmp.template:', cache.type.ɵcmp.template.toString());
-        }
-      } catch (err) {
-        console.error('[HMR debug] ɵɵreplaceMetadata_hmr failed with error:', err.message, err.stack);
-      }
-    }
-  });
-}
-`;
-                  }
-                  return { code, map: null };
-                }
-                // Daemon responded but no update available yet — return a no-op
-                // update so Angular doesn't crash with a failed import.
-                log(`HMR update not yet available for ${c}; returning no-op`);
-              } catch (e: any) {
-                config.logger.warn(`[angular-go] Failed to get HMR update for ${c}: ${e.message}`);
-              }
+              return { code, map: null };
             }
           }
         }
         // No HMR code available: return a no-op module so the dynamic import
         // succeeds (browser doesn't get ERR_ABORTED) and Angular gracefully
         // keeps the existing component state.
-        let fallbackCode = 'export default null;';
-        if (enableHmr) {
-          fallbackCode += '\nif (import.meta.hot) { import.meta.hot.accept(); }\n';
-        }
-        return { code: fallbackCode, map: null };
+        return { code: '', map: null };
       }
 
       const jsPath = outputPathForSource(id);
@@ -1362,7 +1509,7 @@ if (import.meta.hot) {
         if (pluginMode !== 'server' && pluginMode !== 'memory') {
           if (!fs.existsSync(jsPath)) {
             try {
-              await compileProject(`missing output for ${path.relative(projectRoot, cleanId(id))}`, true);
+              await compileProject(`missing output for ${path.relative(projectRoot, cleanId(id))}`, false);
             } catch (e) {
               // ignore here, we will throw compileError below
             }
@@ -1370,7 +1517,7 @@ if (import.meta.hot) {
         } else {
           if (!memoryOutputs.has(jsPath)) {
             try {
-              await compileProject(`missing memory output for ${path.relative(projectRoot, cleanId(id))}`, true);
+              await compileProject(`missing memory output for ${path.relative(projectRoot, cleanId(id))}`, false);
             } catch (e) {
               // ignore here
             }
@@ -1378,17 +1525,23 @@ if (import.meta.hot) {
         }
       }
 
-      if (compileError && config && config.command === 'build') {
+      if (compileError) {
         this.error(compileError);
       }
 
       if (pluginMode !== 'server' && pluginMode !== 'memory') {
         if (!fs.existsSync(jsPath)) {
-          this.error(`go-ngc did not emit ${jsPath} for ${cleanId(id)}`);
+          // If go-ngc didn't compile it (e.g. polyfills.ts), let Vite handle it natively
+          return null;
         }
       }
-
-      const sourcePath = cleanId(id);
+      let sourcePath = cleanId(id);
+      if (!fs.existsSync(sourcePath)) {
+        const resolved = path.join(projectRoot, sourcePath);
+        if (fs.existsSync(resolved)) {
+          sourcePath = resolved;
+        }
+      }
       if (sourcePath.endsWith('.ts')) {
         const sourceCode = fs.readFileSync(sourcePath, 'utf8');
         const templateMatch = sourceCode.match(/templateUrl\s*:\s*['"]([^'"]+)['"]/);
@@ -1453,7 +1606,14 @@ if (import.meta.hot) {
         }
       }
 
-      if (code == null) {
+      if (code == null || code === '') {
+        if (!memoryOutputs.has(jsPath)) {
+          console.log('[DEBUG] Failed to find in memoryOutputs:', jsPath);
+          console.log('[DEBUG] Available keys:', Array.from(memoryOutputs.keys()).slice(0, 5));
+        }
+        if (id.includes('non-standalone.component')) {
+          console.log('[DEBUG-NON-STANDALONE] code is null! jsPath:', jsPath);
+        }
         if (compileError && config && config.command === 'serve') {
           return { code: 'export default null;', map: null };
         }
@@ -1464,7 +1624,12 @@ if (import.meta.hot) {
             // ignore
           }
         }
-        code = fs.readFileSync(jsPath, 'utf8');
+        if (fs.existsSync(jsPath)) {
+          code = fs.readFileSync(jsPath, 'utf8');
+        } else {
+          // If go-ngc didn't compile it (e.g. polyfills.ts) and it's not on disk, let Vite handle it
+          return null;
+        }
       }
       if (map && sourcePath.endsWith('.ts') && fs.existsSync(sourcePath)) {
         try {
@@ -1481,6 +1646,9 @@ if (import.meta.hot) {
         isDebug && console.log('[angular-go:compile] load returning code for:', id, 'snippet:', code.slice(0, 300));
         if (id.includes('app.ts')) {
           isDebug && console.log('[angular-go:compile] FULL app.ts code:', code);
+        }
+        if (id.includes('non-standalone.component.ts')) {
+          console.log('[DEBUG-CODE] returning code for non-standalone.component.ts:', code.includes('ɵcmp') ? 'HAS_CMP' : 'NO_CMP', 'length:', code.length);
         }
       }
       return { code, map };
@@ -1504,30 +1672,7 @@ if (import.meta.hot) {
         hasChange = true;
       }
 
-      if (transformed.includes('ɵɵreplaceMetadata')) {
-        transformed = transformed.replace(
-          /\.then\(\s*\(?\s*([a-zA-Z0-9_$]+)\s*\)?\s*=>\s*\1\.default\s*&&\s*([a-zA-Z0-9_$]*\.)?ɵɵreplaceMetadata\(\s*([a-zA-Z0-9_$]+)\s*,\s*\1\.default\s*,\s*(\[[\s\S]*?\])\s*,\s*(\[[\s\S]*?\])\s*,\s*import\.meta\s*,\s*([a-zA-Z0-9_$]+)\s*\)\)/g,
-          (match, mVar, corePrefix, compType, namespaces, locals, idVar) => {
-            const prefix = corePrefix || '';
-            isDebug && console.log('[angular-go:compile] transform: intercepting ɵɵreplaceMetadata for:', idVar);
-            return `.then((${mVar}) => {
-              if (!window.__angular_hmr_cache__) {
-                window.__angular_hmr_cache__ = new Map();
-              }
-              window.__angular_hmr_cache__.set(${idVar}, {
-                type: ${compType},
-                namespaces: ${namespaces},
-                locals: ${locals},
-                importMeta: import.meta
-              });
-              if (${mVar} && ${mVar}.default) {
-                return ${prefix}ɵɵreplaceMetadata(${compType}, ${mVar}.default, ${namespaces}, ${locals}, import.meta, ${idVar});
-              }
-            })`;
-          }
-        );
-        hasChange = true;
-      }
+
 
       if (hasChange) {
         isDebug && console.log('[angular-go:compile] transform applied HMR cache setup to:', id);
@@ -1673,6 +1818,9 @@ if (import.meta.hot) {
             await sendHmrUpdatesForFiles(server, [filePath]);
           }
 
+          if (enableHmr) {
+            return getVirtualComponentModules([filePath]);
+          }
           if (options.appBundle) {
             return getAppBundleModules();
           } else {

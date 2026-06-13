@@ -1,1 +1,31 @@
-/* You can add global styles to this file, and also import other style files */
+$global-probe-accent: #d9480f;
+$global-probe-bg: #fff4e6;
+
+html {
+  background: #edf7f6;
+}
+
+body {
+  margin: 0;
+}
+
+body::before {
+  background: $global-probe-bg;
+  border: 2px solid $global-probe-accent;
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba($global-probe-accent, 0.18);
+  color: #7c2d12;
+  content: "styles.scss global loaded";
+  font: 700 12px/1.2 system-ui, sans-serif;
+  left: 14px;
+  letter-spacing: 0;
+  padding: 9px 12px;
+  position: fixed;
+  top: 14px;
+  z-index: 20;
+}
+
+.style-probe {
+  outline: 3px dashed rgba($global-probe-accent, 0.45);
+  outline-offset: 5px;
+}

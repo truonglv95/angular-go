@@ -15,7 +15,11 @@ export async function bundleCompilerOutputsWithRolldown(
   const jsOutputs = new Map<string, CompilerOutputFile>();
   for (const output of outputs) {
     if (output.kind === 'js' && output.text !== undefined) {
-      jsOutputs.set(normalizePath(output.path), output);
+      const outputPath = path.isAbsolute(output.path) ? output.path : path.resolve(output.path);
+      jsOutputs.set(normalizePath(outputPath), {
+        ...output,
+        path: outputPath,
+      });
     }
   }
 
@@ -33,19 +37,43 @@ export async function bundleCompilerOutputsWithRolldown(
 
   const bundle = await rolldown({
     input,
-    external: (id: string) => isBareImport(id),
+    external: (id: string) => isBareImport(id) && !resolveBareOutputImport(id, jsOutputs),
     treeshake: false,
     plugins: [
       {
         name: 'angular-go-memory-outputs',
         resolveId(source: string, importer: string | undefined) {
           if (isBareImport(source)) {
+            const outputPath = resolveBareOutputImport(source, jsOutputs);
+            if (outputPath) {
+              return outputPath;
+            }
             return { id: source, external: true };
           }
 
           if (path.isAbsolute(source)) {
-            const normalized = normalizePath(source);
-            return jsOutputs.has(normalized) ? normalized : null;
+            const normalized = normalizeImportToOutputPath(source);
+            if (jsOutputs.has(normalized)) {
+              return normalized;
+            }
+            // Fallback: search by suffix since output paths may include out-tsc/app
+            for (const outPath of jsOutputs.keys()) {
+              if (outPath.endsWith(normalized) || normalized.endsWith(outPath)) {
+                return outPath;
+              }
+              // Sometimes normalized is /Users/.../apps/demo/src/app/file.js
+              // and outPath is /Users/.../out-tsc/app/apps/demo/src/app/file.js
+              // Let's strip the workspace root from normalized and check if outPath ends with it
+              const basename = path.basename(normalized);
+              if (path.basename(outPath) === basename) {
+                // simple heuristic if basenames match
+                if (outPath.replace('/out-tsc/app', '') === normalized) {
+                   return outPath;
+                }
+              }
+            }
+            console.log('[DEBUG] resolveId failed for absolute source:', source);
+            return null;
           }
 
           if (source.startsWith('.') && importer) {
@@ -84,6 +112,17 @@ function normalizePath(filePath: string): string {
   return filePath.replace(/\\/g, '/');
 }
 
+function normalizeImportToOutputPath(specifier: string): string {
+  const normalized = normalizePath(specifier);
+  if (/\.[cm]?ts$/.test(normalized)) {
+    return normalized.replace(/\.[cm]?ts$/, '.js');
+  }
+  if (normalized.endsWith('.mjs') || normalized.endsWith('.js')) {
+    return normalized;
+  }
+  return `${normalized}.js`;
+}
+
 function isBareImport(id: string): boolean {
   return !id.startsWith('.') && !id.startsWith('/') && !path.isAbsolute(id);
 }
@@ -111,4 +150,21 @@ function resolveRelativeOutputImport(
   ];
 
   return candidates.find(value => outputs.has(value));
+}
+
+function resolveBareOutputImport(
+  specifier: string,
+  outputs: Map<string, CompilerOutputFile>
+): string | undefined {
+  const normalized = normalizeImportToOutputPath(specifier);
+  const suffix = `/${normalized}`;
+  const matches: string[] = [];
+
+  for (const outputPath of outputs.keys()) {
+    if (outputPath.endsWith(suffix) || outputPath.endsWith(`/${path.basename(normalized)}`)) {
+      matches.push(outputPath);
+    }
+  }
+
+  return matches.length === 1 ? matches[0] : undefined;
 }

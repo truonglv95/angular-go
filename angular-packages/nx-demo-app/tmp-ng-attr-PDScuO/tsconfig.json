@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "outDir": "./tmp-ng-attr-PDScuO/out",
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "experimentalDecorators": true,
+    "skipLibCheck": true,
+    "strict": true
+  },
+  "angularCompilerOptions": {
+    "compilationMode": "full",
+    "strictInjectionParameters": true,
+    "strictTemplates": true
+  },
+  "files": ["./tmp-ng-attr-PDScuO/src/app.ts"]
+}

@@ -347,16 +347,9 @@ func (c *NgCompiler) PrepareEmit() []*ast.Diagnostic {
 	}
 	close(ch)
 
-	numWorkers := runtime.NumCPU()
-	if numWorkers > 16 {
-		numWorkers = 16
-	}
-	if numWorkers > len(sourceFiles) {
-		numWorkers = len(sourceFiles)
-	}
-	if numWorkers < 1 {
-		numWorkers = 1
-	}
+	// TypeScript Checker is NOT goroutine-safe and UpdateSourceFile triggers
+	// CompileFull -> getCompilationScope -> Checker.GetSymbolAtLocation which mutates LinkStore.
+	numWorkers := 1
 
 	var wg sync.WaitGroup
 	for i := 0; i < numWorkers; i++ {

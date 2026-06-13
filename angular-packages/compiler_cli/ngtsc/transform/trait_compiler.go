@@ -750,6 +750,23 @@ func (tc *TraitCompiler) UpdateSourceFile(sf *ast.SourceFile, factory *ast.NodeF
 							member.Modifiers().Nodes = newMemberMods
 							member.Modifiers().ModifierFlags = ast.ModifiersToFlags(newMemberMods)
 						}
+
+						// Strip decorators from constructor and method parameters
+						switch member.Kind {
+						case ast.KindConstructor, ast.KindMethodDeclaration, ast.KindGetAccessor, ast.KindSetAccessor:
+							for _, param := range member.Parameters() {
+								if param.Modifiers() != nil {
+									var newParamMods []*ast.Node
+									for _, mod := range param.Modifiers().Nodes {
+										if mod.Kind != ast.KindDecorator {
+											newParamMods = append(newParamMods, mod)
+										}
+									}
+									param.Modifiers().Nodes = newParamMods
+									param.Modifiers().ModifierFlags = ast.ModifiersToFlags(newParamMods)
+								}
+							}
+						}
 					}
 				}
 

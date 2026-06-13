@@ -264,11 +264,11 @@ func extractDependenciesPipe(refHost reflection.ReflectionHost, classDecl *ast.N
 				dep.Host = true
 			case "Inject":
 				if len(dec.Args) > 0 {
-					dep.Token = extractTokenFromNodePipe(dec.Args[0])
+					dep.Token = extractDITokenFromNode(dec.Args[0])
 				}
 			case "Attribute":
 				if len(dec.Args) > 0 {
-					dep.AttributeNameType = extractTokenFromNodePipe(dec.Args[0])
+					dep.AttributeNameType = extractDITokenFromNode(dec.Args[0])
 				}
 			}
 		}
@@ -290,35 +290,15 @@ func extractDependenciesPipe(refHost reflection.ReflectionHost, classDecl *ast.N
 					dep.Token = output.NewLiteralExpr("LOCAL_UNKNOWN", nil, nil, nil)
 				}
 			case *reflection.UnavailableTypeValueReference:
-				dep.Token = output.NewLiteralExpr("INVALID_TOKEN", nil, nil, nil)
+				dep.Token = nil
 			default:
-				dep.Token = output.NewLiteralExpr(nil, nil, nil, nil)
+				dep.Token = nil
 			}
 		}
 
 		deps[i] = dep
 	}
 	return deps
-}
-
-func extractTokenFromNodePipe(node *ast.Node) output.Expression {
-	if node == nil {
-		return output.NewLiteralExpr(nil, nil, nil, nil)
-	}
-	if ast.IsStringLiteral(node) {
-		return output.NewLiteralExpr(node.AsStringLiteral().Text, nil, nil, nil)
-	}
-	if ast.IsIdentifier(node) {
-		return output.NewReadVarExpr(node.AsIdentifier().Text, nil, nil, nil)
-	}
-	if ast.IsPropertyAccessExpression(node) {
-		pa := node.AsPropertyAccessExpression()
-		recv := extractTokenFromNodePipe(pa.Expression)
-		if pa.Name().Kind == ast.KindIdentifier {
-			return output.NewReadPropExpr(recv, pa.Name().AsIdentifier().Text, nil, nil, nil, false)
-		}
-	}
-	return output.NewLiteralExpr("UNKNOWN_TOKEN", nil, nil, nil)
 }
 
 func (h *PipeDecoratorHandler) GetSemanticSymbol(node *ast.ClassDeclaration, analysis any) *semantic_graph.SemanticSymbol {

@@ -2,6 +2,7 @@ package annotations
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -211,6 +212,28 @@ func collectUsedPipes(nodes []render3.Node) map[string]bool {
 	return collector.used
 }
 
+func commonModulePipe(pipeName string) (className string, importPath string, ok bool) {
+	commonPipes := map[string][2]string{
+		"async":      {"AsyncPipe", "@angular/common"},
+		"uppercase":  {"UpperCasePipe", "@angular/common"},
+		"lowercase":  {"LowerCasePipe", "@angular/common"},
+		"json":       {"JsonPipe", "@angular/common"},
+		"slice":      {"SlicePipe", "@angular/common"},
+		"number":     {"DecimalPipe", "@angular/common"},
+		"percent":    {"PercentPipe", "@angular/common"},
+		"titlecase":  {"TitleCasePipe", "@angular/common"},
+		"currency":   {"CurrencyPipe", "@angular/common"},
+		"date":       {"DatePipe", "@angular/common"},
+		"i18nPlural": {"I18nPluralPipe", "@angular/common"},
+		"i18nSelect": {"I18nSelectPipe", "@angular/common"},
+		"keyvalue":   {"KeyValuePipe", "@angular/common"},
+	}
+	if pipe, exists := commonPipes[pipeName]; exists {
+		return pipe[0], pipe[1], true
+	}
+	return "", "", false
+}
+
 func directImportMatchesDirective(imp ComponentImport, dir *metadata.DirectiveMeta) bool {
 	if dir == nil {
 		return false
@@ -333,15 +356,21 @@ func (h *ComponentDecoratorHandler) Analyze(node *ast.ClassDeclaration, decorato
 
 	if len(allMembers) > 0 {
 		for _, member := range allMembers {
-			if member.Kind == ast.KindPropertyDeclaration || member.Kind == ast.KindMethodDeclaration {
+			if member.Kind == ast.KindPropertyDeclaration || member.Kind == ast.KindMethodDeclaration || member.Kind == ast.KindGetAccessor || member.Kind == ast.KindSetAccessor {
 				var modifiers *ast.ModifierList
 				var nameNode *ast.Node
 				if member.Kind == ast.KindPropertyDeclaration {
 					modifiers = member.AsPropertyDeclaration().Modifiers()
 					nameNode = member.AsPropertyDeclaration().Name()
-				} else {
+				} else if member.Kind == ast.KindMethodDeclaration {
 					modifiers = member.AsMethodDeclaration().Modifiers()
 					nameNode = member.AsMethodDeclaration().Name()
+				} else if member.Kind == ast.KindGetAccessor {
+					modifiers = member.AsGetAccessorDeclaration().Modifiers()
+					nameNode = member.AsGetAccessorDeclaration().Name()
+				} else if member.Kind == ast.KindSetAccessor {
+					modifiers = member.AsSetAccessorDeclaration().Modifiers()
+					nameNode = member.AsSetAccessorDeclaration().Name()
 				}
 				propName := ""
 				if nameNode != nil && nameNode.Kind == ast.KindIdentifier {
@@ -1083,10 +1112,12 @@ func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysis
 			}
 
 			// Add pipes used by the template.
+			foundPipes := make(map[string]bool)
 			for _, pipe := range scope.Pipes {
 				if !usedPipes[pipe.Name] {
 					continue
 				}
+				foundPipes[pipe.Name] = true
 				if importedPipeNodes[pipe.Ref.Node] {
 					continue
 				}
@@ -1108,6 +1139,25 @@ func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysis
 					dep.Type = output.NewReadVarExpr(pipe.Ref.Name, nil, nil, nil)
 				}
 				addDep(dep)
+			}
+
+			if !analysis.IsStandalone && h.scopeRegistry != nil && len(h.scopeRegistry.GetComponentModules(node.AsNode())) == 0 {
+				for pipeName := range usedPipes {
+					if foundPipes[pipeName] {
+						continue
+					}
+					className, importPath, ok := commonModulePipe(pipeName)
+					if !ok {
+						continue
+					}
+					addDep(render3.R3TemplateDependency{
+						Kind: render3.R3TemplateDependencyKind_Pipe,
+						Type: output.NewExternalExpr(output.ExternalReference{
+							ModuleName: &importPath,
+							Name:       &className,
+						}, nil, nil, nil, nil),
+					})
+				}
 			}
 
 		}
@@ -1303,25 +1353,12 @@ func (h *ComponentDecoratorHandler) Resolve(node *ast.ClassDeclaration, analysis
 					}
 				}
 				if !found {
-					var commonPipes = map[string][2]string{
-						"async":      {"AsyncPipe", "@angular/common"},
-						"uppercase":  {"UpperCasePipe", "@angular/common"},
-						"lowercase":  {"LowerCasePipe", "@angular/common"},
-						"json":       {"JsonPipe", "@angular/common"},
-						"slice":      {"SlicePipe", "@angular/common"},
-						"number":     {"DecimalPipe", "@angular/common"},
-						"percent":    {"PercentPipe", "@angular/common"},
-						"titlecase":  {"TitleCasePipe", "@angular/common"},
-						"currency":   {"CurrencyPipe", "@angular/common"},
-						"date":       {"DatePipe", "@angular/common"},
-						"i18nPlural": {"I18nPluralPipe", "@angular/common"},
-						"i18nSelect": {"I18nSelectPipe", "@angular/common"},
-						"keyvalue":   {"KeyValuePipe", "@angular/common"},
+					className, importPath, commonPipe := commonModulePipe(pipeName)
+					if commonPipe && !analysis.IsStandalone && h.scopeRegistry != nil && len(h.scopeRegistry.GetComponentModules(node.AsNode())) == 0 {
+						continue
 					}
 					msg := fmt.Sprintf("No pipe found with name '%s'.", pipeName)
-					if sugg, exists := commonPipes[pipeName]; exists {
-						className := sugg[0]
-						importPath := sugg[1]
+					if commonPipe {
 						if analysis.IsStandalone {
 							msg += fmt.Sprintf("\nTo fix this, import the \"%s\" class from \"%s\" and add it to the \"imports\" array of the component.", className, importPath)
 						} else {
@@ -1530,7 +1567,7 @@ func (h *ComponentDecoratorHandler) CompileFull(node *ast.ClassDeclaration, anal
 			Blocks: deferBlocks,
 		},
 	}
-	if analysis.CompilationMode == "local" {
+	if analysis.CompilationMode == "local" && (analysis.IsStandalone || len(eagerDeps) == 0) {
 		meta.DeclarationListEmitMode = render3.DeclarationListEmitMode_RuntimeResolved
 	}
 	var compiled render3.R3CompiledExpression
@@ -1939,11 +1976,11 @@ func extractDependencies(refHost reflection.ReflectionHost, classDecl *ast.Node)
 				dep.Host = true
 			case "Inject":
 				if len(dec.Args) > 0 {
-					dep.Token = extractTokenFromNode(dec.Args[0])
+					dep.Token = extractDITokenFromNode(dec.Args[0])
 				}
 			case "Attribute":
 				if len(dec.Args) > 0 {
-					dep.AttributeNameType = extractTokenFromNode(dec.Args[0])
+					dep.AttributeNameType = extractDITokenFromNode(dec.Args[0])
 				}
 			}
 		}
@@ -1965,36 +2002,15 @@ func extractDependencies(refHost reflection.ReflectionHost, classDecl *ast.Node)
 					dep.Token = output.NewLiteralExpr("LOCAL_UNKNOWN", nil, nil, nil)
 				}
 			case *reflection.UnavailableTypeValueReference:
-				dep.Token = output.NewLiteralExpr("INVALID_TOKEN", nil, nil, nil)
+				dep.Token = nil
 			default:
-				dep.Token = output.NewLiteralExpr(nil, nil, nil, nil)
+				dep.Token = nil
 			}
 		}
 
 		deps[i] = dep
 	}
 	return deps
-}
-
-func extractTokenFromNode(node *ast.Node) output.Expression {
-	if node == nil {
-		return output.NewLiteralExpr(nil, nil, nil, nil)
-	}
-	if ast.IsStringLiteral(node) {
-		return output.NewLiteralExpr(node.AsStringLiteral().Text, nil, nil, nil)
-	}
-	if ast.IsIdentifier(node) {
-		return output.NewReadVarExpr(node.AsIdentifier().Text, nil, nil, nil)
-	}
-	if ast.IsPropertyAccessExpression(node) {
-		pa := node.AsPropertyAccessExpression()
-		recv := extractTokenFromNode(pa.Expression)
-		if pa.Name().Kind == ast.KindIdentifier {
-			return output.NewReadPropExpr(recv, pa.Name().AsIdentifier().Text, nil, nil, nil, false)
-		}
-	}
-	// Fallback for complex expressions
-	return output.NewLiteralExpr("UNKNOWN_TOKEN", nil, nil, nil)
 }
 
 type styleCacheEntry struct {
@@ -2007,6 +2023,123 @@ var (
 	styleCache   = make(map[string]styleCacheEntry)
 	styleCacheMu sync.RWMutex
 )
+
+func compileSassStyle(stylePath string, includePaths []string) ([]byte, error) {
+	var failures []string
+
+	if sassRoot, ok := findNodeModuleRoot(stylePath, "sass"); ok {
+		if content, err := runLocalSassPackage(sassRoot, stylePath, includePaths); err == nil {
+			return content, nil
+		} else {
+			failures = append(failures, fmt.Sprintf("local node_modules/sass: %v", err))
+			fmt.Fprintf(os.Stderr, ">>> [DEBUG] local node_modules/sass error: %v\n", err)
+		}
+	}
+
+	args := make([]string, 0, len(includePaths)+1)
+	for _, p := range includePaths {
+		args = append(args, "--load-path="+p)
+	}
+	args = append(args, stylePath)
+
+	if sassBin, sassRoot, ok := findNodeModuleBin(stylePath, "sass"); ok {
+		if content, err := runStyleBinary(sassBin, args, sassRoot, []string{filepath.Dir(sassBin)}); err == nil {
+			return content, nil
+		} else {
+			failures = append(failures, fmt.Sprintf("local node_modules/.bin/sass: %v", err))
+			fmt.Fprintf(os.Stderr, ">>> [DEBUG] local node_modules/.bin/sass error: %v\n", err)
+		}
+	}
+
+	if content, err := runStyleBinary("sass", args, filepath.Dir(stylePath), nil); err == nil {
+		return content, nil
+	} else {
+		failures = append(failures, fmt.Sprintf("sass: %v", err))
+		fmt.Fprintf(os.Stderr, ">>> [DEBUG] sass error: %v\n", err)
+	}
+
+	npxArgs := append([]string{"--no-install", "sass"}, args...)
+	if content, err := runStyleBinary("npx", npxArgs, filepath.Dir(stylePath), nil); err == nil {
+		return content, nil
+	} else {
+		failures = append(failures, fmt.Sprintf("npx --no-install sass: %v", err))
+		fmt.Fprintf(os.Stderr, ">>> [DEBUG] npx sass error: %v\n", err)
+	}
+
+	return nil, fmt.Errorf("sass compilation failed:\n%s", strings.Join(failures, "\n"))
+}
+
+func runLocalSassPackage(projectRoot string, stylePath string, includePaths []string) ([]byte, error) {
+	loadPaths, err := json.Marshal(includePaths)
+	if err != nil {
+		return nil, err
+	}
+
+	script := `
+const sass = require('sass');
+const result = sass.compile(process.argv[1], {
+  loadPaths: JSON.parse(process.argv[2] || '[]'),
+});
+process.stdout.write(result.css);
+`
+	return runStyleBinary("node", []string{"-e", script, stylePath, string(loadPaths)}, projectRoot, []string{filepath.Join(projectRoot, "node_modules", ".bin")})
+}
+
+func runStyleBinary(binary string, args []string, cwd string, pathPrefix []string) ([]byte, error) {
+	cmd := exec.Command(binary, args...)
+	cmd.Dir = cwd
+	if len(pathPrefix) > 0 {
+		cmd.Env = envWithPathPrefix(os.Environ(), pathPrefix)
+	}
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		if stderr.Len() > 0 {
+			return nil, fmt.Errorf("%v\n%s", err, stderr.String())
+		}
+		return nil, err
+	}
+	return stdout.Bytes(), nil
+}
+
+func envWithPathPrefix(env []string, pathPrefix []string) []string {
+	prefix := strings.Join(pathPrefix, string(os.PathListSeparator))
+	for i, entry := range env {
+		if strings.HasPrefix(entry, "PATH=") {
+			env[i] = "PATH=" + prefix + string(os.PathListSeparator) + strings.TrimPrefix(entry, "PATH=")
+			return env
+		}
+	}
+	return append(env, "PATH="+prefix)
+}
+
+func findNodeModuleRoot(startPath string, packageName string) (string, bool) {
+	for dir := filepath.Dir(startPath); ; dir = filepath.Dir(dir) {
+		if _, err := os.Stat(filepath.Join(dir, "node_modules", packageName, "package.json")); err == nil {
+			return dir, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+	}
+}
+
+func findNodeModuleBin(startPath string, binaryName string) (string, string, bool) {
+	for dir := filepath.Dir(startPath); ; dir = filepath.Dir(dir) {
+		binPath := filepath.Join(dir, "node_modules", ".bin", binaryName)
+		if _, err := os.Stat(binPath); err == nil {
+			return binPath, dir, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", "", false
+		}
+	}
+}
 
 func readAndCompileStyle(stylePath string, includePaths []string) (string, error) {
 
@@ -2035,37 +2168,9 @@ func readAndCompileStyle(stylePath string, includePaths []string) (string, error
 	var err error
 
 	if isSass {
-		args := []string{}
-		for _, p := range includePaths {
-			args = append(args, "--load-path=" + p)
-		}
-		args = append(args, stylePath)
-		cmd := exec.Command("sass", args...)
-		var stdout, stderr bytes.Buffer
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-		if err = cmd.Run(); err == nil {
-			content = stdout.Bytes()
-
-		} else {
-			fmt.Fprintf(os.Stderr, ">>> [DEBUG] sass error: %v, stderr: %s\n", err, stderr.String())
-			if strings.Contains(err.Error(), "executable file not found") || strings.Contains(err.Error(), "command not found") {
-				npxArgs := append([]string{"sass"}, args...)
-				cmdNpx := exec.Command("npx", npxArgs...)
-				stdout.Reset()
-				stderr.Reset()
-				cmdNpx.Stdout = &stdout
-				cmdNpx.Stderr = &stderr
-				if err = cmdNpx.Run(); err == nil {
-					content = stdout.Bytes()
-
-				} else {
-					fmt.Fprintf(os.Stderr, ">>> [DEBUG] npx sass error: %v, stderr: %s\n", err, stderr.String())
-					return "", fmt.Errorf("sass compilation failed:\n%s", stderr.String())
-				}
-			} else {
-				return "", fmt.Errorf("sass compilation failed:\n%s", stderr.String())
-			}
+		content, err = compileSassStyle(stylePath, includePaths)
+		if err != nil {
+			return "", err
 		}
 	} else if isLess {
 		cmd := exec.Command("lessc", stylePath)

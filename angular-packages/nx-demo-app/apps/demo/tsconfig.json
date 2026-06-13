@@ -13,7 +13,9 @@
     "module": "preserve",
     "baseUrl": ".",
     "paths": {
-      "@demo/*": ["src/app/*"]
+      "@demo/*": ["src/app/*"],
+      "@demo/widgets": ["../../libs/widgets/src/index.ts"],
+      "@demo/widgets/*": ["../../libs/widgets/src/lib/*"]
     }
   },
   "angularCompilerOptions": {

@@ -80,6 +80,11 @@ func extractR3References(expr *ast.Expression) []render3.R3Reference {
 					refs = append(refs, render3.R3Reference{
 						Value: output.NewReadVarExpr(ident, nil, nil, nil),
 					})
+				} else if baseIdent := getModuleScopeReferenceIdentifier(elem); baseIdent != nil {
+					ident := baseIdent.AsIdentifier().Text
+					refs = append(refs, render3.R3Reference{
+						Value: output.NewReadVarExpr(ident, nil, nil, nil),
+					})
 				} else {
 					refs = append(refs, render3.R3Reference{
 						Value: output.NewWrappedNodeExpr(elem, nil, nil, nil),
@@ -89,6 +94,13 @@ func extractR3References(expr *ast.Expression) []render3.R3Reference {
 		}
 	}
 	return refs
+}
+
+func getModuleScopeReferenceIdentifier(node *ast.Node) *ast.Node {
+	if node == nil || node.Kind != ast.KindCallExpression {
+		return nil
+	}
+	return getBaseIdentifier(node)
 }
 
 func getBaseIdentifier(node *ast.Node) *ast.Node {
@@ -662,11 +674,11 @@ func extractDependenciesNg(refHost reflection.ReflectionHost, classDecl *ast.Nod
 				dep.Host = true
 			case "Inject":
 				if len(dec.Args) > 0 {
-					dep.Token = extractTokenFromNodeNg(dec.Args[0])
+					dep.Token = extractDITokenFromNode(dec.Args[0])
 				}
 			case "Attribute":
 				if len(dec.Args) > 0 {
-					dep.AttributeNameType = extractTokenFromNodeNg(dec.Args[0])
+					dep.AttributeNameType = extractDITokenFromNode(dec.Args[0])
 				}
 			}
 		}
@@ -688,33 +700,13 @@ func extractDependenciesNg(refHost reflection.ReflectionHost, classDecl *ast.Nod
 					dep.Token = output.NewLiteralExpr("LOCAL_UNKNOWN", nil, nil, nil)
 				}
 			case *reflection.UnavailableTypeValueReference:
-				dep.Token = output.NewLiteralExpr("INVALID_TOKEN", nil, nil, nil)
+				dep.Token = nil
 			default:
-				dep.Token = output.NewLiteralExpr(nil, nil, nil, nil)
+				dep.Token = nil
 			}
 		}
 
 		deps[i] = dep
 	}
 	return deps
-}
-
-func extractTokenFromNodeNg(node *ast.Node) output.Expression {
-	if node == nil {
-		return output.NewLiteralExpr(nil, nil, nil, nil)
-	}
-	if ast.IsStringLiteral(node) {
-		return output.NewLiteralExpr(node.AsStringLiteral().Text, nil, nil, nil)
-	}
-	if ast.IsIdentifier(node) {
-		return output.NewReadVarExpr(node.AsIdentifier().Text, nil, nil, nil)
-	}
-	if ast.IsPropertyAccessExpression(node) {
-		pa := node.AsPropertyAccessExpression()
-		recv := extractTokenFromNodeNg(pa.Expression)
-		if pa.Name().Kind == ast.KindIdentifier {
-			return output.NewReadPropExpr(recv, pa.Name().AsIdentifier().Text, nil, nil, nil, false)
-		}
-	}
-	return output.NewLiteralExpr("UNKNOWN_TOKEN", nil, nil, nil)
 }

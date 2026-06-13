@@ -142,7 +142,7 @@ func (v *ExpressionTranslatorVisitor) VisitIfStmt(stmt *output.IfStmt, context a
 }
 
 func (v *ExpressionTranslatorVisitor) VisitReadVarExpr(astNode *output.ReadVarExpr, context any) any {
-	if strings.HasPrefix(astNode.Name, "ɵɵ") {
+	if strings.HasPrefix(astNode.Name, "ɵɵ") && astNode.Name != "ɵɵnamespaces" {
 		if v.coreImportExpression != nil {
 			propIdent := v.newIdentifier(astNode.Name)
 			propIdent.Flags |= ast.NodeFlagsAmbient

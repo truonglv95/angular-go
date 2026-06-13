@@ -5,8 +5,8 @@ cd angular-packages
 
 # Bump versions
 for pkg in angular-go angular-go-darwin-arm64 angular-go-darwin-x64 angular-go-linux-x64 angular-go-win32-x64; do
-  sed -i '' 's/"version": "1.0.10"/"version": "1.0.11"/g' $pkg/package.json
-  sed -i '' 's/"1.0.10"/"1.0.11"/g' $pkg/package.json
+  sed -i '' 's/"version": "1.0.33"/"version": "1.0.34"/g' $pkg/package.json
+  sed -i '' 's/"1.0.33"/"1.0.34"/g' $pkg/README.md || true
 done
 
 # Build binaries

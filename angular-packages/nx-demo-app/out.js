@@ -1,0 +1,8 @@
+import "/@fs/Users/truong/Documents/angular-typescript-go/typescript-go/angular-packages/nx-demo-app/.angular/cache/angular-go-vite/deps/@angular_localize_init.js?v=8e714ec4";
+import { bootstrapApplication } from "/@fs/Users/truong/Documents/angular-typescript-go/typescript-go/angular-packages/nx-demo-app/.angular/cache/angular-go-vite/deps/@angular_platform-browser.js?v=8e714ec4";
+import { appConfig } from "/app/app.config.ts";
+import { App } from "/app/app.ts";
+bootstrapApplication(App, appConfig).catch((err) => console.error(err));
+//# sourceMappingURL=main.js.map
+
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJtYXBwaW5ncyI6IkFBQUEsT0FBTztBQUNQLFNBQVMsNEJBQTRCO0FBQ3JDLFNBQVMsaUJBQWlCO0FBQzFCLFNBQVMsV0FBVztBQUVwQixxQkFBcUIsS0FBSyxTQUFTLEVBQUUsT0FBTyxRQUFRLFFBQVEsTUFBTSxHQUFHLENBQUMiLCJuYW1lcyI6W10sImlnbm9yZUxpc3QiOltdLCJzb3VyY2VzIjpbIm1haW4udHMiXSwic291cmNlc0NvbnRlbnQiOlsiaW1wb3J0ICdAYW5ndWxhci9sb2NhbGl6ZS9pbml0JztcbmltcG9ydCB7IGJvb3RzdHJhcEFwcGxpY2F0aW9uIH0gZnJvbSAnQGFuZ3VsYXIvcGxhdGZvcm0tYnJvd3Nlcic7XG5pbXBvcnQgeyBhcHBDb25maWcgfSBmcm9tICcuL2FwcC9hcHAuY29uZmlnJztcbmltcG9ydCB7IEFwcCB9IGZyb20gJy4vYXBwL2FwcCc7XG5cbmJvb3RzdHJhcEFwcGxpY2F0aW9uKEFwcCwgYXBwQ29uZmlnKS5jYXRjaCgoZXJyKSA9PiBjb25zb2xlLmVycm9yKGVycikpO1xuIl0sImZpbGUiOiIvVXNlcnMvdHJ1b25nL0RvY3VtZW50cy9hbmd1bGFyLXR5cGVzY3JpcHQtZ28vdHlwZXNjcmlwdC1nby9hbmd1bGFyLXBhY2thZ2VzL254LWRlbW8tYXBwL2FwcHMvZGVtby9zcmMvbWFpbi50cyJ9

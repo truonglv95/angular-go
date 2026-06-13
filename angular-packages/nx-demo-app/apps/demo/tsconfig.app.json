@@ -4,9 +4,14 @@
     "outDir": "../../out-tsc/app",
     "types": [],
     "paths": {
-      "@demo/*": ["src/app/*"]
+      "@demo/*": ["src/app/*"],
+      "@demo/widgets": ["../../libs/widgets/src/index.ts"],
+      "@demo/widgets/*": ["../../libs/widgets/src/lib/*"]
     }
   },
-  "include": ["src/**/*.ts"],
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.html"
+  ],
   "exclude": ["src/**/*.spec.ts", "src/**/*.test.ts"]
 }

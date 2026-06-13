@@ -30,6 +30,7 @@ func (r *LocalMetadataRegistry) RegisterDirective(node *ast.Node, meta *Directiv
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.directives[node] = meta
+	println("DEBUG: Registered Directive:", meta.Name, "node ptr:", node, "kind:", node.Kind)
 }
 
 func (r *LocalMetadataRegistry) RegisterNgModule(node *ast.Node, meta *NgModuleMeta) {
@@ -47,7 +48,9 @@ func (r *LocalMetadataRegistry) RegisterPipe(node *ast.Node, meta *PipeMeta) {
 func (r *LocalMetadataRegistry) GetDirectiveMetadata(node *ast.Node) *DirectiveMeta {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.directives[node]
+	res := r.directives[node]
+	println("DEBUG: Lookup Directive node ptr:", node, "found:", res != nil)
+	return res
 }
 
 func (r *LocalMetadataRegistry) GetNgModuleMetadata(node *ast.Node) *NgModuleMeta {

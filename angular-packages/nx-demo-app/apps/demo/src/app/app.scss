@@ -1,0 +1,142 @@
+$surface: #f6f7fb;
+$ink: #172033;
+$accent: #0f9f8f;
+$warning: #ffb020;
+$component-tones: (
+  one: #e9f8f5,
+  two: #eef2ff,
+  three: #fff6df,
+  four: #f2e9ff
+);
+
+@mixin soft-panel($tone) {
+  background: $tone;
+  border: 1px solid color-mix(in srgb, $tone 72%, #172033);
+  box-shadow: 0 10px 24px rgba(23, 32, 51, 0.08);
+}
+
+:host {
+  display: block;
+  min-height: 100vh;
+  color: $ink;
+  background:
+    linear-gradient(135deg, rgba($accent, 0.13), transparent 34%),
+    $surface;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.demo-shell {
+  width: min(1120px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 32px 0;
+}
+
+.style-probe {
+  @include soft-panel(#ffffff);
+
+  border-radius: 14px;
+  padding: 22px;
+  margin-bottom: 18px;
+
+  &__header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  &__status {
+    width: 16px;
+    height: 16px;
+    border-radius: 999px;
+    background: $accent;
+    box-shadow: 0 0 0 8px rgba($accent, 0.12);
+  }
+
+  h1 {
+    margin: 0;
+    font-size: 1.35rem;
+    line-height: 1.2;
+  }
+
+  p {
+    margin: 4px 0 0;
+    color: rgba($ink, 0.68);
+  }
+
+  &__chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 18px;
+
+    span {
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba($accent, 0.1);
+      color: color-mix(in srgb, $accent 74%, $ink);
+      font-size: 0.82rem;
+      font-weight: 700;
+    }
+  }
+}
+
+.widget-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+
+  a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 36px;
+    padding: 0 12px;
+    border-radius: 8px;
+    border: 1px solid rgba($ink, 0.14);
+    color: $ink;
+    background: #ffffff;
+    text-decoration: none;
+    font-weight: 700;
+
+    &.is-active {
+      color: #ffffff;
+      background: $accent;
+      border-color: $accent;
+    }
+  }
+}
+
+.component-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+
+  > * {
+    display: block;
+    min-height: 72px;
+    padding: 14px;
+    border-radius: 12px;
+  }
+
+  app-di-case1 {
+    @include soft-panel(map-get($component-tones, one));
+  }
+
+  app-di-case2 {
+    @include soft-panel(map-get($component-tones, two));
+  }
+
+  app-di-case3 {
+    @include soft-panel(map-get($component-tones, three));
+    border-left: 5px solid $warning;
+  }
+
+  app-di-case4 {
+    @include soft-panel(map-get($component-tones, four));
+    border-left: 5px solid color-mix(in srgb, $accent 60%, #7b61ff);
+  }
+}
+
+.lazy-widget-host {
+  margin-top: 18px;
+}

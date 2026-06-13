@@ -409,13 +409,21 @@ func handleRequest(ctx context.Context, req RpcRequest) {
 			}
 			state.outputs[filepath.Clean(absPath)] = o
 		}
-		state.outputManifest = make([]OutputFile, len(result.Outputs))
-		for i, output := range result.Outputs {
-			state.outputManifest[i] = OutputFile{
-				Path: output.Path,
-				Hash: output.Hash,
-				Kind: output.Kind,
+		// B#7 FIX: Maintain full output manifest across incremental builds
+		manifestMap := make(map[string]OutputFile)
+		for _, o := range state.outputManifest {
+			manifestMap[o.Path] = o
+		}
+		for _, o := range result.Outputs {
+			manifestMap[o.Path] = OutputFile{
+				Path: o.Path,
+				Hash: o.Hash,
+				Kind: o.Kind,
 			}
+		}
+		state.outputManifest = make([]OutputFile, 0, len(manifestMap))
+		for _, o := range manifestMap {
+			state.outputManifest = append(state.outputManifest, o)
 		}
 		state.lastPerfPhases = result.PerfPhases
 		state.lastDiagnostics = diags
